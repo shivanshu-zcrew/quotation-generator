@@ -4,6 +4,8 @@ import { quotationAPI } from '../services/api';
 import { newSection, sectionsToHTML, htmlToSections } from '../components/TermsCondition';
 import QuotationLayout, { inputStyle, removeImgBtnStyle } from '../components/QuotationLayout';
 import headerImage from "../assets/header.png";
+import Snackbar from '../components/Snackbar';
+import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -65,7 +67,6 @@ const parseQuotationData = (q) => ({
   termsImage:         q.termsImage || null,
 });
 
-// FIX: description now falls back correctly from populated itemId or flat field
 const parseQuotationItems = (items) =>
   (items || []).map((item) => ({
     id:          item._id || `${Date.now()}-${Math.random()}`,
@@ -93,7 +94,6 @@ const imageToBase64 = (src) =>
     img.src = src;
   });
 
-// Local button style (top bar buttons only)
 const btnStyle = (bg, disabled = false) => ({
   backgroundColor: disabled ? "#d1d5db" : bg,
   color: disabled ? "#9ca3af" : "white",
@@ -118,13 +118,20 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
   const [editingImgId,   setEditingImgId]   = useState(null);
   const [fetchedQ,       setFetchedQ]       = useState(null);
   const [loading,        setLoading]        = useState(false);
-  const [fetchError,     setFetchError]     = useState(null);   // NEW: fetch error state
+  const [fetchError,     setFetchError]     = useState(null);
   const [newImages,      setNewImages]      = useState({});
   const [quotationData,  setQuotationData]  = useState({});
   const [quotationItems, setQuotationItems] = useState([]);
   const [tcSections,     setTcSections]     = useState([newSection()]);
+  
+  // Validation states
+  const [snackbar, setSnackbar] = useState({ 
+    show: false, 
+    message: '', 
+    type: 'error' 
+  });
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  // FIX: safe find with fallback to fetchedQ
   const originalQuotation = (quotations || []).find((q) => q._id === quotationId) || fetchedQ;
 
   // Fetch by ID when not in prop list
@@ -151,16 +158,35 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
   }, [originalQuotation]);
 
   // ── Derived calculations ──────────────────────
-  // FIX: coerce to Number to avoid NaN from string inputs
   const subtotal       = quotationItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0), 0);
   const taxAmount      = (subtotal * (Number(quotationData.tax) || 0)) / 100;
   const discountAmount = (subtotal * (Number(quotationData.discount) || 0)) / 100;
   const grandTotal     = subtotal + taxAmount - discountAmount;
   const amountInWords  = numberToWords(grandTotal);
 
-  // ── Handlers ─────────────────────────────────
-  const handleDataChange = useCallback((field, value) =>
-    setQuotationData((prev) => ({ ...prev, [field]: value })), []);
+  // ── Handlers with validation ─────────────────────────────────
+  const handleDataChange = useCallback((field, value) => {
+    if (value === '') {
+      if (field === 'tax' || field === 'discount') {
+        setQuotationData((prev) => ({ ...prev, [field]: 0 }));
+        return;
+      }
+      setQuotationData((prev) => ({ ...prev, [field]: '' }));
+      return;
+    }
+
+    // Validate percentages
+    if (field === 'tax' || field === 'discount') {
+      const result = validatePercentage(value);
+      if (!result.isValid) {
+        setSnackbar({ show: true, message: result.error, type: 'error' });
+        return;
+      }
+      value = parseFloat(value) || 0;
+    }
+
+    setQuotationData((prev) => ({ ...prev, [field]: value }));
+  }, []);
 
   const addItem = () =>
     setQuotationItems((prev) => [...prev,
@@ -170,12 +196,85 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
   const removeItem = (id) => {
     setQuotationItems((prev) => prev.filter((i) => i.id !== id));
     setNewImages((prev) => { const c = { ...prev }; delete c[id]; return c; });
+    // Clear errors for removed item
+    setFieldErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[id];
+      return newErrors;
+    });
   };
 
-  // FIX: parse numbers on quantity/unitPrice; auto-fill name+description+price on item select
-  const updateItem = (id, field, value) =>
+  const updateItem = (id, field, value) => {
+    // Handle empty values
+    if (value === '') {
+      if (field === 'quantity') {
+        setSnackbar({
+          show: true,
+          message: 'Quantity cannot be empty',
+          type: 'error'
+        });
+        return;
+      }
+      if (field === 'unitPrice') {
+        // Allow empty price to be treated as 0
+        setQuotationItems((prev) => prev.map((item) => {
+          if (item.id !== id) return item;
+          return { ...item, [field]: 0 };
+        }));
+        return;
+      }
+    }
+
+    // Validate based on field type
+    if (field === 'quantity') {
+      const result = validateQuantity(value);
+      if (!result.isValid) {
+        setSnackbar({ show: true, message: result.error, type: 'error' });
+        setFieldErrors((prev) => ({ ...prev, [id]: { ...prev[id], quantity: result.error } }));
+        return;
+      } else {
+        // Clear error for this field
+        setFieldErrors((prev) => {
+          const newErrors = { ...prev };
+          if (newErrors[id]) {
+            delete newErrors[id].quantity;
+            if (Object.keys(newErrors[id]).length === 0) {
+              delete newErrors[id];
+            }
+          }
+          return newErrors;
+        });
+      }
+      // Ensure integer quantity
+      value = parseInt(value, 10);
+    }
+
+    if (field === 'unitPrice') {
+      const result = validatePrice(value);
+      if (!result.isValid) {
+        setSnackbar({ show: true, message: result.error, type: 'error' });
+        setFieldErrors((prev) => ({ ...prev, [id]: { ...prev[id], unitPrice: result.error } }));
+        return;
+      } else {
+        // Clear error for this field
+        setFieldErrors((prev) => {
+          const newErrors = { ...prev };
+          if (newErrors[id]) {
+            delete newErrors[id].unitPrice;
+            if (Object.keys(newErrors[id]).length === 0) {
+              delete newErrors[id];
+            }
+          }
+          return newErrors;
+        });
+      }
+      value = parseFloat(value) || 0;
+    }
+
     setQuotationItems((prev) => prev.map((item) => {
       if (item.id !== id) return item;
+      
+      // Handle item selection
       if (field === "itemId" && value) {
         const found = items.find((i) => i._id === value);
         return {
@@ -186,11 +285,14 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
           unitPrice:   found?.price       != null ? Number(found.price) : item.unitPrice,
         };
       }
-      if (field === "quantity")  return { ...item, quantity:  Math.max(1, parseInt(value)  || 1) };
-      if (field === "unitPrice") return { ...item, unitPrice: Math.max(0, parseFloat(value) || 0) };
+      
+      if (field === "quantity")  return { ...item, quantity: value };
+      if (field === "unitPrice") return { ...item, unitPrice: value };
       if (field === "description") return { ...item, description: value };
+      
       return { ...item, [field]: value };
     }));
+  };
 
   const handleImageUpload = (e, itemId) => {
     Array.from(e.target.files || []).forEach((file) => {
@@ -220,14 +322,95 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
     setTcSections(htmlToSections(originalQuotation.termsAndConditions));
     setNewImages({});
     setEditingImgId(null);
+    setFieldErrors({});
     setIsEditing(false);
   };
 
+  // ── Validation before save ──────────────────
+  const validateBeforeSave = () => {
+    if (!quotationItems.length) {
+      setSnackbar({
+        show: true,
+        message: "Add at least one item.",
+        type: 'error'
+      });
+      return false;
+    }
+
+    for (const item of quotationItems) {
+      if (!item.itemId) {
+        setSnackbar({
+          show: true,
+          message: "Please select an item for all rows.",
+          type: 'error'
+        });
+        return false;
+      }
+      
+      const quantityResult = validateQuantity(item.quantity);
+      if (!quantityResult.isValid) {
+        setSnackbar({
+          show: true,
+          message: `Item "${item.name || 'Unknown'}" has invalid quantity`,
+          type: 'error'
+        });
+        return false;
+      }
+
+      const priceResult = validatePrice(item.unitPrice);
+      if (!priceResult.isValid) {
+        setSnackbar({
+          show: true,
+          message: `Item "${item.name || 'Unknown'}" has invalid price`,
+          type: 'error'
+        });
+        return false;
+      }
+    }
+    
+    if (!quotationData.customer?.trim()) {
+      setSnackbar({
+        show: true,
+        message: "Customer name is required.",
+        type: 'error'
+      });
+      return false;
+    }
+    
+    if (!quotationData.expiryDate) {
+      setSnackbar({
+        show: true,
+        message: "Expiry date is required.",
+        type: 'error'
+      });
+      return false;
+    }
+
+    const taxResult = validatePercentage(quotationData.tax);
+    if (!taxResult.isValid) {
+      setSnackbar({
+        show: true,
+        message: taxResult.error,
+        type: 'error'
+      });
+      return false;
+    }
+
+    const discountResult = validatePercentage(quotationData.discount);
+    if (!discountResult.isValid) {
+      setSnackbar({
+        show: true,
+        message: discountResult.error,
+        type: 'error'
+      });
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleSave = async () => {
-    if (!quotationItems.length)                return alert("Add at least one item.");
-    if (quotationItems.some((i) => !i.itemId)) return alert("Please select an item for all rows.");
-    if (!quotationData.customer?.trim())       return alert("Customer name is required.");
-    if (!quotationData.expiryDate)             return alert("Expiry date is required.");
+    if (!validateBeforeSave()) return;
 
     setIsSaving(true);
     try {
@@ -259,22 +442,31 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
           quantity:    Number(qi.quantity)  || 1,
           unitPrice:   Number(qi.unitPrice) || 0,
           imagePaths:  qi.imagePaths || [],
-          description: qi.description || "",   // FIX: was missing — description never saved
+          description: qi.description || "",
         })),
       };
 
       if (typeof onUpdateQuotation === "function") {
         const ok = await onUpdateQuotation(originalQuotation._id, payload);
         if (ok) {
-          alert("Quotation updated successfully!");
+          setSnackbar({
+            show: true,
+            message: "Quotation updated successfully!",
+            type: 'success'
+          });
           setIsEditing(false);
           setEditingImgId(null);
           setNewImages({});
+          setFieldErrors({});
         }
       }
     } catch (err) {
       console.error("Save error:", err);
-      alert("Error saving quotation: " + (err.message || "Unknown error"));
+      setSnackbar({
+        show: true,
+        message: "Error saving quotation: " + (err.message || "Unknown error"),
+        type: 'error'
+      });
     } finally {
       setIsSaving(false);
     }
@@ -287,14 +479,11 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
     const remaining = quotationItems.slice(ITEMS_PER_FIRST_PAGE);
     const multiPage = remaining.length > 0;
 
-    // Pre-convert ALL item images to base64 so Puppeteer can embed them
-    // without making external HTTP requests (which it blocks by default).
-    // imagePaths are now Cloudinary https:// URLs — do NOT prepend BASE_URL.
     const itemImagesBase64 = {};
     for (const qi of [...firstPage, ...remaining]) {
       const urls = [
-        ...(qi.imagePaths || []),          // already full Cloudinary https:// URLs
-        ...(newImages[qi.id] || []),        // newly uploaded base64 — pass through as-is
+        ...(qi.imagePaths || []),
+        ...(newImages[qi.id] || []),
       ];
       itemImagesBase64[qi.id] = await Promise.all(urls.map((src) => imageToBase64(src)));
     }
@@ -346,7 +535,6 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
       <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:80px;">Amount</th>
     </tr></thead>`;
 
-    // FIX: termsImage — handle both base64 (newly uploaded) and server path
     const termsImgTag = quotationData.termsImage
       ? `<img src="${quotationData.termsImage.startsWith("data:") ? quotationData.termsImage : `${BASE_URL}${quotationData.termsImage}`}" style="margin-top:8px;max-width:100%;border-radius:4px;" />`
       : "";
@@ -426,20 +614,27 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
   };
 
   const handleDownload = async () => {
+    if (!validateBeforeSave()) return;
+    
     setIsExporting(true);
-  
     try {
       const html = await buildPdfHTML();
-  
       const filename = `Quotation_${
         originalQuotation.quotationNumber || "view"
       }_${new Date().toISOString().split("T")[0]}`;
-  
       await quotationAPI.generatePDF(html, filename);
-  
+      setSnackbar({
+        show: true,
+        message: "PDF downloaded successfully!",
+        type: 'success'
+      });
     } catch (err) {
       console.error("PDF export error:", err);
-      alert(`Failed to generate PDF.\n\n${err.message}`);
+      setSnackbar({
+        show: true,
+        message: `Failed to generate PDF: ${err.message}`,
+        type: 'error'
+      });
     } finally {
       setIsExporting(false);
     }
@@ -456,7 +651,6 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
     </div>
   );
 
-  // FIX: show fetch error state
   if (fetchError) return (
     <div style={{ maxWidth: "1280px", margin: "0 auto", padding: "1.5rem" }}>
       <div style={{ backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "1rem 1.25rem", marginBottom: "1rem", color: "#991b1b", fontSize: "0.9rem" }}>
@@ -555,6 +749,7 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
           amountInWords={amountInWords}
           tcSections={tcSections}
           onTcChange={setTcSections}
+          fieldErrors={fieldErrors}
           actionBar={isEditing ? (
             <>
               <button onClick={handleSave} disabled={isSaving} style={{ ...btnStyle("#10b981", isSaving), padding: "0.875rem 2rem", fontSize: "1rem" }}>
@@ -567,6 +762,15 @@ export default function ViewQuotationScreen({ quotationId, quotations, items = [
           ) : null}
         />
       </div>
+
+      {/* Snackbar for notifications */}
+      {snackbar.show && (
+        <Snackbar
+          message={snackbar.message}
+          type={snackbar.type}
+          onClose={() => setSnackbar({ show: false, message: '', type: 'error' })}
+        />
+      )}
     </div>
   );
 }

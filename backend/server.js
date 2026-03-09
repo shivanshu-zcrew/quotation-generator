@@ -9,10 +9,8 @@ const app = express();
 
 // ── CORS Configuration ───────────────────────────────────────────────────
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://51.20.109.158:5000',
-  'https://your-production-domain.com' 
+  'http://localhost:3000', 
+  'http://51.20.109.158',
 ];
 
 const corsOptions = {

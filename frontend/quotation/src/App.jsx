@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -84,11 +84,11 @@ function withBack(Component) {
   };
 }
 
-const CustomersScreenWithBack          = withBack(CustomersScreen);
-const ItemsScreenWithBack              = withBack(ItemsScreen);
-const QuotationScreenWithBack          = withBack(QuotationScreen);
-const PendingQuotationsScreenWithBack  = withBack(PendingQuotationsScreen);
-const UserManagementScreenWithBack     = withBack(UserManagementScreen);
+const CustomersScreenWithBack         = withBack(CustomersScreen);
+const ItemsScreenWithBack             = withBack(ItemsScreen);
+const QuotationScreenWithBack         = withBack(QuotationScreen);
+const PendingQuotationsScreenWithBack = withBack(PendingQuotationsScreen);
+const UserManagementScreenWithBack    = withBack(UserManagementScreen);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // onNavigate helper — maps legacy screen names → real paths
@@ -116,12 +116,13 @@ function useScreenNavigate() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Screen wrappers that inject navigation props
+// Screen wrappers
 // ─────────────────────────────────────────────────────────────────────────────
 function HomeScreenRoute() {
   const navigate   = useNavigate();
   const onNavigate = useScreenNavigate();
-  const { user, customers, items, quotations, deleteQuotation, handleLogout } = useApp();
+  // ✅ Pull loading + loadError + refresh so HomeScreen gets them
+  const { user, customers, items, quotations, loading, loadError, refresh, deleteQuotation, handleLogout } = useApp();
 
   return (
     <HomeScreen
@@ -133,6 +134,9 @@ function HomeScreenRoute() {
       onViewQuotation={(id) => navigate(`/quotation/${id}`)}
       onDeleteQuotation={deleteQuotation}
       onLogout={handleLogout}
+      isLoading={loading}       // ✅ was missing — caused the "no quotations" flash
+      loadError={loadError}     // ✅ was missing — error banner never showed
+      onRefresh={refresh}       // ✅ was missing — refresh button did nothing
     />
   );
 }
@@ -141,8 +145,8 @@ function AdminDashboardRoute() {
   const navigate   = useNavigate();
   const onNavigate = useScreenNavigate();
   const {
-    quotations, customers, items,
-    approveQuotation, rejectQuotation, deleteQuotation,handleLogout
+    quotations, customers, items, loading, loadError, refresh,
+    approveQuotation, rejectQuotation, deleteQuotation, handleLogout,
   } = useApp();
 
   return (
@@ -156,6 +160,9 @@ function AdminDashboardRoute() {
       onRejectQuotation={rejectQuotation}
       onDeleteQuotation={deleteQuotation}
       onLogout={handleLogout}
+      isLoading={loading}   // ✅ wired for AdminDashboard too
+      loadError={loadError}
+      onRefresh={refresh}
     />
   );
 }
@@ -175,7 +182,7 @@ function ViewQuotationRoute() {
         const ok = await deleteQuotation(qid);
         if (ok) navigate(-1);
       }}
-      onBack={() => navigate(-1)}    
+      onBack={() => navigate(-1)}
     />
   );
 }
@@ -225,28 +232,14 @@ function PendingRoute() {
 }
 
 function QuotationNewRoute() {
-  const navigate = useNavigate();
-  const onNavigate = useScreenNavigate();
+  const navigate   = useNavigate();
   const { user, customers, items, addQuotation } = useApp();
 
-  const handleBack = () => {
-    if (user?.role === "admin") {
-      navigate("/admin");
-    } else {
-      navigate("/home");
-    }
-  };
+  const handleBack = () => navigate(user?.role === 'admin' ? '/admin' : '/home');
 
   const handleAddQuotation = async (quotationData) => {
     const success = await addQuotation(quotationData);
-    if (success) {
-      
-      if (user?.role === "admin") {
-        navigate("/admin");
-      } else {
-        navigate("/home");
-      }
-    }
+    if (success) navigate(user?.role === 'admin' ? '/admin' : '/home');
     return success;
   };
 
@@ -256,7 +249,7 @@ function QuotationNewRoute() {
       customers={customers}
       items={items}
       onBack={handleBack}
-      onAddQuotation={handleAddQuotation}  // Use the wrapped function
+      onAddQuotation={handleAddQuotation}
     />
   );
 }
@@ -269,22 +262,54 @@ export default function App() {
   const [customers,  setCustomers]  = useState([]);
   const [items,      setItems]      = useState([]);
   const [quotations, setQuotations] = useState([]);
-  const [loading,    setLoading]    = useState(false);
 
-  useEffect(() => {
+  // ✅ Start as true — component tree mounts before useEffect fires,
+  //    so the skeleton must be visible from the very first render.
+  const [loading,   setLoading]   = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  // ✅ Extracted into useCallback so both useEffect and the refresh
+  //    button call exactly the same function
+  const fetchData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    Promise.all([
-      customerAPI.getAll().then(r => setCustomers(r.data)).catch(console.error),
-      itemAPI.getAll().then(r => setItems(r.data)).catch(console.error),
-      (user.role === 'admin'
-        ? quotationAPI.getAll()
-        : quotationAPI.getMyQuotations()
-      ).then(r => setQuotations(r.data)).catch(console.error),
-    ]).finally(() => setLoading(false));
-  }, [user?._id]);
+    setLoadError(null);
+    try {
+      await Promise.all([
+        customerAPI.getAll()
+          .then(r => setCustomers(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
+          .catch(err => { console.error('customers fetch failed', err); }),
 
-  // ── Auth ──
+        itemAPI.getAll()
+          .then(r => setItems(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
+          .catch(err => { console.error('items fetch failed', err); }),
+
+        (user.role === 'admin' ? quotationAPI.getAll() : quotationAPI.getMyQuotations())
+          .then(r => setQuotations(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
+          .catch(err => { console.error('quotations fetch failed', err); }),
+      ]);
+    } catch (err) {
+      setLoadError(err?.response?.data?.message || err.message || 'Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  }, [user?._id, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Run on mount and whenever the logged-in user changes
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    } else {
+      // Logged out — reset everything and stop the loading spinner
+      setCustomers([]);
+      setItems([]);
+      setQuotations([]);
+      setLoading(false);
+      setLoadError(null);
+    }
+  }, [fetchData, user?._id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
   const handleLogin = async (email, password) => {
     try {
       const res = await authAPI.login({ email, password });
@@ -310,17 +335,21 @@ export default function App() {
   const handleLogout = () => {
     clearAuthData();
     setUser(null);
-    setCustomers([]); setItems([]); setQuotations([]);
+    setCustomers([]);
+    setItems([]);
+    setQuotations([]);
+    setLoading(false);
+    setLoadError(null);
   };
 
-  // ── CRUD helpers ──
-  const addCustomer    = async (d) => { const r = await customerAPI.create(d);    setCustomers(p => [...p, r.data]);                          return true; };
-  const updateCustomer = async (id, d) => { const r = await customerAPI.update(id, d); setCustomers(p => p.map(c => c._id===id ? r.data : c)); return true; };
-  const deleteCustomer = async (id)    => { await customerAPI.delete(id);              setCustomers(p => p.filter(c => c._id!==id));            return true; };
+  // ── CRUD helpers ──────────────────────────────────────────────────────────
+  const addCustomer    = async (d)      => { const r = await customerAPI.create(d);       setCustomers(p => [...p, r.data]);                          return true; };
+  const updateCustomer = async (id, d)  => { const r = await customerAPI.update(id, d);   setCustomers(p => p.map(c => c._id === id ? r.data : c));   return true; };
+  const deleteCustomer = async (id)     => { await customerAPI.delete(id);                setCustomers(p => p.filter(c => c._id !== id));              return true; };
 
-  const addItem    = async (d) => { const r = await itemAPI.create(d);    setItems(p => [...p, r.data]);                        return true; };
-  const updateItem = async (id, d) => { const r = await itemAPI.update(id, d); setItems(p => p.map(i => i._id===id ? r.data : i)); return true; };
-  const deleteItem = async (id)    => { await itemAPI.delete(id);              setItems(p => p.filter(i => i._id!==id));            return true; };
+  const addItem    = async (d)      => { const r = await itemAPI.create(d);       setItems(p => [...p, r.data]);                      return true; };
+  const updateItem = async (id, d)  => { const r = await itemAPI.update(id, d);   setItems(p => p.map(i => i._id === id ? r.data : i)); return true; };
+  const deleteItem = async (id)     => { await itemAPI.delete(id);                setItems(p => p.filter(i => i._id !== id));           return true; };
 
   const addQuotation = async (d) => {
     const r = await quotationAPI.create(d);
@@ -330,31 +359,34 @@ export default function App() {
   };
   const updateQuotation = async (id, d) => {
     const r = await quotationAPI.update(id, d);
-    setQuotations(p => p.map(q => q._id===id ? r.data : q));
+    setQuotations(p => p.map(q => q._id === id ? r.data : q));
     return true;
   };
   const deleteQuotation = async (id) => {
     await quotationAPI.delete(id);
-    setQuotations(p => p.filter(q => q._id!==id));
+    setQuotations(p => p.filter(q => q._id !== id));
     alert('Quotation deleted');
     return true;
   };
 
   const approveQuotation = async (id) => {
     const r = await adminAPI.approveQuotation(id);
-    setQuotations(p => p.map(q => q._id===id ? r.data.quotation : q));
+    setQuotations(p => p.map(q => q._id === id ? r.data.quotation : q));
     alert('Approved');
     return true;
   };
   const rejectQuotation = async (id, reason) => {
     const r = await adminAPI.rejectQuotation(id, { reason });
-    setQuotations(p => p.map(q => q._id===id ? r.data.quotation : q));
+    setQuotations(p => p.map(q => q._id === id ? r.data.quotation : q));
     alert('Rejected');
     return true;
   };
 
   const ctx = {
-    user, customers, items, quotations, loading,
+    user,
+    customers, items, quotations,
+    loading, loadError,
+    refresh: fetchData,   // ✅ exposed so any screen can trigger a re-fetch
     handleLogin, handleRegister, handleLogout,
     addCustomer, updateCustomer, deleteCustomer,
     addItem, updateItem, deleteItem,
@@ -365,9 +397,9 @@ export default function App() {
   return (
     <AppContext.Provider value={ctx}>
       <BrowserRouter>
-        {loading && (
-          <div style={S.loadingBar} />
-        )}
+        {/* Top loading bar — visible during any data fetch */}
+        {loading && <div style={S.loadingBar} />}
+
         <div style={S.container}>
           <Routes>
             {/* ── Public ── */}
@@ -425,7 +457,7 @@ function UserManagementRoute() {
   return <UserManagementScreenWithBack />;
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
 const S = {
   container: {
     minHeight: '100vh',
@@ -435,8 +467,9 @@ const S = {
     position: 'fixed',
     top: 0, left: 0, right: 0,
     height: '3px',
-    background: 'linear-gradient(90deg, #2563eb, #0ea5e9)',
+    background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #6366f1)',
+    backgroundSize: '200% 100%',
     zIndex: 9999,
-    animation: 'loadingPulse 1.2s ease-in-out infinite',
+    animation: 'loadingPulse 1.4s ease-in-out infinite',
   },
 };

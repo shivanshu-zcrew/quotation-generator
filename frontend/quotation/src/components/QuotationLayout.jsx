@@ -1,13 +1,14 @@
-import React from 'react';
-import { Plus, Trash2, Upload, Save, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, Trash2, Upload } from 'lucide-react';
 import headerImage from '../assets/header.png';
 import TermsEditor, { TermsViewer } from './TermsCondition';
+import ValidatedInput from './ValidatedInput';
+import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
+import Snackbar from './Snackbar';
 
 // ─────────────────────────────────────────────────────────────
 // Shared style tokens
 // ─────────────────────────────────────────────────────────────
-const BASE_URL = 'http://51.20.109.158:5000';
-
 export const inputStyle = {
   width: '100%',
   border: '1px solid #d1d5db',
@@ -28,45 +29,13 @@ export const removeImgBtnStyle = {
   boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
 };
 
-// ─────────────────────────────────────────────────────────────
-// QuotationLayout
-//
-// Props:
-//   isEditing          boolean
-//   quotationNumber    string
-//   quotationData      { customer, contact, date, expiryDate, ourRef, ourContact,
-//                        salesOffice, paymentTerms, deliveryTerms, tax, discount,
-//                        notes }
-//   onDataChange       (field, value) => void
-//   quotationItems     [{ id, itemId, name, description, quantity, unitPrice,
-//                         imagePaths?, newImages? }]
-//   availableItems     Item[]        – catalogue list for the select dropdown
-//   onUpdateItem       (id, field, value) => void
-//   onAddItem          () => void
-//   onRemoveItem       (id) => void
-//   onAddImages        (e, itemId) => void
-//   onRemoveExistingImage (itemId, idx) => void   – optional (ViewQuotation only)
-//   onRemoveNewImage   (itemId, idx) => void       – optional
-//   editingImgId       string | null
-//   onToggleImgEdit    (itemId) => void
-//   newImages          { [itemId]: base64[] }      – extra new images (ViewQuotation)
-//   subtotal           number
-//   taxAmount          number
-//   discountAmount     number
-//   grandTotal         number
-//   amountInWords      string
-//   tcSections         Section[]
-//   onTcChange         (sections) => void
-//   // Action bar (bottom of card)
-//   actionBar          ReactNode   – custom buttons rendered at bottom (Save / Cancel / Submit)
-// ─────────────────────────────────────────────────────────────
 export default function QuotationLayout({
   isEditing,
   quotationNumber,
-  quotationData,
+  quotationData,          // may be undefined while parent is loading — we guard below
   onDataChange,
-  quotationItems,
-  availableItems = [],
+  quotationItems    = [],
+  availableItems    = [],
   onUpdateItem,
   onAddItem,
   onRemoveItem,
@@ -75,25 +44,51 @@ export default function QuotationLayout({
   onRemoveNewImage,
   editingImgId,
   onToggleImgEdit,
-  newImages = {},
-  subtotal,
-  taxAmount,
-  discountAmount,
-  grandTotal,
-  amountInWords,
+  newImages         = {},
+  subtotal          = 0,
+  taxAmount         = 0,
+  discountAmount    = 0,
+  grandTotal        = 0,
+  amountInWords     = '',
   tcSections,
   onTcChange,
   actionBar,
+  headerErrors      = {},   // { date, expiryDate, tax, discount } — shown inline
+  fieldErrors       = {},   // { [itemId]: { quantity, unitPrice } } — shown inline
 }) {
-  // ── Left details column fields ──────────────────────────────
+
+  // ── Guard: render nothing until quotationData is ready ──────
+  if (!quotationData) return null;
+
+  const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
+
+  const showLocalSnack = (message, type = 'error') =>
+    setSnackbar({ show: true, message, type });
+
+  const handleValidatedUpdate = (itemId, field, value, validator) => {
+    if (value === '') {
+      if (field === 'quantity') {
+        showLocalSnack('Quantity cannot be empty');
+      }
+      return;
+    }
+    if (validator) {
+      const result = validator(value);
+      if (!result.isValid) {
+        showLocalSnack(result.error);
+        return;
+      }
+    }
+    onUpdateItem(itemId, field, value);
+  };
+
+  // ── Detail field definitions ─────────────────────────────────
   const leftFields = [
     ['Customer',    'customer',   'text'],
     ['Contact',     'contact',    'text'],
     ['Date',        'date',       'date'],
     ['Expiry Date', 'expiryDate', 'date'],
   ];
-
-  // ── Right details column fields ─────────────────────────────
   const rightFields = [
     ['Our Ref',      'ourRef',        'text'],
     ['Our Contact',  'ourContact',    'text'],
@@ -104,9 +99,6 @@ export default function QuotationLayout({
 
   const fmtDate = (d) =>
     d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-
-  // ── Table column count (adds delete col in edit mode) ───────
-  const colCount = isEditing ? 6 : 5;
 
   return (
     <div className="quotation-content" style={{ backgroundColor: 'white', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', padding: '2rem' }}>
@@ -132,13 +124,21 @@ export default function QuotationLayout({
         <div style={{ textAlign: 'right', minWidth: '160px' }}>
           <p style={{ fontSize: '0.75rem', fontWeight: '600', color: '#6b7280', margin: '0 0 4px' }}>VALID UNTIL</p>
           {isEditing ? (
-            <input
-              type="date"
-              className="edit-input"
-              value={quotationData.expiryDate || ''}
-              onChange={(e) => onDataChange('expiryDate', e.target.value)}
-              style={{ ...inputStyle, textAlign: 'right', fontWeight: '700', fontSize: '1rem' }}
-            />
+            <div>
+              <input
+                type="date"
+                className={`edit-input${headerErrors.expiryDate ? ' field-error-input' : ''}`}
+                value={quotationData.expiryDate || ''}
+                min={quotationData.date || ''}
+                onChange={(e) => onDataChange('expiryDate', e.target.value)}
+                style={{ ...inputStyle, textAlign: 'right', fontWeight: '700', fontSize: '1rem', borderColor: headerErrors.expiryDate ? '#dc2626' : undefined, backgroundColor: headerErrors.expiryDate ? '#fef2f2' : undefined }}
+              />
+              {headerErrors.expiryDate && (
+                <div style={{ display:'flex', alignItems:'center', gap:'0.25rem', marginTop:'0.25rem', color:'#dc2626', fontSize:'0.7rem', justifyContent:'flex-end' }}>
+                  ⚠ {headerErrors.expiryDate}
+                </div>
+              )}
+            </div>
           ) : (
             <p style={{ fontSize: '1.125rem', fontWeight: '700', color: '#1f2937', margin: 0 }}>
               {fmtDate(quotationData.expiryDate)}
@@ -156,13 +156,21 @@ export default function QuotationLayout({
               <span style={{ fontWeight: 600, color: '#4b5563', fontSize: '0.875rem' }}>{label}</span>
               <span style={{ color: '#6b7280' }}>:</span>
               {isEditing ? (
-                <input
-                  type={type}
-                  className="edit-input"
-                  value={quotationData[field] || ''}
-                  onChange={(e) => onDataChange(field, e.target.value)}
-                  style={inputStyle}
-                />
+                <div>
+                  <input
+                    type={type}
+                    className="edit-input"
+                    value={quotationData[field] || ''}
+                    min={field === 'expiryDate' ? (quotationData.date || '') : undefined}
+                    onChange={(e) => onDataChange(field, e.target.value)}
+                    style={{ ...inputStyle, borderColor: headerErrors[field] ? '#dc2626' : undefined, backgroundColor: headerErrors[field] ? '#fef2f2' : undefined }}
+                  />
+                  {headerErrors[field] && (
+                    <div style={{ display:'flex', alignItems:'center', gap:'0.25rem', marginTop:'0.25rem', color:'#dc2626', fontSize:'0.7rem' }}>
+                      ⚠ {headerErrors[field]}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <span style={{ fontSize: '0.875rem', color: '#1f2937', fontWeight: 500 }}>
                   {type === 'date' ? fmtDate(quotationData[field]) : quotationData[field] || 'N/A'}
@@ -205,7 +213,7 @@ export default function QuotationLayout({
             <thead>
               <tr style={{ backgroundColor: '#000' }}>
                 {[
-                  { label: 'SR#',             w: '50px',  align: 'center' },
+                  { label: 'SR#',              w: '50px',  align: 'center' },
                   { label: 'Item Description', w: 'auto',  align: 'left'   },
                   { label: 'Qty',              w: '80px',  align: 'center' },
                   { label: 'Unit Price',       w: '110px', align: 'right'  },
@@ -219,156 +227,165 @@ export default function QuotationLayout({
               </tr>
             </thead>
             <tbody>
-              {quotationItems.map((qi, index) => {
-                const allImgs = [
-                  ...(qi.imagePaths || []).map((p) => `${BASE_URL}${p}`),
-                  ...(newImages[qi.id] || []),
-                ];
-                return (
-                  <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
+              {quotationItems.map((qi, index) => (
+                <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
 
-                    {/* SR# */}
-                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center', fontWeight: '600', fontSize: '0.875rem' }}>
-                      {index + 1}
-                    </td>
+                  {/* SR# */}
+                  <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center', fontWeight: '600', fontSize: '0.875rem' }}>
+                    {index + 1}
+                  </td>
 
-                    {/* Description cell */}
-                    <td style={{ padding: '0.75rem 1rem', border: '1px solid #e5e7eb', verticalAlign: 'top' }}>
-                      {isEditing ? (
-                        <>
-                          {/* Item dropdown */}
-                          <select
-                            className="edit-input"
-                            value={qi.itemId || ''}
-                            onChange={(e) => onUpdateItem(qi.id, 'itemId', e.target.value)}
-                            style={{ ...inputStyle, marginBottom: '0.5rem' }}
-                          >
-                            <option value="">— Select Item —</option>
-                            {availableItems.map((itm) => (
-                              <option key={itm._id} value={itm._id}>{itm.name}</option>
-                            ))}
-                          </select>
-                          {/* Description textarea */}
-                          <textarea
-                            className="edit-input"
-                            value={qi.description || ''}
-                            onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
-                            placeholder="Item description (optional)…"
-                            rows={2}
-                            style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem' }}
-                          />
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ fontWeight: '600', marginBottom: '0.2rem', fontSize: '0.9375rem' }}>{qi.name || '—'}</div>
-                          {qi.description && (
-                            <div style={{ fontSize: '0.8125rem', color: '#6b7280', lineHeight: '1.4' }}>{qi.description}</div>
-                          )}
-                        </>
-                      )}
-
-                      {/* Existing server images */}
-                      {(qi.imagePaths || []).length > 0 && (
-                        <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '0.5rem' }}>
-                          {qi.imagePaths.map((path, idx) => (
-                            <div key={idx} style={{ position: 'relative', width: '110px', height: '110px', borderRadius: '0.375rem', overflow: 'visible', border: '1px solid #d1d5db' }}>
-                              <img
-                                src={`${path}`}
-                                alt={`item-img-${idx}`}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '0.375rem' }}
-                                onError={(e) => { e.target.src = 'https://placehold.co/110x110?text=Image'; }}
-                              />
-                              {isEditing && onRemoveExistingImage && (
-                                <button onClick={() => onRemoveExistingImage(qi.id, idx)} style={removeImgBtnStyle}>×</button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Newly added (base64) images */}
-                      {(newImages[qi.id] || []).length > 0 && (
-                        <div style={{ marginTop: '0.5rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '0.5rem' }}>
-                          {newImages[qi.id].map((src, idx) => (
-                            <div key={idx} style={{ position: 'relative', width: '110px', height: '110px', borderRadius: '0.375rem', overflow: 'visible', border: '1px solid #86efac' }}>
-                              <img src={src} alt={`new-img-${idx}`} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '0.375rem' }} />
-                              {isEditing && onRemoveNewImage && (
-                                <button onClick={() => onRemoveNewImage(qi.id, idx)} style={removeImgBtnStyle}>×</button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Image upload toggle (edit mode) */}
-                      {isEditing && (
-                        <div style={{ marginTop: '0.75rem' }}>
-                          <button
-                            onClick={() => onToggleImgEdit(qi.id)}
-                            style={{ backgroundColor: editingImgId === qi.id ? '#dc2626' : '#10b981', color: 'white', padding: '0.35rem 0.75rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-                          >
-                            <Upload size={13} /> {editingImgId === qi.id ? 'Cancel' : 'Add Images'}
-                          </button>
-                          {editingImgId === qi.id && (
-                            <div style={{ marginTop: '0.5rem' }}>
-                              <input
-                                type="file" accept="image/*" multiple
-                                id={`img-upload-${qi.id}`}
-                                style={{ display: 'none' }}
-                                onChange={(e) => onAddImages(e, qi.id)}
-                              />
-                              <label htmlFor={`img-upload-${qi.id}`} style={{ display: 'block', padding: '0.75rem', border: '2px dashed #d1d5db', borderRadius: '0.375rem', textAlign: 'center', cursor: 'pointer', fontSize: '0.8125rem', color: '#6b7280' }}>
-                                Click to choose images
-                              </label>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Qty */}
-                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center', fontWeight: '600' }}>
-                      {isEditing ? (
-                        <input
-                          type="number" min="1" className="edit-input"
-                          value={qi.quantity}
-                          onChange={(e) => onUpdateItem(qi.id, 'quantity', e.target.value)}
-                          style={{ ...inputStyle, textAlign: 'center' }}
-                        />
-                      ) : qi.quantity}
-                    </td>
-
-                    {/* Unit Price */}
-                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'right' }}>
-                      {isEditing ? (
-                        <input
-                          type="number" min="0" step="0.01" className="edit-input"
-                          value={qi.unitPrice}
-                          onChange={(e) => onUpdateItem(qi.id, 'unitPrice', e.target.value)}
-                          style={{ ...inputStyle, textAlign: 'right' }}
-                        />
-                      ) : Number(qi.unitPrice || 0).toFixed(2)}
-                    </td>
-
-                    {/* Amount */}
-                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'right', fontWeight: '600' }}>
-                      {(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
-                    </td>
-
-                    {/* Delete (edit only) */}
-                    {isEditing && (
-                      <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center' }}>
-                        <button
-                          onClick={() => onRemoveItem(qi.id)}
-                          style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.4rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  {/* Description cell */}
+                  <td style={{ padding: '0.75rem 1rem', border: '1px solid #e5e7eb', verticalAlign: 'top' }}>
+                    {isEditing ? (
+                      <>
+                        <select
+                          className="edit-input"
+                          value={qi.itemId || ''}
+                          onChange={(e) => onUpdateItem(qi.id, 'itemId', e.target.value)}
+                          style={{ ...inputStyle, marginBottom: '0.5rem' }}
                         >
-                          <Trash2 size={15} />
-                        </button>
-                      </td>
+                          <option value="">— Select Item —</option>
+                          {availableItems.map((itm) => (
+                            <option key={itm._id} value={itm._id}>{itm.name}</option>
+                          ))}
+                        </select>
+                        <textarea
+                          className="edit-input"
+                          value={qi.description || ''}
+                          onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
+                          placeholder="Item description (optional)…"
+                          rows={2}
+                          style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem' }}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: '600', marginBottom: '0.2rem', fontSize: '0.9375rem' }}>{qi.name || '—'}</div>
+                        {qi.description && (
+                          <div style={{ fontSize: '0.8125rem', color: '#6b7280', lineHeight: '1.4' }}>{qi.description}</div>
+                        )}
+                      </>
                     )}
-                  </tr>
-                );
-              })}
+
+                    {/* Existing server / Cloudinary images */}
+                    {(qi.imagePaths || []).length > 0 && (
+                      <div style={{ marginTop: '0.75rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '0.5rem' }}>
+                        {qi.imagePaths.map((path, idx) => (
+                          <div key={idx} style={{ position: 'relative', width: '110px', height: '110px', borderRadius: '0.375rem', overflow: 'visible', border: '1px solid #d1d5db' }}>
+                            <img
+                              src={path}   /* Cloudinary https:// URL — use directly */
+                              alt={`item-img-${idx}`}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '0.375rem' }}
+                              onError={(e) => { e.target.src = 'https://placehold.co/110x110?text=Image'; }}
+                            />
+                            {isEditing && onRemoveExistingImage && (
+                              <button onClick={() => onRemoveExistingImage(qi.id, idx)} style={removeImgBtnStyle}>×</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Newly added (base64/blob) images */}
+                    {(newImages[qi.id] || []).length > 0 && (
+                      <div style={{ marginTop: '0.5rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '0.5rem' }}>
+                        {newImages[qi.id].map((src, idx) => (
+                          <div key={idx} style={{ position: 'relative', width: '110px', height: '110px', borderRadius: '0.375rem', overflow: 'visible', border: '1px solid #86efac' }}>
+                            <img src={src} alt={`new-img-${idx}`} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '0.375rem' }} />
+                            {isEditing && onRemoveNewImage && (
+                              <button onClick={() => onRemoveNewImage(qi.id, idx)} style={removeImgBtnStyle}>×</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Image upload toggle (edit mode) */}
+                    {isEditing && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <button
+                          onClick={() => onToggleImgEdit(qi.id)}
+                          style={{ backgroundColor: editingImgId === qi.id ? '#dc2626' : '#10b981', color: 'white', padding: '0.35rem 0.75rem', borderRadius: '0.375rem', border: 'none', cursor: 'pointer', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                        >
+                          <Upload size={13} /> {editingImgId === qi.id ? 'Cancel' : 'Add Images'}
+                        </button>
+                        {editingImgId === qi.id && (
+                          <div style={{ marginTop: '0.5rem' }}>
+                            <input
+                              type="file" accept="image/*" multiple
+                              id={`img-upload-${qi.id}`}
+                              style={{ display: 'none' }}
+                              onChange={(e) => onAddImages(e, qi.id)}
+                            />
+                            <label htmlFor={`img-upload-${qi.id}`} style={{ display: 'block', padding: '0.75rem', border: '2px dashed #d1d5db', borderRadius: '0.375rem', textAlign: 'center', cursor: 'pointer', fontSize: '0.8125rem', color: '#6b7280' }}>
+                              Click to choose images
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Qty */}
+                  <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center', fontWeight: '600' }}>
+                    {isEditing ? (
+                      <div>
+                        <ValidatedInput
+                          type="number"
+                          value={qi.quantity}
+                          onChange={(val) => handleValidatedUpdate(qi.id, 'quantity', val, validateQuantity)}
+                          validator={validateQuantity}
+                          placeholder="Qty"
+                          style={{ ...inputStyle, textAlign:'center', borderColor: fieldErrors[qi.id]?.quantity ? '#dc2626' : undefined, backgroundColor: fieldErrors[qi.id]?.quantity ? '#fef2f2' : undefined }}
+                          min="1"
+                        />
+                        {fieldErrors[qi.id]?.quantity && (
+                          <div style={{ color:'#dc2626', fontSize:'0.65rem', marginTop:'0.2rem', textAlign:'center' }}>⚠ {fieldErrors[qi.id].quantity}</div>
+                        )}
+                      </div>
+                    ) : qi.quantity}
+                  </td>
+
+                  {/* Unit Price */}
+                  <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'right' }}>
+                    {isEditing ? (
+                      <div>
+                        <ValidatedInput
+                          type="number"
+                          value={qi.unitPrice}
+                          onChange={(val) => handleValidatedUpdate(qi.id, 'unitPrice', val, validatePrice)}
+                          validator={validatePrice}
+                          placeholder="0.00"
+                          style={{ ...inputStyle, textAlign:'right', borderColor: fieldErrors[qi.id]?.unitPrice ? '#dc2626' : undefined, backgroundColor: fieldErrors[qi.id]?.unitPrice ? '#fef2f2' : undefined }}
+                          step="0.01"
+                          min="0"
+                        />
+                        {fieldErrors[qi.id]?.unitPrice && (
+                          <div style={{ color:'#dc2626', fontSize:'0.65rem', marginTop:'0.2rem', textAlign:'right' }}>⚠ {fieldErrors[qi.id].unitPrice}</div>
+                        )}
+                      </div>
+                    ) : Number(qi.unitPrice || 0).toFixed(2)}
+                  </td>
+
+                  {/* Amount */}
+                  <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'right', fontWeight: '600' }}>
+                    {(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
+                  </td>
+
+                  {/* Delete (edit only) */}
+                  {isEditing && (
+                    <td style={{ padding: '0.75rem', border: '1px solid #e5e7eb', textAlign: 'center' }}>
+                      <button
+                        onClick={() => onRemoveItem(qi.id)}
+                        style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '0.375rem', padding: '0.4rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
 
               {/* ── Totals ── */}
               <tr style={{ backgroundColor: '#f8fafc', fontWeight: '600' }}>
@@ -429,93 +446,76 @@ export default function QuotationLayout({
         <div className="no-print" style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.5rem', padding: '1rem', marginBottom: '2rem' }}>
           <h4 style={{ margin: '0 0 0.75rem', fontSize: '0.875rem', fontWeight: '700', color: '#1e40af' }}>Tax & Discount</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            {[['VAT (%)', 'tax'], ['Discount (%)', 'discount']].map(([label, field]) => (
-              <div key={field}>
-                <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: '600', color: '#374151', marginBottom: '0.25rem' }}>{label}</label>
-                <input
-                  type="number" min="0" max="100" step="0.01" className="edit-input"
-                  value={quotationData[field] || 0}
-                  onChange={(e) => onDataChange(field, parseFloat(e.target.value) || 0)}
-                  style={inputStyle}
-                />
-              </div>
-            ))}
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: '600', color: '#374151', marginBottom: '0.25rem' }}>VAT (%)</label>
+              <ValidatedInput
+                type="number"
+                value={quotationData.tax}
+                onChange={(val) => onDataChange('tax', val === '' ? 0 : parseFloat(val) || 0)}
+                validator={validatePercentage}
+                placeholder="0"
+                style={{ ...inputStyle, borderColor: headerErrors.tax ? '#dc2626' : undefined, backgroundColor: headerErrors.tax ? '#fef2f2' : undefined }}
+                min="0" max="100" step="0.01"
+              />
+              {headerErrors.tax && (
+                <div style={{ display:'flex', alignItems:'center', gap:'0.25rem', marginTop:'0.25rem', color:'#dc2626', fontSize:'0.7rem' }}>
+                  ⚠ {headerErrors.tax}
+                </div>
+              )}
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: '600', color: '#374151', marginBottom: '0.25rem' }}>Discount (%)</label>
+              <ValidatedInput
+                type="number"
+                value={quotationData.discount}
+                onChange={(val) => onDataChange('discount', val === '' ? 0 : parseFloat(val) || 0)}
+                validator={validatePercentage}
+                placeholder="0"
+                style={{ ...inputStyle, borderColor: headerErrors.discount ? '#dc2626' : undefined, backgroundColor: headerErrors.discount ? '#fef2f2' : undefined }}
+                min="0" max="100" step="0.01"
+              />
+              {headerErrors.discount && (
+                <div style={{ display:'flex', alignItems:'center', gap:'0.25rem', marginTop:'0.25rem', color:'#dc2626', fontSize:'0.7rem' }}>
+                  ⚠ {headerErrors.discount}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
- 
-{/* ══ 8. Terms & Conditions ══ */}
-<div style={{ marginBottom: '2rem' }}>
-  <h3 style={{
-    fontSize: '1rem',
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: '1.1rem',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px'
-  }}>
-    Terms & Conditions
-  </h3>
 
-  {isEditing ? (
-    <TermsEditor sections={tcSections} onChange={onTcChange} />
-  ) : (
-    <div style={{
-      display: 'flex',
-      gap: '2.5rem',
-      alignItems: 'flex-start',
-      backgroundColor: '#f9fafb',
-      padding: '1.25rem',
-      borderRadius: '0.5rem',
-      border: '1px solid #e5e7eb',
-    }}>
-      {/* Left: Terms text (takes most space) */}
-      <div style={{ flex: '1 1 65%', minWidth: 0 }}>
-        <TermsViewer sections={tcSections} />
+      {/* ══ 7. Terms & Conditions ══ */}
+      <div style={{ marginBottom: '2rem' }}>
+        <h3 style={{ fontSize: '1rem', fontWeight: '700', color: '#1f2937', marginBottom: '1.1rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          Terms & Conditions
+        </h3>
+        {isEditing ? (
+          <TermsEditor sections={tcSections} onChange={onTcChange} />
+        ) : (
+          <div style={{ display: 'flex', gap: '2.5rem', alignItems: 'flex-start', backgroundColor: '#f9fafb', padding: '1.25rem', borderRadius: '0.5rem', border: '1px solid #e5e7eb' }}>
+            <div style={{ flex: '1 1 65%', minWidth: 0 }}>
+              <TermsViewer sections={tcSections} />
+            </div>
+            {quotationData.termsImage && (
+              <div style={{ flex: '0 0 300px', maxWidth: '300px' }}>
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.5rem', overflow: 'hidden', background: 'white', boxShadow: '0 2px 6px rgba(0,0,0,0.06)' }}>
+                  <img
+                    src={quotationData.termsImage}   /* Cloudinary URL or base64 — use directly */
+                    alt="Terms illustration"
+                    style={{ width: '100%', height: 'auto', display: 'block' }}
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                </div>
+                <p style={{ marginTop: '0.6rem', fontSize: '0.75rem', color: '#6b7280', textAlign: 'center' }}>
+                  Reference Image
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Right: Image column – fixed width, only if image exists */}
-      {quotationData?.termsImage && (
-        <div style={{
-          flex: '0 0 300px',
-          maxWidth: '300px',
-        }}>
-          <div style={{
-            border: '1px solid #e2e8f0',
-            borderRadius: '0.5rem',
-            overflow: 'hidden',
-            background: 'white',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
-          }}>
-            <img
-              src={
-                quotationData.termsImage.startsWith('data:')
-                  ? quotationData.termsImage
-                  : ` ${quotationData.termsImage}`
-              }
-              alt="Terms illustration"
-              style={{
-                width: '100%',
-                height: 'auto',
-                display: 'block',
-              }}
-            />
-          </div>
-          <p style={{
-            marginTop: '0.6rem',
-            fontSize: '0.75rem',
-            color: '#6b7280',
-            textAlign: 'center',
-          }}>
-            Reference Image
-          </p>
-        </div>
-      )}
-    </div>
-  )}
-</div>
-
-      {/* ══ 9. Signature footer ══ */}
+      {/* ══ 8. Signature footer ══ */}
       <div style={{ marginTop: '3rem', paddingTop: '2rem', borderTop: '2px solid #e5e7eb' }}>
         <p style={{ margin: 0, fontWeight: '600', color: '#1f2937', fontSize: '0.875rem' }}>Sincerely,</p>
         <p style={{ margin: '2.5rem 0 0', fontWeight: '600', color: '#1f2937', fontSize: '0.875rem' }}>
@@ -523,11 +523,20 @@ export default function QuotationLayout({
         </p>
       </div>
 
-      {/* ══ 10. Action bar (Save / Cancel / Submit) ══ */}
+      {/* ══ 9. Action bar ══ */}
       {actionBar && (
         <div className="no-print" style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '2rem', paddingTop: '2rem', borderTop: '1px solid #e5e7eb' }}>
           {actionBar}
         </div>
+      )}
+
+      {/* Local snackbar (validation feedback) */}
+      {snackbar.show && (
+        <Snackbar
+          message={snackbar.message}
+          type={snackbar.type}
+          onClose={() => setSnackbar({ show: false, message: '', type: 'error' })}
+        />
       )}
     </div>
   );

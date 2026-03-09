@@ -4,49 +4,233 @@ const Item      = require('../models/items');
 const puppeteer = require('puppeteer');
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 
-// ── Shared Puppeteer browser instance ────────────────────────────────────
-let browserInstance = null;
+// ─────────────────────────────────────────────────────────────
+// Shared Puppeteer browser — one instance, auto-reconnect
+// ─────────────────────────────────────────────────────────────
+let _browser = null;
 
 const getBrowser = async () => {
-  if (!browserInstance || !browserInstance.isConnected()) {
-    browserInstance = await puppeteer.launch({
-      headless: true,
-      executablePath: '/usr/bin/chromium-browser',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage'
-      ]
-    });
-  }
-  return browserInstance;
+  if (_browser?.isConnected()) return _browser;
+
+  _browser = await puppeteer.launch({
+    headless: 'new',
+    executablePath: process.env.NODE_ENV === 'production'
+      ? (process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser')
+      : undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
+
+  // Clean up on crash so next call spawns a fresh instance
+  _browser.on('disconnected', () => { _browser = null; });
+  return _browser;
 };
 
-// ── Upload a base64 data-URI to Cloudinary ────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Cloudinary helpers
+// ─────────────────────────────────────────────────────────────
 const uploadBase64ToCloudinary = async (dataUri, folder) => {
   if (!dataUri?.startsWith('data:image')) return null;
-  const matches = dataUri.match(/^data:image\/(\w+);base64,(.*)$/);
+  const matches = dataUri.match(/^data:image\/(\w+);base64,(.*)$/s);
   if (!matches) return null;
   const buffer = Buffer.from(matches[2], 'base64');
   const result = await uploadToCloudinary(buffer, folder);
   return { url: result.secure_url, publicId: result.public_id };
 };
 
-// GET ALL QUOTATIONS (admin)
+const safeDelete = (publicId) =>
+  publicId
+    ? deleteFromCloudinary(publicId).catch((e) =>
+        console.warn(`[Cloudinary] delete failed for ${publicId}: ${e.message}`)
+      )
+    : Promise.resolve();
+
+// ─────────────────────────────────────────────────────────────
+// Shared item-image processor (create + update)
+// ─────────────────────────────────────────────────────────────
+const processItems = (items, quotationImages, existingItems = []) =>
+  Promise.all(
+    items.map(async (item, idx) => {
+      const prev           = existingItems[idx] || {};
+      const imageUrls      = [...(item.imagePaths     || prev.imagePaths     || [])];
+      const imagePublicIds = [...(item.imagePublicIds || prev.imagePublicIds || [])];
+
+      const rawImages = quotationImages?.[idx];
+      if (Array.isArray(rawImages)) {
+        for (const img of rawImages) {
+          const up = await uploadBase64ToCloudinary(img, 'quotations/items');
+          if (up) { imageUrls.push(up.url); imagePublicIds.push(up.publicId); }
+        }
+      }
+
+      return {
+        itemId:       item.itemId,
+        quantity:     Number(item.quantity)  || 1,
+        unitPrice:    Number(item.unitPrice) || 0,
+        description:  item.description?.trim() || '',
+        imagePaths:   imageUrls,
+        imagePublicIds,
+      };
+    })
+  );
+
+// ─────────────────────────────────────────────────────────────
+// Pagination helpers
+// ─────────────────────────────────────────────────────────────
+const parsePagination = ({ page, limit }) => {
+  const p = Math.max(1, parseInt(page,  10) || 1);
+  const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  return { page: p, limit: l, skip: (p - 1) * l };
+};
+
+const paginated = (res, data, total, page, limit) =>
+  res.status(200).json({
+    data,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages:  Math.ceil(total / limit),
+      hasNextPage: page * limit < total,
+      hasPrevPage: page > 1,
+    },
+  });
+
+// ─────────────────────────────────────────────────────────────
+// Date validation
+// ─────────────────────────────────────────────────────────────
+const validateDates = (date, expiryDate) => {
+  if (!expiryDate) return 'Expiry date is required';
+  if (date && expiryDate && new Date(expiryDate) < new Date(date))
+    return 'Expiry date cannot be before the creation date';
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────────
+// Allowed sort fields (whitelist to prevent injection)
+// ─────────────────────────────────────────────────────────────
+const SORT_FIELDS = new Set(['createdAt', 'date', 'expiryDate', 'total', 'customer', 'status', 'quotationNumber']);
+
+// ═════════════════════════════════════════════════════════════
+// CONTROLLERS
+// ═════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────
+// GET ALL QUOTATIONS  (admin)
+// GET /quotations?page=1&limit=20&status=pending&search=xyz
+//                 &sortBy=createdAt&sortDir=desc
+//                 &from=2024-01-01&to=2024-12-31&customerId=xxx
+// ─────────────────────────────────────────────────────────────
 exports.getAllQuotations = async (req, res) => {
   try {
-    const quotations = await Quotation.find()
-      .populate('customerId', 'name email phone address')
-      .populate('items.itemId', 'name price description imagePath')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
-    res.status(200).json(quotations);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching quotations', error: error.message });
+    const { page, limit, skip } = parsePagination(req.query);
+
+    // Build filter
+    const filter = {};
+    if (req.query.status)     filter.status     = req.query.status;
+    if (req.query.customerId) filter.customerId  = req.query.customerId;
+    if (req.query.search) {
+      const re = new RegExp(req.query.search.trim(), 'i');
+      filter.$or = [{ quotationNumber: re }, { customer: re }, { contact: re }];
+    }
+    if (req.query.from || req.query.to) {
+      filter.date = {};
+      if (req.query.from) filter.date.$gte = new Date(req.query.from);
+      if (req.query.to)   filter.date.$lte = new Date(req.query.to);
+    }
+
+    // Sort (whitelist-guarded)
+    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortDir   = req.query.sortDir === 'asc' ? 1 : -1;
+
+    const [data, total] = await Promise.all([
+      Quotation.find(filter)
+        .populate('customerId', 'name email phone address')
+        .populate('items.itemId', 'name price description imagePath')
+        .populate('createdBy', 'name email')
+        .sort({ [sortField]: sortDir })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Quotation.countDocuments(filter),
+    ]);
+
+    return paginated(res, data, total, page, limit);
+  } catch (err) {
+    console.error('[getAllQuotations]', err);
+    res.status(500).json({ message: 'Error fetching quotations', error: err.message });
   }
 };
 
+// ─────────────────────────────────────────────────────────────
+// GET MY QUOTATIONS  (logged-in user)
+// GET /quotations/my-quotations?page=1&limit=20&status=pending&search=xyz
+// ─────────────────────────────────────────────────────────────
+exports.getMyQuotations = async (req, res) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+
+    const filter = { createdBy: req.user.id };
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.search) {
+      const re = new RegExp(req.query.search.trim(), 'i');
+      filter.$or = [{ quotationNumber: re }, { customer: re }];
+    }
+
+    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortDir   = req.query.sortDir === 'asc' ? 1 : -1;
+
+    const [data, total] = await Promise.all([
+      Quotation.find(filter)
+        .populate('customerId', 'name email phone')
+        .populate('items.itemId', 'name price')
+        .populate('createdBy', 'name email')
+        .sort({ [sortField]: sortDir })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Quotation.countDocuments(filter),
+    ]);
+
+    return paginated(res, data, total, page, limit);
+  } catch (err) {
+    console.error('[getMyQuotations]', err);
+    res.status(500).json({ message: 'Error fetching your quotations', error: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// GET SINGLE QUOTATION
+// ─────────────────────────────────────────────────────────────
+exports.getQuotation = async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .populate('customerId', 'name email phone address')
+      .populate('items.itemId', 'name price description imagePath')
+      .populate('createdBy', 'name email')
+      .populate('approvedBy', 'name email')
+      .lean();
+
+    if (!quotation)
+      return res.status(404).json({ message: 'Quotation not found' });
+
+    if (req.user.role !== 'admin' && quotation.createdBy._id.toString() !== req.user.id)
+      return res.status(403).json({ message: 'Not authorized to view this quotation' });
+
+    res.status(200).json(quotation);
+  } catch (err) {
+    console.error('[getQuotation]', err);
+    res.status(500).json({ message: 'Error fetching quotation', error: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
 // CREATE QUOTATION
+// ─────────────────────────────────────────────────────────────
 exports.createQuotation = async (req, res) => {
   const {
     customerId, customer, contact, date, expiryDate,
@@ -55,104 +239,71 @@ exports.createQuotation = async (req, res) => {
     quotationImages, termsAndConditions, termsImage,
   } = req.body;
 
-  if (!customerId || !customer || !items?.length)
-    return res.status(400).json({ message: 'Customer ID, customer name, and items are required' });
-  if (!expiryDate)
-    return res.status(400).json({ message: 'Expiry date is required' });
+  // Validation
+  if (!customerId || !customer?.trim())
+    return res.status(400).json({ message: 'Customer ID and customer name are required' });
+  if (!items?.length)
+    return res.status(400).json({ message: 'At least one item is required' });
+
+  const dateErr = validateDates(date, expiryDate);
+  if (dateErr) return res.status(400).json({ message: dateErr });
 
   try {
-    const customerExists = await Customer.findById(customerId);
-    if (!customerExists) return res.status(404).json({ message: 'Customer not found' });
+    // Parallel DB existence checks
+    const [customerDoc, ...itemDocs] = await Promise.all([
+      Customer.findById(customerId).lean(),
+      ...items.map((i) => Item.findById(i.itemId).lean()),
+    ]);
 
-    for (const item of items) {
-      const exists = await Item.findById(item.itemId);
-      if (!exists) return res.status(404).json({ message: `Item ${item.itemId} not found` });
-    }
+    if (!customerDoc)
+      return res.status(404).json({ message: 'Customer not found' });
 
-    // Upload terms image
-    let termsImageUrl = null, termsImagePublicId = null;
-    if (termsImage) {
-      const uploaded = await uploadBase64ToCloudinary(termsImage, 'quotations');
-      if (uploaded) { termsImageUrl = uploaded.url; termsImagePublicId = uploaded.publicId; }
-    }
+    const badIdx = itemDocs.findIndex((d) => !d);
+    if (badIdx !== -1)
+      return res.status(404).json({ message: `Item not found: ${items[badIdx].itemId}` });
 
-    // Upload per-item images
-    const processedItems = await Promise.all(
-      items.map(async (item, idx) => {
-        const imageUrls = [], imagePublicIds = [];
-        const rawImages = quotationImages?.[idx];
-        if (Array.isArray(rawImages)) {
-          for (const imgData of rawImages) {
-            const uploaded = await uploadBase64ToCloudinary(imgData, 'quotations');
-            if (uploaded) { imageUrls.push(uploaded.url); imagePublicIds.push(uploaded.publicId); }
-          }
-        }
-        return {
-          itemId: item.itemId, quantity: item.quantity,
-          unitPrice: item.unitPrice, description: item.description || '',
-          imagePaths: imageUrls, imagePublicIds,
-        };
-      })
-    );
+    // Upload images in parallel
+    const [termsUp, processedItems] = await Promise.all([
+      termsImage ? uploadBase64ToCloudinary(termsImage, 'quotations/terms') : Promise.resolve(null),
+      processItems(items, quotationImages),
+    ]);
 
     const saved = await new Quotation({
-      quotationNumber: `QT-${Date.now()}`,
-      customerId, customer, contact,
-      date: date || new Date(), expiryDate: new Date(expiryDate),
+      quotationNumber:    `QT-${Date.now()}`,
+      customerId,
+      customer:           customer.trim(),
+      contact:            contact?.trim() || '',
+      date:               date ? new Date(date) : new Date(),
+      expiryDate:         new Date(expiryDate),
       ourRef, ourContact, salesOffice, paymentTerms, deliveryTerms,
-      items: processedItems,
-      tax: parseFloat(tax) || 0, discount: parseFloat(discount) || 0,
-      notes, termsAndConditions: termsAndConditions || '',
-      termsImage: termsImageUrl, termsImagePublicId,
-      total: parseFloat(total), createdBy: req.user.id, status: 'pending',
+      items:              processedItems,
+      tax:                parseFloat(tax)      || 0,
+      discount:           parseFloat(discount) || 0,
+      notes:              notes?.trim() || '',
+      termsAndConditions: termsAndConditions || '',
+      termsImage:         termsUp?.url        || null,
+      termsImagePublicId: termsUp?.publicId   || null,
+      total:              parseFloat(total)   || 0,
+      createdBy:          req.user.id,
+      status:             'pending',
     }).save();
 
     const populated = await Quotation.findById(saved._id)
       .populate('customerId', 'name email phone address')
       .populate('items.itemId', 'name price description imagePath')
-      .populate('createdBy', 'name email');
+      .populate('createdBy', 'name email')
+      .lean();
 
     res.status(201).json(populated);
-  } catch (error) {
-    console.error('Error creating quotation:', error);
-    res.status(500).json({ message: 'Error creating quotation', error: error.message });
+  } catch (err) {
+    console.error('[createQuotation]', err);
+    res.status(500).json({ message: 'Error creating quotation', error: err.message });
   }
 };
 
-// GET MY QUOTATIONS
-exports.getMyQuotations = async (req, res) => {
-  try {
-    const quotations = await Quotation.find({ createdBy: req.user.id })
-      .populate('customerId', 'name email phone')
-      .populate('items.itemId', 'name price')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
-    res.json(quotations);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching your quotations', error: error.message });
-  }
-};
-
-// GET SINGLE QUOTATION
-exports.getQuotation = async (req, res) => {
-  try {
-    const quotation = await Quotation.findById(req.params.id)
-      .populate('customerId', 'name email phone address')
-      .populate('items.itemId', 'name price description imagePath')
-      .populate('createdBy', 'name email')
-      .populate('approvedBy', 'name email');
-
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
-    if (req.user.role !== 'admin' && quotation.createdBy._id.toString() !== req.user.id)
-      return res.status(403).json({ message: 'Not authorized to view this quotation' });
-
-    res.status(200).json(quotation);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching quotation', error: error.message });
-  }
-};
-
+// ─────────────────────────────────────────────────────────────
 // UPDATE QUOTATION
+// ─────────────────────────────────────────────────────────────
 exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const {
@@ -162,131 +313,165 @@ exports.updateQuotation = async (req, res) => {
     quotationImages, termsAndConditions, termsImage,
   } = req.body;
 
+  if (!items?.length)
+    return res.status(400).json({ message: 'At least one item is required' });
+
+  const dateErr = validateDates(date, expiryDate);
+  if (dateErr) return res.status(400).json({ message: dateErr });
+
   try {
     const existing = await Quotation.findById(id);
-    if (!existing) return res.status(404).json({ message: 'Quotation not found' });
+    if (!existing)
+      return res.status(404).json({ message: 'Quotation not found' });
+
     if (req.user.role !== 'admin' && existing.createdBy.toString() !== req.user.id)
       return res.status(403).json({ message: 'Not authorized to update this quotation' });
+
     if (req.user.role !== 'admin' && existing.status !== 'pending')
-      return res.status(400).json({ message: `Cannot update quotation with status: ${existing.status}` });
+      return res.status(400).json({ message: `Cannot update a quotation with status: ${existing.status}` });
 
-    // Process item images — keep existing Cloudinary URLs, upload new base64 ones
-    const processedItems = await Promise.all(
-      items.map(async (item, idx) => {
-        const imageUrls      = [...(item.imagePaths    || [])];
-        const imagePublicIds = [...(item.imagePublicIds || [])];
-        const rawImages = quotationImages?.[idx];
-        if (Array.isArray(rawImages)) {
-          for (const imgData of rawImages) {
-            const uploaded = await uploadBase64ToCloudinary(imgData, 'quotations');
-            if (uploaded) { imageUrls.push(uploaded.url); imagePublicIds.push(uploaded.publicId); }
-          }
+    // Resolve terms image and item images in parallel
+    let termsImageUrl      = existing.termsImage;
+    let termsImagePublicId = existing.termsImagePublicId;
+
+    const [processedItems] = await Promise.all([
+      processItems(items, quotationImages, existing.items),
+      (async () => {
+        if (termsImage?.startsWith('data:image')) {
+          await safeDelete(existing.termsImagePublicId);
+          const up = await uploadBase64ToCloudinary(termsImage, 'quotations/terms');
+          if (up) { termsImageUrl = up.url; termsImagePublicId = up.publicId; }
+        } else if (termsImage === null) {
+          await safeDelete(existing.termsImagePublicId);
+          termsImageUrl = null; termsImagePublicId = null;
         }
-        return {
-          itemId: item.itemId, quantity: item.quantity,
-          unitPrice: item.unitPrice, description: item.description || '',
-          imagePaths: imageUrls, imagePublicIds,
-        };
-      })
-    );
+      })(),
+    ]);
 
-    // Process terms image
-    let termsImageUrl = existing.termsImage, termsImagePublicId = existing.termsImagePublicId;
-    if (termsImage?.startsWith('data:image')) {
-      if (existing.termsImagePublicId)
-        await deleteFromCloudinary(existing.termsImagePublicId).catch(() => {});
-      const uploaded = await uploadBase64ToCloudinary(termsImage, 'quotations/terms');
-      if (uploaded) { termsImageUrl = uploaded.url; termsImagePublicId = uploaded.publicId; }
-    } else if (termsImage === null) {
-      if (existing.termsImagePublicId)
-        await deleteFromCloudinary(existing.termsImagePublicId).catch(() => {});
-      termsImageUrl = null; termsImagePublicId = null;
-    }
-
-    const updated = await Quotation.findByIdAndUpdate(id, {
-      customerId, customer, contact,
-      date: date || existing.date, expiryDate: new Date(expiryDate),
-      ourRef, ourContact, salesOffice, paymentTerms, deliveryTerms,
-      items: processedItems,
-      tax: parseFloat(tax) || 0, discount: parseFloat(discount) || 0,
-      notes, termsAndConditions: termsAndConditions || '',
-      termsImage: termsImageUrl, termsImagePublicId,
-      total: parseFloat(total),
-    }, { new: true })
+    const updated = await Quotation.findByIdAndUpdate(
+      id,
+      {
+        customerId,
+        customer:           customer?.trim(),
+        contact:            contact?.trim() || '',
+        date:               date ? new Date(date) : existing.date,
+        expiryDate:         new Date(expiryDate),
+        ourRef, ourContact, salesOffice, paymentTerms, deliveryTerms,
+        items:              processedItems,
+        tax:                parseFloat(tax)      || 0,
+        discount:           parseFloat(discount) || 0,
+        notes:              notes?.trim() || '',
+        termsAndConditions: termsAndConditions || '',
+        termsImage:         termsImageUrl,
+        termsImagePublicId,
+        total:              parseFloat(total) || 0,
+      },
+      { new: true, runValidators: true }
+    )
       .populate('customerId', 'name email phone address')
-      .populate('items.itemId', 'name price description imagePath');
+      .populate('items.itemId', 'name price description imagePath')
+      .lean();
 
     res.status(200).json(updated);
-  } catch (error) {
-    console.error('Error updating quotation:', error);
-    res.status(500).json({ message: 'Error updating quotation', error: error.message });
+  } catch (err) {
+    console.error('[updateQuotation]', err);
+    res.status(500).json({ message: 'Error updating quotation', error: err.message });
   }
 };
 
+// ─────────────────────────────────────────────────────────────
 // DELETE QUOTATION
+// ─────────────────────────────────────────────────────────────
 exports.deleteQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation)
+      return res.status(404).json({ message: 'Quotation not found' });
 
-    // Check permissions BEFORE deleting
     if (req.user.role !== 'admin' && quotation.createdBy.toString() !== req.user.id)
       return res.status(403).json({ message: 'Not authorized to delete this quotation' });
-    if (req.user.role !== 'admin' && quotation.status !== 'pending')
-      return res.status(400).json({ message: `Cannot delete quotation with status: ${quotation.status}` });
 
-    // Delete Cloudinary images
-    const deletePromises = [];
-    quotation.items?.forEach(item =>
-      item.imagePublicIds?.forEach(pid => { if (pid) deletePromises.push(deleteFromCloudinary(pid)); })
+    if (req.user.role !== 'admin' && quotation.status !== 'pending')
+      return res.status(400).json({ message: `Cannot delete a quotation with status: ${quotation.status}` });
+
+    // Delete all Cloudinary assets (non-blocking on failure)
+    const jobs = [];
+    quotation.items?.forEach((item) =>
+      item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); })
     );
-    if (quotation.termsImagePublicId)
-      deletePromises.push(deleteFromCloudinary(quotation.termsImagePublicId));
-    await Promise.allSettled(deletePromises);
+    if (quotation.termsImagePublicId) jobs.push(safeDelete(quotation.termsImagePublicId));
+    await Promise.allSettled(jobs);
 
     await Quotation.findByIdAndDelete(req.params.id);
     res.status(200).json({ message: 'Quotation deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting quotation:', error);
-    res.status(500).json({ message: 'Error deleting quotation', error: error.message });
+  } catch (err) {
+    console.error('[deleteQuotation]', err);
+    res.status(500).json({ message: 'Error deleting quotation', error: err.message });
   }
 };
 
-// GENERATE PDF
+// ─────────────────────────────────────────────────────────────
+// GENERATE PDF  (server-side via Puppeteer)
+// POST /quotations/generate-pdf  { html, filename? }
+// ─────────────────────────────────────────────────────────────
 exports.generatePDF = async (req, res) => {
   const { html, filename = 'quotation' } = req.body;
-  if (!html) return res.status(400).json({ message: 'HTML content is required' });
 
-  let page;
+  if (!html?.trim())
+    return res.status(400).json({ message: 'HTML content is required' });
+
+  // Sanitise filename — strip path separators and quotes
+  const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
+
+  let page = null;
   try {
-    console.time('PDF Generation');
+    console.time(`[PDF] ${safeFilename}`);
+
     const browser = await getBrowser();
     page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+    // Block unnecessary resources to speed up rendering
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (['stylesheet', 'font', 'media'].includes(type)) req.abort();
+      else req.continue();
+    });
+
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    // Wait for any remaining images to load
+    await page.evaluate(() =>
+      Promise.all(
+        [...document.images]
+          .filter((img) => !img.complete)
+          .map((img) => new Promise((res) => { img.onload = res; img.onerror = res; }))
+      )
+    ).catch(() => {});
 
     const pdfBuffer = await page.pdf({
-      format: 'A4', printBackground: true,
-      margin: { top: '20mm', right: '20mm', bottom: '20mm', left: '20mm' },
+      format:          'A4',
+      printBackground: true,
+      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
     });
 
     await page.close(); page = null;
+    console.timeEnd(`[PDF] ${safeFilename}`);
 
-    const header = Buffer.from(pdfBuffer).slice(0, 5).toString();
-    if (header !== '%PDF-') throw new Error('Generated file does not have a valid PDF header');
+    // Verify PDF header
+    if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-')
+      throw new Error('Puppeteer returned an invalid PDF buffer');
 
-    console.timeEnd('PDF Generation');
-    console.log(`PDF generated — ${pdfBuffer.length} bytes`);
+    console.log(`[PDF] ${safeFilename} — ${pdfBuffer.length} bytes`);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`);
     res.setHeader('Content-Length', pdfBuffer.length);
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    res.setHeader('Cache-Control', 'no-store');
     res.send(Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer));
-  } catch (error) {
+  } catch (err) {
     if (page) await page.close().catch(() => {});
-    console.error('Error generating PDF:', error);
-    res.status(500).json({ message: 'Error generating PDF', error: error.message });
+    console.error('[generatePDF]', err);
+    res.status(500).json({ message: 'Error generating PDF', error: err.message });
   }
 };
