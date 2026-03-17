@@ -514,39 +514,84 @@ const validateAll = useCallback(() => {
  
 
   // PDF generation using shared utility
-  const handleExportPDF = useCallback(async () => {
-    if (!validateAll()) return;
-    
-    setIsExporting(true);
-    setExportStep("Preparing data…");
-    
-    try {
-      // Prepare quotation data for PDF generator
-      const pdfData = {
-        ...quotationData,
-        items: quotationItems.map(item => ({
+// PDF generation using shared utility - UPDATED to match HomeScreen approach
+const handleExportPDF = useCallback(async () => {
+  if (!validateAll()) return;
+  
+  setIsExporting(true);
+  setExportStep("Preparing data…");
+  
+  try {
+    // Create a quotation object that mimics the structure from HomeScreen
+    const pdfQuotation = {
+      ...quotationData,
+      _id: 'temp-' + Date.now(),
+      quotationNumber,
+      items: quotationItems.map(item => {
+        // For items in QuotationTemplate, we need to structure them
+        // exactly like they would be in a saved quotation
+        return {
           ...item,
-          imagePaths: itemImages[item.id] || []
-        })),
-        taxPercent: quotationData.tax,
-        discountPercent: quotationData.discount,
-        quotationNumber,
-        currency: { code: selectedCurrency },
-        companySnapshot: selectedCompany ? { name: selectedCompany } : null
-      };
-      
-      setExportStep("Generating PDF…");
-      await downloadQuotationPDF(pdfData, { newImages: itemImages });
-      
-      showSnack("PDF downloaded successfully!", "success");
-    } catch (err) {
-      console.error('PDF export error:', err);
-      showSnack(err?.message || "Failed to export PDF", "error");
-    } finally {
-      setIsExporting(false);
-      setExportStep("");
-    }
-  }, [validateAll, quotationData, quotationItems, itemImages, quotationNumber, selectedCurrency, selectedCompany, showSnack]);
+          // For new quotations, the images are in itemImages state
+          // and should be placed in imagePaths
+          imagePaths: itemImages[item.id] || [],
+          // Make sure itemId is properly structured
+          itemId: item.itemId ? {
+            _id: item.itemId,
+            name: item.name,
+            price: item.unitPrice,
+            description: item.description
+          } : null
+        };
+      }),
+      taxPercent: Number(quotationData.tax) || 0,
+      discountPercent: Number(quotationData.discount) || 0,
+      currency: { code: selectedCurrency || 'AED' },
+      customerSnapshot: {
+        name: customer?.name || quotationData.customer,
+        email: customer?.email,
+        phone: customer?.phone,
+        address: customer?.address
+      },
+      companySnapshot: selectedCompany ? { 
+        name: typeof selectedCompany === 'string' ? selectedCompany : selectedCompany.name,
+        ...(typeof selectedCompany === 'object' ? selectedCompany : {})
+      } : null,
+      contact: quotationData.contact,
+      date: quotationData.date,
+      expiryDate: quotationData.expiryDate,
+      ourRef: quotationData.ourRef,
+      ourContact: quotationData.ourContact,
+      salesOffice: quotationData.salesOffice,
+      paymentTerms: quotationData.paymentTerms,
+      deliveryTerms: quotationData.deliveryTerms,
+      tl: quotationData.tl,
+      trn: quotationData.trn,
+      projectName: quotationData.projectName,
+      notes: quotationData.notes,
+      termsAndConditions: sectionsToHTML(tcSections),
+      termsImage: quotationData.termsImage
+    };
+    
+    console.log("PDF Quotation object:", pdfQuotation);
+    console.log("Items with images:", pdfQuotation.items.map(i => ({
+      name: i.name,
+      imagePaths: i.imagePaths
+    })));
+    
+    setExportStep("Generating PDF…");
+    // Pass the quotation object directly, just like HomeScreen does
+    await downloadQuotationPDF(pdfQuotation);
+    
+    showSnack("PDF downloaded successfully!", "success");
+  } catch (err) {
+    console.error('PDF export error:', err);
+    showSnack(err?.message || "Failed to export PDF", "error");
+  } finally {
+    setIsExporting(false);
+    setExportStep("");
+  }
+}, [validateAll, quotationData, quotationItems, itemImages, quotationNumber, selectedCurrency, selectedCompany, customer, tcSections, showSnack]);
 
   // Submit handler
   const handleSubmit = useCallback(async () => {

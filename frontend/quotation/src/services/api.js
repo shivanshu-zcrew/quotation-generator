@@ -5,7 +5,7 @@ import axios from "axios";
    Uses Vite env variable in production, localhost in dev
 ========================================================= */
 const API_BASE =
-  import.meta.env?.VITE_API_URL || "http://localhost:4000/api";
+  import.meta.env?.VITE_API_URL || "http://13.232.90.158:5000/api";
 
 /* =========================================================
    Axios Instance

@@ -667,11 +667,11 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
         )}
 
         {/* ── Stat cards row 1 ── */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'1rem', marginBottom:'1rem' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'1rem', marginBottom:'1rem' }}>
           <StatCard label="Total Revenue"   value={fmtCurrency(totalRevenue, selectedCurrency)} accent="#6366f1" iconBg="#eff1ff" iconColor="#6366f1" Icon={TrendingUp}  loading={isInitialLoading} sub={`All quotations combined in ${selectedCurrency}`}/>
           <StatCard label="Quotations"      value={safeQ.length}              accent="#8b5cf6" iconBg="#f5f3ff" iconColor="#8b5cf6" Icon={FileText}    loading={isInitialLoading} sub="Total submitted"/>
           <StatCard label="Customers"       value={customers.length}          accent="#059669" iconBg="#ecfdf5" iconColor="#059669" Icon={Users}       loading={false}/>
-          <StatCard label="Catalogue Items" value={items.length}              accent="#d97706" iconBg="#fffbeb" iconColor="#d97706" Icon={Package}     loading={false}/>
+          {/* <StatCard label="Catalogue Items" value={items.length}              accent="#d97706" iconBg="#fffbeb" iconColor="#d97706" Icon={Package}     loading={false}/> */}
         </div>
 
       

@@ -8,7 +8,7 @@ export const FileType = {
     UNKNOWN: 'unknown'
   };
   
-  export const BASE_URL = "http://localhost:4000";
+  export const BASE_URL = "http://13.232.90.158:5000";
   export const ITEMS_PER_FIRST_PAGE = 8;
   export const MAX_DOCUMENT_SIZE_MB = 10;
   
