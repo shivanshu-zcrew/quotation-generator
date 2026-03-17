@@ -196,6 +196,8 @@ exports.rejectQuotation = async (req, res) => {
 
 // @desc  Get all quotations with filters (admin)
 // @route GET /api/admin/quotations
+// @desc  Get all quotations with filters (admin)
+// @route GET /api/admin/quotations
 exports.getAllQuotationsAdmin = async (req, res) => {
   try {
     const { status, fromDate, toDate, userId } = req.query;
@@ -211,11 +213,56 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 
     const quotations = await fullPopulate(
       Quotation.find(query).sort({ createdAt: -1 })
-    );
+    ).lean(); // Use .lean() for better performance
 
-    res.json(quotations);
+    // Sanitize each quotation to ensure all numeric fields have default values
+    const sanitizedQuotations = quotations.map(q => ({
+      ...q,
+      // Ensure numeric fields exist
+      total: q.total || 0,
+      subtotal: q.subtotal || 0,
+      taxAmount: q.taxAmount || 0,
+      discountAmount: q.discountAmount || 0,
+      totalInBaseCurrency: q.totalInBaseCurrency || 0,
+      
+      // Ensure items array is safe
+      items: (q.items || []).map(item => ({
+        ...item,
+        quantity: item.quantity || 0,
+        unitPrice: item.unitPrice || 0,
+        totalPrice: item.totalPrice || 0,
+        unitPriceInBaseCurrency: item.unitPriceInBaseCurrency || 0,
+        totalPriceInBaseCurrency: item.totalPriceInBaseCurrency || 0
+      })),
+      
+      // Ensure currency object exists
+      currency: q.currency || {
+        code: 'AED',
+        symbol: 'AED',
+        decimalPlaces: 2
+      },
+      
+      // Ensure customerSnapshot exists
+      customerSnapshot: q.customerSnapshot || {
+        name: q.customer || 'N/A',
+        email: '',
+        phone: ''
+      },
+      
+      // Ensure companySnapshot exists
+      companySnapshot: q.companySnapshot || {
+        name: 'N/A',
+        code: 'N/A'
+      }
+    }));
+
+    res.json(sanitizedQuotations);
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching quotations', error: error.message });
+    console.error('[getAllQuotationsAdmin] Error:', error);
+    res.status(500).json({ 
+      message: 'Error fetching quotations', 
+      error: error.message 
+    });
   }
 };
 
@@ -237,7 +284,7 @@ exports.getAdminDashboardStats = async (req, res) => {
       byStatus,
       totalRevenue,
       awardedValue,
-      conversionRate,
+      conversionRateData,
     ] = await Promise.all([
       // Total Quotations - All quotations in system
       Quotation.countDocuments(matchStage),
@@ -299,7 +346,7 @@ exports.getAdminDashboardStats = async (req, res) => {
           awardedCount,
           notAwardedCount,
           totalDecided,
-          rate: Math.round(rate * 100) / 100
+          rate: Math.round(rate * 100) / 100 // Return as number, not string
         };
       })(),
     ]);
@@ -333,24 +380,24 @@ exports.getAdminDashboardStats = async (req, res) => {
     res.json({
       success: true,
       stats: {
-        // Row 1 cards
-        totalQuotations: counts.total,
+        // Row 1 cards - ensure all are numbers
+        totalQuotations: counts.total || 0,
         actionRequired: counts.ops_approved || 0,
         approved: counts.approved || 0,
         awarded: counts.awarded || 0,
         
-        // Row 2 cards
+        // Row 2 cards - ensure all are numbers
         notAwarded: counts.not_awarded || 0,
-        totalRevenue: totalRevenueValue,
-        awardedValue: awardedValueTotal,
-        conversionRate: conversionRate,
+        totalRevenue: totalRevenueValue || 0,
+        awardedValue: awardedValueTotal || 0,
+        conversionRate: conversionRateData.rate || 0, // Return just the number, not the object
         
         // Additional
         rejected: counts.rejected || 0,
         
         // Raw counts for reference
         statusCounts: counts,
-        conversionDetails: conversionRate
+        conversionDetails: conversionRateData // Keep the details separately if needed
       }
     });
   } catch (err) {
@@ -409,7 +456,7 @@ exports.getOpsDashboardStats = async (req, res) => {
     ]);
 
     const stats = {
-      // Row 1 cards
+      // Row 1 cards - ensure all are numbers
       totalQuotations: totalQuotations || 0,
       pendingReview: pendingCount || 0,
       awaitingAdmin: opsApprovedCount || 0,

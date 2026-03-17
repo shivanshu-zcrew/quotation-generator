@@ -28,7 +28,7 @@ export default function ItemsScreen({ onBack }) {
         description: item.description || '', 
         image: null 
       });
-      setImagePreview(item.imagePath ? `http://13.232.90.158:5000${item.imagePath}` : null);
+      setImagePreview(item.imagePath ? `http://localhost:4000${item.imagePath}` : null);
       setEditingId(item._id);
     } else {
       setFormData({ name: '', price: '', description: '', image: null });
@@ -400,7 +400,7 @@ export default function ItemsScreen({ onBack }) {
                     <div className="is-img-area">
                       {item.imagePath ? (
                         <img
-                          src={`http://13.232.90.158:5000${item.imagePath}`}
+                          src={`http://localhost:4000${item.imagePath}`}
                           alt={item.name}
                           style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform .3s' }}
                           onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.04)'}
