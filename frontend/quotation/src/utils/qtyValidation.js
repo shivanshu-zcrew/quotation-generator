@@ -1,5 +1,4 @@
-// utils/validation.js
-export const validateQuantity = (value) => {
+ export const validateQuantity = (value) => {
     if (value === '' || value === null || value === undefined) {
       return { isValid: false, error: 'Quantity is required' };
     }
@@ -38,20 +37,36 @@ export const validateQuantity = (value) => {
   };
   
   export const validatePercentage = (value) => {
-    if (value === '' || value === null || value === undefined) {
-      return { isValid: true, error: null }; // Allow empty for optional fields
+    console.log("Validating percentage:", value, "type:", typeof value);
+    
+    // If it's a number, it's already valid
+    if (typeof value === 'number') {
+      if (value >= 0 && value <= 100) {
+        return { isValid: true };
+      } else {
+        return { isValid: false, error: 'Percentage must be between 0 and 100' };
+      }
     }
     
-    const num = Number(value);
+    // Empty string is valid during typing
+    if (value === '' || value === null || value === undefined) {
+      return { isValid: true };
+    }
+    
+    // Handle string numbers
+    // Remove leading zeros for validation but keep for display
+    const cleanedValue = value.replace(/^0+/, '') || '0';
+    const num = Number(cleanedValue);
+    
     if (isNaN(num)) {
-      return { isValid: false, error: 'Must be a number' };
+      return { isValid: false, error: 'Must be a valid number' };
     }
     
     if (num < 0 || num > 100) {
-      return { isValid: false, error: 'Must be between 0 and 100' };
+      return { isValid: false, error: 'Percentage must be between 0 and 100' };
     }
     
-    return { isValid: true, error: null };
+    return { isValid: true };
   };
 
   export const validateDate = (startDate, endDate) => {
@@ -62,8 +77,7 @@ export const validateQuantity = (value) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
     
-    // Reset time part for date comparison
-    start.setHours(0, 0, 0, 0);
+     start.setHours(0, 0, 0, 0);
     end.setHours(0, 0, 0, 0);
     
     if (end < start) {

@@ -1,26 +1,66 @@
 import React, { useState } from 'react';
 import { Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, ChevronDown } from 'lucide-react';
 import QuotationTemplate from './QuotationTemplate';
+import { CompanyCurrencySelector, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 
-export default function QuotationScreen({ customers = [], items = [], onAddQuotation, onBack }) {
-  const [step, setStep]                   = useState(1);
+// Import store hooks
+import { useCustomersList, useItemsList } from '../hooks/customHooks';
+import { useQuotations } from '../hooks/customHooks';
+
+export default function QuotationScreen({ onBack }) {
+  // Get data from store
+  const customers = useCustomersList();
+  const items = useItemsList();
+  const { addQuotation } = useQuotations();
+  
+  // Company & Currency
+  const { 
+    selectedCompany,
+    selectedCurrency,
+    company,
+    currency,
+    formatAmount,
+    exchangeRates
+  } = useCompanyCurrency();
+
+  const [step, setStep] = useState(1);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedItems, setSelectedItems] = useState([]);
 
   const handleAddItem = () => {
-    setSelectedItems(prev => [...prev, { id: Date.now(), itemId: '', quantity: 1, unitPrice: 0 }]);
+    setSelectedItems(prev => [...prev, { 
+      id: Date.now(), 
+      itemId: '', 
+      quantity: 1, 
+      unitPrice: 0 
+    }]);
   };
 
   const handleRemoveItem = (id) => setSelectedItems(prev => prev.filter(i => i.id !== id));
 
   const handleItemChange = (id, field, value) => {
-    setSelectedItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+    setSelectedItems(prev => prev.map(item => 
+      item.id === id ? { ...item, [field]: value } : item
+    ));
   };
 
   const handleProceedToTemplate = () => {
-    if (!selectedCustomer)            { alert('Please select a customer'); return; }
-    if (selectedItems.length === 0)   { alert('Please add at least one item'); return; }
-    if (selectedItems.some(i => !i.itemId)) { alert('Please select an item for all rows'); return; }
+    if (!selectedCompany) {
+      alert('Please select a company');
+      return;
+    }
+    if (!selectedCustomer) { 
+      alert('Please select a customer'); 
+      return; 
+    }
+    if (selectedItems.length === 0) { 
+      alert('Please add at least one item'); 
+      return; 
+    }
+    if (selectedItems.some(i => !i.itemId)) { 
+      alert('Please select an item for all rows'); 
+      return; 
+    }
     setStep(2);
   };
 
@@ -35,8 +75,8 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
       <QuotationTemplate
         customer={selectedCustomer}
         selectedItems={selectedItems}
-        items={items}
-        onAddQuotation={onAddQuotation}
+        selectedCompany={selectedCompany}    
+      selectedCurrency={selectedCurrency}   
         onBack={handleBack}
       />
     );
@@ -131,6 +171,18 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
           color: white;
         }
 
+        /* ── Company info box ── */
+        .qs-company-box {
+          background: #f0f9ff;
+          border: 1.5px solid #bae6fd;
+          border-radius: 12px;
+          padding: 0.75rem 1rem;
+          margin-bottom: 1.5rem;
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
         /* ── Animations ── */
         @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
         .fa1{animation:fadeUp .35s ease both}
@@ -163,15 +215,49 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
             Create Quotation
           </h1>
           <p style={{ margin: '.35rem 0 0', color: '#64748b', fontSize: '.875rem' }}>
-            Select a customer and add items to generate a quotation.
+            Select company, customer and add items to generate a quotation.
           </p>
         </div>
 
         {/* ── Main card ── */}
         <div className="fa2" style={{ background: 'white', borderRadius: '20px', boxShadow: '0 1px 3px rgba(0,0,0,.06), 0 8px 32px rgba(0,0,0,.07)', overflow: 'hidden' }}>
 
-          {/* ── Section: Customer ── */}
+          {/* ── Section: Company (NEW) ── */}
           <div style={{ padding: '1.75rem 1.75rem 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem', marginBottom: '1rem' }}>
+              <div style={{ width: 32, height: 32, borderRadius: '9px', background: '#e0e7ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4f46e5', flexShrink: 0 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                  <polyline points="9 22 9 12 15 12 15 22" />
+                </svg>
+              </div>
+              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: '700', color: '#0f172a' }}>
+                Company <span style={{ color: '#ef4444' }}>*</span>
+              </h2>
+            </div>
+
+            <CompanyCurrencySelector variant="full" showLabels={false} />
+
+            {/* {company && (
+              <div className="qs-company-box">
+                <div style={{ width: 36, height: 36, borderRadius: '10px', background: '#0284c7', color: 'white', fontWeight: '700', fontSize: '.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {company.code}
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontWeight: '700', color: '#0369a1', fontSize: '.875rem' }}>{company.name}</p>
+                  <p style={{ margin: 0, color: '#0284c7', fontSize: '.78rem' }}>
+                    Base: {company.baseCurrency} · VAT: {company.vatNumber}
+                  </p>
+                </div>
+              </div>
+            )} */}
+          </div>
+
+          {/* Divider */}
+          <div style={{ height: 1, background: '#f1f5f9', margin: '1.75rem 0' }} />
+
+          {/* ── Section: Customer ── */}
+          <div style={{ padding: '0 1.75rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '.6rem', marginBottom: '1rem' }}>
               <div style={{ width: 32, height: 32, borderRadius: '9px', background: '#eff1ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1', flexShrink: 0 }}>
                 <Users size={16} />
@@ -282,7 +368,7 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
                             >
                               <option value="">— Select item —</option>
                               {items.map(itm => (
-                                <option key={itm._id} value={itm._id}>{itm.name} (AED {itm.price})</option>
+                                <option key={itm._id} value={itm._id}>{itm.name} ({formatAmount(itm.price)})</option>
                               ))}
                             </select>
                             <ChevronDown size={15} className="arrow" />
@@ -303,7 +389,7 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
 
                         {/* Unit price */}
                         <div>
-                          <label style={{ display: 'block', color: '#64748b', fontWeight: '600', marginBottom: '.35rem', fontSize: '.75rem', textTransform: 'uppercase', letterSpacing: '.05em' }}>Unit Price (AED)</label>
+                          <label style={{ display: 'block', color: '#64748b', fontWeight: '600', marginBottom: '.35rem', fontSize: '.75rem', textTransform: 'uppercase', letterSpacing: '.05em' }}>Unit Price</label>
                           <input
                             className="qs-field"
                             type="number" step="0.01" min="0"
@@ -319,7 +405,7 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
                         <div style={{ marginTop: '.6rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '.4rem' }}>
                           <span style={{ color: '#94a3b8', fontSize: '.75rem' }}>Line total:</span>
                           <span style={{ color: '#059669', fontWeight: '700', fontSize: '.875rem', fontFamily: 'monospace' }}>
-                            AED {lineTotal(si).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            {formatAmount(lineTotal(si))}
                           </span>
                         </div>
                       )}
@@ -344,7 +430,7 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
                   <div>
                     <p style={{ margin: 0, fontSize: '.78rem', fontWeight: '600', opacity: .75, textTransform: 'uppercase', letterSpacing: '.06em' }}>Estimated Total</p>
                     <p style={{ margin: '.25rem 0 0', fontSize: '1.5rem', fontWeight: '800', letterSpacing: '-.02em', fontFamily: 'monospace' }}>
-                      AED {grandTotal.toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatAmount(grandTotal)}
                     </p>
                   </div>
                   <div style={{ opacity: .3, fontSize: '2.5rem' }}>🧾</div>
@@ -352,6 +438,11 @@ export default function QuotationScreen({ customers = [], items = [], onAddQuota
                 <p style={{ margin: '.5rem 0 0', fontSize: '.75rem', opacity: .65 }}>
                   Excludes tax & discount — configure in the next step.
                 </p>
+                {exchangeRates && selectedCurrency !== 'AED' && (
+                  <p style={{ margin: '.25rem 0 0', fontSize: '.7rem', opacity: .5 }}>
+                    ≈ AED {(grandTotal * (exchangeRates.rates?.['AED'] || 1)).toFixed(2)}
+                  </p>
+                )}
               </div>
             </div>
           )}

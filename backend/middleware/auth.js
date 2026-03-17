@@ -44,3 +44,21 @@ exports.adminOnly = (req, res, next) => {
     return res.status(403).json({ message: 'Access denied. Admin only.' });
   }
 };
+
+exports.opsManagerOrAdmin = (req, res, next) => {
+  if (req.user && ['ops_manager', 'admin'].includes(req.user.role)) {
+    return next();
+  }
+  res.status(403).json({ message: 'Access denied: Operations Manager or Admin role required' });
+};
+
+/**
+ * opsManagerOnly
+ * Allows access only to users with role === 'ops_manager'
+ */
+exports.opsManagerOnly = (req, res, next) => {
+  if (req.user && req.user.role === 'ops_manager') {
+    return next();
+  }
+  res.status(403).json({ message: 'Access denied: Operations Manager role required' });
+};

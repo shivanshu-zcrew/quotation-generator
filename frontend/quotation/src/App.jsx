@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -9,73 +9,114 @@ import {
   useLocation,
 } from 'react-router-dom';
 
-import {
-  customerAPI,
-  itemAPI,
-  quotationAPI,
-  authAPI,
-  adminAPI,
-  getCurrentUser,
-  isAuthenticated,
-  setAuthData,
-  clearAuthData,
-} from './services/api';
+import { useAppStore, useInitializeApp } from './services/store';
+import { getHomePath } from './services/api';
 
-import HomeScreen              from './page/HomeScreen';
-import CustomersScreen         from './page/CustomersScreen';
-import ItemsScreen             from './page/ItemsScreen';
-import QuotationScreen         from './page/QuotationScreen';
-import ViewQuotationScreen     from './page/ViewQuotationScreen';
-import LoginScreen             from './page/LoginScreen';
-import RegisterScreen          from './page/RegisterScreen';
-import AdminDashboard          from './page/AdminDashboard';
+import HomeScreen from './page/HomeScreen';
+import CustomersScreen from './page/CustomersScreen';
+import ItemsScreen from './page/ItemsScreen';
+import QuotationScreen from './page/QuotationScreen';
+import ViewQuotationScreen from './page/ViewQuotationScreen';
+import LoginScreen from './page/LoginScreen';
+import RegisterScreen from './page/RegisterScreen';
+import AdminDashboard from './page/AdminDashboard';
+import OpsDashboard from './page/OperManagerDashboard';
 import PendingQuotationsScreen from './page/PendingQuotationsScreen';
-import UserManagementScreen    from './page/UserManagementScreen';
+import UserManagementScreen from './page/UserManagementScreen';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Context
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-const AppContext = createContext(null);
-const useApp = () => useContext(AppContext);
+
+/** Always reads the freshest state synchronously — no render-lag. */
+function getUser() {
+  return useAppStore.getState().user;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Route guards
+// Route Guards
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Any authenticated user (all roles). */
 function RequireAuth({ children }) {
   const location = useLocation();
-  if (!isAuthenticated()) {
+  useAppStore((s) => s.user); // subscribe so guard re-renders on login/logout
+  const user = getUser();
+
+  if (!user || !localStorage.getItem('token')) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
   return children;
 }
 
+/** Creator role only (role === 'user'). */
+function RequireCreator({ children }) {
+  const location = useLocation();
+  useAppStore((s) => s.user);
+  const user = getUser();
+
+  if (!user || !localStorage.getItem('token')) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  if (user.role !== 'user') {
+    return <Navigate to={getHomePath(user.role)} replace />;
+  }
+  return children;
+}
+
+/** Admin role only. */
 function RequireAdmin({ children }) {
   const location = useLocation();
-  if (!isAuthenticated()) {
+  useAppStore((s) => s.user);
+  const user = getUser();
+
+  if (!user || !localStorage.getItem('token')) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  if (getCurrentUser()?.role !== 'admin') {
-    return <Navigate to="/home" replace />;
+  if (user.role !== 'admin') {
+    return <Navigate to={getHomePath(user.role)} replace />;
   }
   return children;
 }
 
+/** Ops manager role only. */
+function RequireOpsManager({ children }) {
+  const location = useLocation();
+  useAppStore((s) => s.user);
+  const user = getUser();
+
+  if (!user || !localStorage.getItem('token')) {
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  if (user.role !== 'ops_manager') {
+    return <Navigate to={getHomePath(user.role)} replace />;
+  }
+  return children;
+}
+
+/** Redirect already-logged-in users away from login/register. */
 function GuestOnly({ children }) {
-  if (isAuthenticated()) {
-    const dest = getCurrentUser()?.role === 'admin' ? '/admin' : '/home';
-    return <Navigate to={dest} replace />;
-  }
+  useAppStore((s) => s.user);
+  const user  = getUser();
+  const token = localStorage.getItem('token');
+
+  if (user && token) return <Navigate to={getHomePath(user.role)} replace />;
+  if (!token && user)  useAppStore.getState().handleLogout();
+  if (token  && !user) { localStorage.removeItem('token'); localStorage.removeItem('user'); }
+
   return children;
 }
 
+/** / and unknown routes → role-based home. */
 function RootRedirect() {
-  if (!isAuthenticated()) return <Navigate to="/login" replace />;
-  const dest = getCurrentUser()?.role === 'admin' ? '/admin' : '/home';
-  return <Navigate to={dest} replace />;
+  useAppStore((s) => s.user);
+  const user = getUser();
+  if (!user) return <Navigate to="/login" replace />;
+  return <Navigate to={getHomePath(user.role)} replace />;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOC: inject onBack={() => navigate(-1)} into any screen
+// HOC
 // ─────────────────────────────────────────────────────────────────────────────
 function withBack(Component) {
   return function Wrapped(props) {
@@ -91,11 +132,12 @@ const PendingQuotationsScreenWithBack = withBack(PendingQuotationsScreen);
 const UserManagementScreenWithBack    = withBack(UserManagementScreen);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// onNavigate helper — maps legacy screen names → real paths
+// Screen-name → route map (for legacy onNavigate('screenName') callers)
 // ─────────────────────────────────────────────────────────────────────────────
 const ROUTE_MAP = {
   home:                 '/home',
   admin:                '/admin',
+  ops:                  '/ops',
   customers:            '/customers',
   items:                '/items',
   addQuotation:         '/quotation/new',
@@ -110,33 +152,23 @@ function useScreenNavigate() {
       navigate(`/quotation/${screen.split('/')[1]}`);
     } else {
       const path = ROUTE_MAP[screen];
-      path ? navigate(path) : console.warn('Unknown screen:', screen);
+      if (path) navigate(path);
+      else console.warn('Unknown screen:', screen);
     }
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Screen wrappers
+// Route Components
 // ─────────────────────────────────────────────────────────────────────────────
+
 function HomeScreenRoute() {
   const navigate   = useNavigate();
   const onNavigate = useScreenNavigate();
-  // ✅ Pull loading + loadError + refresh so HomeScreen gets them
-  const { user, customers, items, quotations, loading, loadError, refresh, deleteQuotation, handleLogout } = useApp();
-
   return (
     <HomeScreen
-      user={user}
-      customers={customers}
-      items={items}
-      quotations={quotations}
       onNavigate={onNavigate}
       onViewQuotation={(id) => navigate(`/quotation/${id}`)}
-      onDeleteQuotation={deleteQuotation}
-      onLogout={handleLogout}
-      isLoading={loading}       // ✅ was missing — caused the "no quotations" flash
-      loadError={loadError}     // ✅ was missing — error banner never showed
-      onRefresh={refresh}       // ✅ was missing — refresh button did nothing
     />
   );
 }
@@ -144,69 +176,86 @@ function HomeScreenRoute() {
 function AdminDashboardRoute() {
   const navigate   = useNavigate();
   const onNavigate = useScreenNavigate();
-  const {
-    quotations, customers, items, loading, loadError, refresh,
-    approveQuotation, rejectQuotation, deleteQuotation, handleLogout,
-  } = useApp();
-
   return (
     <AdminDashboard
-      quotations={quotations}
-      customers={customers}
-      items={items}
       onNavigate={onNavigate}
       onViewQuotation={(id) => navigate(`/quotation/${id}`)}
-      onApproveQuotation={approveQuotation}
-      onRejectQuotation={rejectQuotation}
-      onDeleteQuotation={deleteQuotation}
-      onLogout={handleLogout}
-      isLoading={loading}   // ✅ wired for AdminDashboard too
-      loadError={loadError}
-      onRefresh={refresh}
     />
   );
 }
 
-function ViewQuotationRoute() {
-  const { id }   = useParams();
+function OpsDashboardRoute() {
   const navigate = useNavigate();
-  const { quotations, items, updateQuotation, deleteQuotation } = useApp();
+  return (
+    <OpsDashboard
+      onViewQuotation={(id) => navigate(`/quotation/${id}`)}
+    />
+  );
+}
+
+/**
+ * ViewQuotationRoute — accessible by ALL authenticated roles.
+ * Admin and ops_manager data comes from their own store slices;
+ * creator quotations come from the main quotations slice.
+ */
+function ViewQuotationRoute() {
+  const { id }           = useParams();
+  const navigate         = useNavigate();
+  const user             = useAppStore((s) => s.user);
+  const quotations       = useAppStore((s) => s.quotations);
+  const opsReviewHistory = useAppStore((s) => s.opsReviewHistory);
+
+  // Merge all visible quotations so any role can find the record
+  const allVisible = useMemo(
+    () => [...quotations, ...opsReviewHistory],
+    [quotations, opsReviewHistory]
+  );
 
   return (
     <ViewQuotationScreen
       quotationId={id}
-      quotations={quotations}
-      items={items}
-      onUpdateQuotation={updateQuotation}
-      onDeleteQuotation={async (qid) => {
-        const ok = await deleteQuotation(qid);
-        if (ok) navigate(-1);
-      }}
+      quotations={allVisible}
+      user={user}
       onBack={() => navigate(-1)}
     />
   );
 }
 
 function LoginRoute() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const { handleLogin } = useApp();
+  const navigate    = useNavigate();
+  const location    = useLocation();
+  const handleLogin = useAppStore((s) => s.handleLogin);
+  const [busy, setBusy] = useState(false);
   const from = location.state?.from?.pathname;
 
   const login = async (email, password) => {
-    const result = await handleLogin(email, password);
-    if (result.success) {
-      navigate(from || (result.role === 'admin' ? '/admin' : '/home'), { replace: true });
+    if (busy) return { success: false, error: 'Login in progress' };
+    setBusy(true);
+    try {
+      const result = await handleLogin(email, password);
+      if (!result.success) return result;
+
+      // Small tick to let Zustand flush the new user into state
+      await new Promise(r => setTimeout(r, 100));
+
+      const user = useAppStore.getState().user;
+      if (!user?.role) return { success: false, error: 'Invalid user data' };
+
+      navigate(from || getHomePath(user.role), { replace: true });
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message || 'Login failed' };
+    } finally {
+      setBusy(false);
     }
-    return result;
   };
 
   return <LoginScreen onLogin={login} onNavigate={(s) => navigate(`/${s}`)} />;
 }
 
 function RegisterRoute() {
-  const navigate = useNavigate();
-  const { handleRegister } = useApp();
+  const navigate       = useNavigate();
+  const handleRegister = useAppStore((s) => s.handleRegister);
 
   const register = async (data) => {
     const result = await handleRegister(data);
@@ -218,246 +267,83 @@ function RegisterRoute() {
 }
 
 function PendingRoute() {
-  const navigate = useNavigate();
-  const { quotations, approveQuotation, rejectQuotation } = useApp();
-
+  const navigate    = useNavigate();
+  const quotations  = useAppStore((s) => s.quotations);
   return (
     <PendingQuotationsScreenWithBack
-      quotations={quotations.filter(q => q.status === 'pending')}
-      onApprove={approveQuotation}
-      onReject={rejectQuotation}
+      quotations={quotations.filter((q) => q.status === 'ops_approved')}
       onViewQuotation={(id) => navigate(`/quotation/${id}`)}
     />
   );
 }
 
 function QuotationNewRoute() {
-  const navigate   = useNavigate();
-  const { user, customers, items, addQuotation } = useApp();
+  const navigate = useNavigate();
+  const user     = useAppStore((s) => s.user);
+  return <QuotationScreenWithBack onBack={() => navigate(getHomePath(user?.role))} />;
+}
 
-  const handleBack = () => navigate(user?.role === 'admin' ? '/admin' : '/home');
+function CustomersRoute() { return <CustomersScreenWithBack />; }
+function ItemsRoute()     { return <ItemsScreenWithBack />; }
 
-  const handleAddQuotation = async (quotationData) => {
-    const success = await addQuotation(quotationData);
-    if (success) navigate(user?.role === 'admin' ? '/admin' : '/home');
-    return success;
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+// AppContent
+// ─────────────────────────────────────────────────────────────────────────────
+function AppContent() {
+  const loading = useAppStore((s) => s.loading);
 
   return (
-    <QuotationScreenWithBack
-      user={user}
-      customers={customers}
-      items={items}
-      onBack={handleBack}
-      onAddQuotation={handleAddQuotation}
-    />
+    <>
+      {loading && <div style={S.loadingBar} />}
+      <div style={S.container}>
+        <Routes>
+          {/* ── Public ── */}
+          <Route path="/login"    element={<GuestOnly><LoginRoute    /></GuestOnly>} />
+          <Route path="/register" element={<GuestOnly><RegisterRoute /></GuestOnly>} />
+
+          {/* ── Creator only ── */}
+          <Route path="/home"          element={<RequireCreator><HomeScreenRoute    /></RequireCreator>} />
+          <Route path="/customers"     element={<RequireCreator><CustomersRoute     /></RequireCreator>} />
+          <Route path="/items"         element={<RequireCreator><ItemsRoute         /></RequireCreator>} />
+          <Route path="/quotation/new" element={<RequireCreator><QuotationNewRoute  /></RequireCreator>} />
+
+          {/* ── Quotation detail — ALL authenticated roles ──
+               This is the fix: RequireAuth instead of RequireCreator
+               so admin and ops_manager can also view quotations.    */}
+          <Route path="/quotation/:id" element={<RequireAuth><ViewQuotationRoute /></RequireAuth>} />
+
+          {/* ── Ops Manager ── */}
+          <Route path="/ops" element={<RequireOpsManager><OpsDashboardRoute /></RequireOpsManager>} />
+
+          {/* ── Admin ── */}
+          <Route path="/admin"         element={<RequireAdmin><AdminDashboardRoute          /></RequireAdmin>} />
+          <Route path="/admin/pending" element={<RequireAdmin><PendingRoute                 /></RequireAdmin>} />
+          <Route path="/admin/users"   element={<RequireAdmin><UserManagementScreenWithBack /></RequireAdmin>} />
+
+          {/* ── Fallback ── */}
+          <Route path="/"  element={<RootRedirect />} />
+          <Route path="*"  element={<RootRedirect />} />
+        </Routes>
+      </div>
+    </>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Root — data provider
+// App
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [user,       setUser]       = useState(() => isAuthenticated() ? getCurrentUser() : null);
-  const [customers,  setCustomers]  = useState([]);
-  const [items,      setItems]      = useState([]);
-  const [quotations, setQuotations] = useState([]);
-
-  // ✅ Start as true — component tree mounts before useEffect fires,
-  //    so the skeleton must be visible from the very first render.
-  const [loading,   setLoading]   = useState(true);
-  const [loadError, setLoadError] = useState(null);
-
-  // ✅ Extracted into useCallback so both useEffect and the refresh
-  //    button call exactly the same function
-  const fetchData = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
-    setLoadError(null);
-    try {
-      await Promise.all([
-        customerAPI.getAll()
-          .then(r => setCustomers(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
-          .catch(err => { console.error('customers fetch failed', err); }),
-
-        itemAPI.getAll()
-          .then(r => setItems(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
-          .catch(err => { console.error('items fetch failed', err); }),
-
-        (user.role === 'admin' ? quotationAPI.getAll() : quotationAPI.getMyQuotations())
-          .then(r => setQuotations(Array.isArray(r.data) ? r.data : r.data?.data ?? []))
-          .catch(err => { console.error('quotations fetch failed', err); }),
-      ]);
-    } catch (err) {
-      setLoadError(err?.response?.data?.message || err.message || 'Failed to load data');
-    } finally {
-      setLoading(false);
-    }
-  }, [user?._id, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Run on mount and whenever the logged-in user changes
-  useEffect(() => {
-    if (user) {
-      fetchData();
-    } else {
-      // Logged out — reset everything and stop the loading spinner
-      setCustomers([]);
-      setItems([]);
-      setQuotations([]);
-      setLoading(false);
-      setLoadError(null);
-    }
-  }, [fetchData, user?._id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  const handleLogin = async (email, password) => {
-    try {
-      const res = await authAPI.login({ email, password });
-      setAuthData(res.data);
-      setUser(res.data);
-      return { success: true, role: res.data.role };
-    } catch (err) {
-      return { success: false, error: err.response?.data?.message || 'Invalid credentials' };
-    }
-  };
-
-  const handleRegister = async (data) => {
-    try {
-      const res = await authAPI.register(data);
-      setAuthData(res.data);
-      setUser(res.data);
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: err.response?.data?.message || 'Registration failed.' };
-    }
-  };
-
-  const handleLogout = () => {
-    clearAuthData();
-    setUser(null);
-    setCustomers([]);
-    setItems([]);
-    setQuotations([]);
-    setLoading(false);
-    setLoadError(null);
-  };
-
-  // ── CRUD helpers ──────────────────────────────────────────────────────────
-  const addCustomer    = async (d)      => { const r = await customerAPI.create(d);       setCustomers(p => [...p, r.data]);                          return true; };
-  const updateCustomer = async (id, d)  => { const r = await customerAPI.update(id, d);   setCustomers(p => p.map(c => c._id === id ? r.data : c));   return true; };
-  const deleteCustomer = async (id)     => { await customerAPI.delete(id);                setCustomers(p => p.filter(c => c._id !== id));              return true; };
-
-  const addItem    = async (d)      => { const r = await itemAPI.create(d);       setItems(p => [...p, r.data]);                      return true; };
-  const updateItem = async (id, d)  => { const r = await itemAPI.update(id, d);   setItems(p => p.map(i => i._id === id ? r.data : i)); return true; };
-  const deleteItem = async (id)     => { await itemAPI.delete(id);                setItems(p => p.filter(i => i._id !== id));           return true; };
-
-  const addQuotation = async (d) => {
-    const r = await quotationAPI.create(d);
-    setQuotations(p => [...p, r.data]);
-    alert('Quotation created and is pending approval');
-    return true;
-  };
-  const updateQuotation = async (id, d) => {
-    const r = await quotationAPI.update(id, d);
-    setQuotations(p => p.map(q => q._id === id ? r.data : q));
-    return true;
-  };
-  const deleteQuotation = async (id) => {
-    await quotationAPI.delete(id);
-    setQuotations(p => p.filter(q => q._id !== id));
-    alert('Quotation deleted');
-    return true;
-  };
-
-  const approveQuotation = async (id) => {
-    const r = await adminAPI.approveQuotation(id);
-    setQuotations(p => p.map(q => q._id === id ? r.data.quotation : q));
-    alert('Approved');
-    return true;
-  };
-  const rejectQuotation = async (id, reason) => {
-    const r = await adminAPI.rejectQuotation(id, { reason });
-    setQuotations(p => p.map(q => q._id === id ? r.data.quotation : q));
-    alert('Rejected');
-    return true;
-  };
-
-  const ctx = {
-    user,
-    customers, items, quotations,
-    loading, loadError,
-    refresh: fetchData,   // ✅ exposed so any screen can trigger a re-fetch
-    handleLogin, handleRegister, handleLogout,
-    addCustomer, updateCustomer, deleteCustomer,
-    addItem, updateItem, deleteItem,
-    addQuotation, updateQuotation, deleteQuotation,
-    approveQuotation, rejectQuotation,
-  };
-
+  useInitializeApp();
   return (
-    <AppContext.Provider value={ctx}>
-      <BrowserRouter>
-        {/* Top loading bar — visible during any data fetch */}
-        {loading && <div style={S.loadingBar} />}
-
-        <div style={S.container}>
-          <Routes>
-            {/* ── Public ── */}
-            <Route path="/login"    element={<GuestOnly><LoginRoute /></GuestOnly>} />
-            <Route path="/register" element={<GuestOnly><RegisterRoute /></GuestOnly>} />
-
-            {/* ── User ── */}
-            <Route path="/home"          element={<RequireAuth><HomeScreenRoute /></RequireAuth>} />
-            <Route path="/customers"     element={<RequireAuth><CustomersRoute /></RequireAuth>} />
-            <Route path="/items"         element={<RequireAuth><ItemsRoute /></RequireAuth>} />
-            <Route path="/quotation/new" element={<RequireAuth><QuotationNewRoute /></RequireAuth>} />
-            <Route path="/quotation/:id" element={<RequireAuth><ViewQuotationRoute /></RequireAuth>} />
-
-            {/* ── Admin ── */}
-            <Route path="/admin"         element={<RequireAdmin><AdminDashboardRoute /></RequireAdmin>} />
-            <Route path="/admin/pending" element={<RequireAdmin><PendingRoute /></RequireAdmin>} />
-            <Route path="/admin/users"   element={<RequireAdmin><UserManagementRoute /></RequireAdmin>} />
-
-            {/* ── Fallback ── */}
-            <Route path="/"  element={<RootRedirect />} />
-            <Route path="*"  element={<RootRedirect />} />
-          </Routes>
-        </div>
-      </BrowserRouter>
-    </AppContext.Provider>
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }
 
-// ── Thin CRUD-wired routes ────────────────────────────────────────────────────
-function CustomersRoute() {
-  const { customers, addCustomer, updateCustomer, deleteCustomer } = useApp();
-  return (
-    <CustomersScreenWithBack
-      customers={customers}
-      onAddCustomer={addCustomer}
-      onUpdateCustomer={updateCustomer}
-      onDeleteCustomer={deleteCustomer}
-    />
-  );
-}
-
-function ItemsRoute() {
-  const { items, addItem, updateItem, deleteItem } = useApp();
-  return (
-    <ItemsScreenWithBack
-      items={items}
-      onAddItem={addItem}
-      onUpdateItem={updateItem}
-      onDeleteItem={deleteItem}
-    />
-  );
-}
-
-function UserManagementRoute() {
-  return <UserManagementScreenWithBack />;
-}
-
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
 const S = {
   container: {
     minHeight: '100vh',
@@ -473,3 +359,10 @@ const S = {
     animation: 'loadingPulse 1.4s ease-in-out infinite',
   },
 };
+
+const styleSheet = document.createElement('style');
+styleSheet.textContent = `
+  @keyframes spin         { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  @keyframes loadingPulse { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+`;
+document.head.appendChild(styleSheet);

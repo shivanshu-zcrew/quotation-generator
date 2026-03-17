@@ -19,6 +19,7 @@ export default function ValidatedInput({
   const [error, setError] = useState(null);
   const [touched, setTouched] = useState(false);
 
+  // Update local state when prop changes
   useEffect(() => {
     setInputValue(value?.toString() || '');
   }, [value]);
@@ -27,16 +28,17 @@ export default function ValidatedInput({
     const newValue = e.target.value;
     setInputValue(newValue);
     
-    // Allow empty string for better UX
-    if (newValue === '') {
-      setError(null);
-      return;
-    }
-    
     // Validate on change if validator provided
     if (validator) {
       const result = validator(newValue);
       setError(result.error);
+      
+      // Immediately pass valid values to parent
+      if (result.isValid) {
+        onChange(newValue);
+      }
+    } else {
+      onChange(newValue);
     }
   };
 
@@ -50,14 +52,7 @@ export default function ValidatedInput({
       const result = validator(newValue);
       setError(result.error);
       
-      // Only call onChange if valid
-      if (result.isValid) {
-        onChange(newValue);
-      } else if (newValue === '') {
-        // Don't pass empty to parent - let parent handle default
-        onChange('');
-      }
-    } else {
+      // Always pass the value to parent on blur (parent should handle validation)
       onChange(newValue);
     }
     
@@ -74,7 +69,7 @@ export default function ValidatedInput({
   return (
     <div style={{ width: '100%' }}>
       <input
-        type={type === 'number' ? 'text' : type} // Use text for number to avoid browser quirks
+        type={type === 'number' ? 'text' : type}
         value={inputValue}
         onChange={handleChange}
         onBlur={handleBlur}

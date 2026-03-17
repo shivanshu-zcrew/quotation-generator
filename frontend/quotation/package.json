@@ -20,10 +20,11 @@
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-quill-new": "^3.8.3",
+    "react-quill-new": "^3.7.0",
     "react-router-dom": "^7.13.1",
     "react-to-print": "^3.3.0",
-    "tailwindcss": "^4.1.18"
+    "tailwindcss": "^4.1.18",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

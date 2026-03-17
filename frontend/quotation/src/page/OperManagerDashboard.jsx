@@ -1,18 +1,16 @@
-// screens/AdminDashboard.jsx
+// screens/OpsDashboard.jsx
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Eye, Download, Trash2, Clock, CheckCircle, XCircle,
+  Eye, Download, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Building2, DollarSign, Users, Package, TrendingUp,Calendar
+  Shield, Award, Ban, Users, Package, TrendingUp, Building2
 } from 'lucide-react';
-import headerImage from '../assets/header.png';
-
+import {useOpsStats} from '../hooks/customHooks'
 import { useAppStore, useCompanyQuotations } from '../services/store';
-import { useCustomersList, useItemsList, useAdminStats } from '../hooks/customHooks';
-import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
+import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import useToast, { ToastContainer } from '../hooks/useToast';
 
 // ─────────────────────────────────────────────────────────────
@@ -23,9 +21,9 @@ const STATUS_CONFIG = {
   pending:      { bg: '#fef9c3', color: '#92400e', dot: '#f59e0b', label: 'Awaiting Ops Review'     },
   ops_approved: { bg: '#dbeafe', color: '#1e40af', dot: '#3b82f6', label: 'Awaiting Admin Approval'  },
   ops_rejected: { bg: '#fee2e2', color: '#991b1b', dot: '#ef4444', label: 'Returned by Ops'          },
-  approved:     { bg: '#dcfce7', color: '#166534', dot: '#22c55e', label: 'Approved'                  },
-  rejected:     { bg: '#fce7f3', color: '#9d174d', dot: '#ec4899', label: 'Rejected by Admin'         },
-  awarded:      { bg: '#d1fae5', color: '#065f46', dot: '#10b981', label: 'Awarded ✓'                 },
+  approved:     { bg: '#dcfce7', color: '#166534', dot: '#22c55e', label: 'Approved by Admin'        },
+  rejected:     { bg: '#fce7f3', color: '#9d174d', dot: '#ec4899', label: 'Rejected by Admin'        },
+  awarded:      { bg: '#d1fae5', color: '#065f46', dot: '#10b981', label: 'Awarded'                   },
   not_awarded:  { bg: '#f3f4f6', color: '#374151', dot: '#9ca3af', label: 'Not Awarded'               },
   draft:        { bg: '#f1f5f9', color: '#475569', dot: '#94a3b8', label: 'Draft'                     },
 };
@@ -34,11 +32,9 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const DEBOUNCE_DELAY = 350;
 
 const TAB_KEYS = {
-  all:          { label: 'All',              Icon: FileText,    statusFilter: null               },
-  ops_approved: { label: 'Action Required',  Icon: Clock,       statusFilter: 'ops_approved'     },
-  approved:     { label: 'Approved',         Icon: CheckCircle, statusFilter: 'approved'          },
-  awarded:      { label: 'Awarded',          Icon: Award,       statusFilter: 'awarded'           },
-  rejected:     { label: 'Rejected',         Icon: XCircle,     statusFilter: 'rejected'          },
+  pending:      { label: 'Pending Review',      Icon: Clock,       statusFilter: 'pending'      },
+  ops_approved: { label: 'Awaiting Admin',      Icon: Shield,      statusFilter: 'ops_approved' },
+  ops_rejected: { label: 'Returned by Me',      Icon: Ban,         statusFilter: 'ops_rejected' },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -79,8 +75,6 @@ const isExpiringSoon = (d) => {
   const days = Math.ceil((dt - new Date()) / 86400000); 
   return days >= 0 && days <= 7; 
 };
-
-const DELETABLE = new Set(['pending', 'ops_rejected']);
 
 // ─────────────────────────────────────────────────────────────
 // Custom Hooks
@@ -178,7 +172,7 @@ const StatCard = React.memo(({ label, value, sub, accent, iconBg, iconColor, Ico
 
 const ActionBtn = React.memo(({ bg, color, onClick, disabled, title, icon: Icon, label }) => {
   return (
-    <button onClick={onClick} disabled={disabled} title={title} className="adm-action-btn"
+    <button onClick={onClick} disabled={disabled} title={title} className="ops-action-btn"
       style={{ backgroundColor:bg, color, border:'none', borderRadius:7, padding:'0.35rem 0.65rem', fontSize:'0.72rem', fontWeight:600, cursor:disabled?'not-allowed':'pointer', opacity:disabled?0.55:1, display:'inline-flex', alignItems:'center', gap:'0.3rem', whiteSpace:'nowrap', transition:'opacity 0.15s' }}>
       <Icon size={12}/> {label}
     </button>
@@ -201,7 +195,7 @@ const SortHeader = React.memo(({ label, field, sort, onSort, align }) => {
 
 const NavBtn = React.memo(({ onClick, label, primary }) => {
   return (
-    <button onClick={onClick} className="adm-nav-btn"
+    <button onClick={onClick} className="ops-nav-btn"
       style={{ backgroundColor:primary?'white':'rgba(255,255,255,0.08)', color:primary?'#0f172a':'#94a3b8', border:primary?'none':'1px solid rgba(255,255,255,0.12)', borderRadius:8, padding:'0.45rem 0.875rem', fontSize:'0.8rem', fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}>
       {label}
     </button>
@@ -280,55 +274,42 @@ const SkeletonRow = React.memo(() => (
 ));
 
 // ─────────────────────────────────────────────────────────────
-// Main Component
+// Main Dashboard
 // ─────────────────────────────────────────────────────────────
-export default function AdminDashboard({ onNavigate, onViewQuotation }) {
+export default function OpsDashboard({ onViewQuotation }) {
   const navigate = useNavigate();
   
   // ── Use the same pattern as HomeScreen ─────────────────────
   const { quotations: companyQuotations, loading: companyLoading, refresh: refreshCompanyQuotations } = useCompanyQuotations();
   
-  const customers        = useCustomersList();
-  const items            = useItemsList();
-  const approveQuotation = useAppStore((s) => s.approveQuotation);
-  const rejectQuotation  = useAppStore((s) => s.rejectQuotation);
-  const deleteQuotation  = useAppStore((s) => s.deleteQuotation);
-  const handleLogout     = useAppStore((s) => s.handleLogout);
-  const loading          = useAppStore((s) => s.loading);
-  const storeQuotations  = useAppStore((s) => s.quotations);
-  const loadError        = useAppStore((s) => s.loadError);
-  const clearError       = useAppStore((s) => s.clearError);
-  const fetchAllData     = useAppStore((s) => s.fetchAllData);
-  const selectedCompany  = useAppStore((s) => s.selectedCompany);
-  
-  const { 
-    stats,
-    loading: statsLoading,
-    refresh: refreshStats,
-    
-    // Row 1 stats
-    totalQuotations,
-    actionRequired,
-    approved,
-    awarded,
-    
-    // Row 2 stats
-    notAwarded, 
-    awardedValue,
-    conversionRate,
-    
-    // Additional stats
-    rejected,
-    
-    // Raw data
-    conversionDetails, 
-    
-    // Legacy support (if needed)
-    totalApprovedValue,
-    totalAwardedValue
-  } = useAdminStats();
+  // ── Store ─────────────────────────────────────────────────
+  const user = useAppStore((s) => s.user);
+  const customers = useAppStore((s) => s.customers);
+  const items = useAppStore((s) => s.items);
+  const fetchAllData = useAppStore((s) => s.fetchAllData);
+  const quotations = useAppStore((s) => s.quotations);
+  const opsApproveQuotation = useAppStore((s) => s.opsApproveQuotation);
+  const opsRejectQuotation = useAppStore((s) => s.opsRejectQuotation);
+  const handleLogout = useAppStore((s) => s.handleLogout);
+  const loading = useAppStore((s) => s.loading);
+  const storeQuotations = useAppStore((s) => s.quotations);
+  const loadError = useAppStore((s) => s.loadError);
+  const clearError = useAppStore((s) => s.clearError);
+  const selectedCompany = useAppStore((s) => s.selectedCompany);
 
-  // ── Company & Currency ──
+  // ── Stats hook ────────────────────────────────────────────
+  const { 
+    stats: opsStats, 
+    loading: statsLoading, 
+    refresh: refreshStats,
+    totalQuotations,
+    pendingReview,
+    awaitingAdmin,
+    returnedByMe,
+    totalValue
+  } = useOpsStats();
+
+  // ── Company & Currency ────────────────────────────────────
   const {
     company: currentCompany,
     selectedCurrency,
@@ -336,87 +317,87 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     refreshCompanyData
   } = useCompanyCurrency();
 
-// ── Custom hooks ──────────────────────────────────────────
-const { toasts, addToast, dismissToast } = useToast();
+  // ── Custom hooks ──────────────────────────────────────────
+  const { toasts, addToast, dismissToast } = useToast();
 
   // ── Table state ───────────────────────────────────────────
-  const [activeTab,    setActiveTab]    = useState('all');
-  const [page,         setPage]         = useState(1);
-  const [limit,        setLimit]        = useState(20);
-  const [searchInput,  setSearchInput]  = useState('');
-  const [search,       setSearch]       = useState('');
-  const [sort,         setSort]         = useState({ field: 'createdAt', dir: 'desc' });
+  const [activeTab, setActiveTab] = useState('pending');
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
+  const [loadingIds, setLoadingIds] = useState({});
+  const [downloadLoadingId, setDownloadLoadingId] = useState(null);
 
-  // ── Action state ──────────────────────────────────────────
-  const [exportingId,  setExportingId]  = useState(null);
-  const [rejectModal,  setRejectModal]  = useState({ open: false, id: null, reason: '' });
-  const [deleteModal,  setDeleteModal]  = useState({ open: false, id: null });
-
-  const searchRef   = useRef(null);
+  const searchRef = useRef(null);
   const searchTimer = useRef(null);
-  const toastIdRef  = useRef(0);
+  const debouncedSearch = useDebounce(searchInput, DEBOUNCE_DELAY);
 
   // ── hasFetched derived from store (same as HomeScreen) ────
   const hasFetched = !loading || storeQuotations.length > 0;
   const isInitialLoading = loading && !hasFetched;
-  const isRefreshing     = loading && hasFetched;
+  const isRefreshing = loading && hasFetched;
 
-  // ── Safe quotation array (company filtered) ───────────────
-  const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
-
-   useEffect(() => {
-    refreshStats();
-  }, [selectedCompany, refreshStats]);
- 
-  // ── Derived stats ─────────────────────────────────────────
-  const { totalRevenue, statusCounts } = useMemo(() => {
-    let rev = 0;
-    const c = { 
-      pending: 0, 
-      ops_approved: 0, 
-      ops_rejected: 0,
-      approved: 0, 
-      rejected: 0, 
-      awarded: 0,
-      not_awarded: 0,
-      draft: 0
-    };
+  // ── Safe quotation array (filtered by selected company) ──
+  const safeQ = useMemo(() => {
+    if (!Array.isArray(quotations)) return [];
+    if (!selectedCompany) return quotations;
     
-    for (const q of safeQ) {
-      rev += (q.total || 0);
-      if (c.hasOwnProperty(q.status)) {
-        c[q.status]++;
-      }
+    return quotations.filter(q => {
+      const match = q.companyId === selectedCompany || 
+                    q.companyId?._id === selectedCompany ||
+                    q.companyId?.toString() === selectedCompany?.toString();
+      return match;
+    });
+  }, [quotations, selectedCompany]);
+
+  useEffect(() => {
+    setSearch(debouncedSearch);
+    setPage(1);
+  }, [debouncedSearch]);
+
+  // ── Split by status for tabs ─────────────────────────────
+  const pendingQuotations = useMemo(() => 
+    safeQ.filter(q => q.status === 'pending'), 
+    [safeQ]
+  );
+  
+  const approvedHistory = useMemo(() => 
+    safeQ.filter(q => q.status === 'ops_approved'), 
+    [safeQ]
+  );
+  
+  const rejectedHistory = useMemo(() => 
+    safeQ.filter(q => q.status === 'ops_rejected'), 
+    [safeQ]
+  );
+
+  // Get current data based on active tab
+  const currentData = useMemo(() => {
+    switch (activeTab) {
+      case 'pending':
+        return pendingQuotations;
+      case 'ops_approved':
+        return approvedHistory;
+      case 'ops_rejected':
+        return rejectedHistory;
+      default:
+        return [];
     }
-    return { totalRevenue: rev, statusCounts: c };
-  }, [safeQ]);
+  }, [activeTab, pendingQuotations, approvedHistory, rejectedHistory]);
 
-  // ── Tab counts ─────────────────────────────────────────────
-  const tabCounts = useMemo(() => ({
-    all:          safeQ.length,
-    ops_approved: statusCounts.ops_approved || 0,
-    approved:     statusCounts.approved || 0,
-    awarded:      statusCounts.awarded || 0,
-    rejected:     statusCounts.rejected || 0,
-  }), [safeQ.length, statusCounts]);
-
-  // ── Filter → search → sort → paginate (same as HomeScreen) ──
-  const tabFiltered = useMemo(() => {
-    const { statusFilter } = TAB_KEYS[activeTab];
-    if (!statusFilter) return safeQ;
-    if (Array.isArray(statusFilter)) return safeQ.filter(q => statusFilter.includes(q.status));
-    return safeQ.filter(q => q.status === statusFilter);
-  }, [safeQ, activeTab]);
-
+  // Search filter
   const searchFiltered = useMemo(() => {
-    if (!search.trim()) return tabFiltered;
+    if (!search.trim()) return currentData;
     const t = search.toLowerCase();
-    return tabFiltered.filter(q =>
+    return currentData.filter(q =>
       (q.quotationNumber||'').toLowerCase().includes(t) ||
       (q.customerSnapshot?.name||q.customer||q.customerId?.name||'').toLowerCase().includes(t)
     );
-  }, [tabFiltered, search]);
+  }, [currentData, search]);
 
+  // Sort
   const sorted = useMemo(() => {
     const arr = [...searchFiltered];
     const { field, dir } = sort;
@@ -437,99 +418,146 @@ const { toasts, addToast, dismissToast } = useToast();
     return arr;
   }, [searchFiltered, sort]);
 
+  // Pagination
   const totalFiltered = sorted.length;
-  const totalPages    = Math.max(1, Math.ceil(totalFiltered / limit));
-  const safePage      = Math.min(page, totalPages);
-  const paginated     = useMemo(() => sorted.slice((safePage-1)*limit, safePage*limit), [sorted, safePage, limit]);
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+  const safePage = Math.min(page, totalPages);
+  const paginated = useMemo(() => 
+    sorted.slice((safePage - 1) * limit, safePage * limit), 
+    [sorted, safePage, limit]
+  );
 
-  // ── Action handlers ────────────────────────────────────────
+  // ── Tab counts from filtered data ─────────────────────────
+  const tabCounts = useMemo(() => ({
+    pending: pendingQuotations.length,
+    ops_approved: approvedHistory.length,
+    ops_rejected: rejectedHistory.length,
+  }), [pendingQuotations, approvedHistory, rejectedHistory]);
+
+  // ── Loading helpers ───────────────────────────────────────
+  const setOp = (id, action, val) =>
+    setLoadingIds((p) => ({ ...p, [`${id}_${action}`]: val }));
+  const isOp = (id, action) => !!loadingIds[`${id}_${action}`];
+
+  // ── Approve ────────────────────────────────────────────────
+  const handleApprove = useCallback(async (id) => {
+    setOp(id, 'approve', true);
+    try {
+      const result = await opsApproveQuotation(id);
+      if (result?.success) {
+        addToast('Quotation approved and forwarded to admin', 'success');
+        refreshCompanyQuotations();
+        refreshStats();
+      } else {
+        addToast(result?.error || 'Failed to approve quotation', 'error');
+      }
+    } catch (error) {
+      addToast(error.message || 'Failed to approve quotation', 'error');
+    } finally {
+      setOp(id, 'approve', false);
+    }
+  }, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats]);
+
+  // ── Reject ─────────────────────────────────────────────────
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const handleReject = useCallback((quotation) => {
+    setRejectTarget(quotation);
+    setRejectReason('');
+  }, []);
+
+  const handleRejectConfirm = useCallback(async () => {
+    if (!rejectTarget || !rejectReason.trim()) return;
+    
+    setOp(rejectTarget._id, 'reject', true);
+    try {
+      const result = await opsRejectQuotation(rejectTarget._id, rejectReason);
+      if (result?.success) {
+        addToast('Quotation rejected', 'success');
+        setRejectTarget(null);
+        setRejectReason('');
+        refreshCompanyQuotations();
+        refreshStats();
+      } else {
+        addToast(result?.error || 'Failed to reject quotation', 'error');
+      }
+    } catch (error) {
+      addToast(error.message || 'Failed to reject quotation', 'error');
+    } finally {
+      setOp(rejectTarget._id, 'reject', false);
+    }
+  }, [rejectTarget, rejectReason, opsRejectQuotation, addToast, refreshCompanyQuotations, refreshStats]);
+
+  // ── Download PDF ───────────────────────────────────────────
+  const handleDownload = useCallback(async (quotation) => {
+    setDownloadLoadingId(quotation._id);
+    try {
+      await downloadQuotationPDF(quotation);
+      addToast('PDF downloaded successfully!', 'success');
+    } catch (error) {
+      addToast(`PDF failed: ${error.message}`, 'error');
+    } finally {
+      setDownloadLoadingId(null);
+    }
+  }, [addToast]);
+
+  // ── View ───────────────────────────────────────────────────
+  const handleView = useCallback((id) => {
+    if (onViewQuotation) {
+      onViewQuotation(id);
+    } else {
+      navigate(`/quotation/${id}`);
+    }
+  }, [onViewQuotation, navigate]);
+
+  // ── Sort handler ───────────────────────────────────────────
+  const handleSort = useCallback((field) => {
+    setSort(prev => ({ 
+      field, 
+      dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' 
+    }));
+    setPage(1);
+  }, []);
+
+  // ── Tab change handler ─────────────────────────────────────
+  const handleTabChange = useCallback((key) => {
+    setActiveTab(key);
+    setPage(1);
+    setSearchInput('');
+    setSearch('');
+    setSort({ field: 'createdAt', dir: 'desc' });
+  }, []);
+
+  // ── Search handler ────────────────────────────────────────
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
     setSearchInput(val);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => { setSearch(val); setPage(1); }, DEBOUNCE_DELAY);
+    searchTimer.current = setTimeout(() => {
+      setSearch(val);
+      setPage(1);
+    }, DEBOUNCE_DELAY);
   }, []);
 
-  const clearSearch = useCallback(() => { setSearchInput(''); setSearch(''); setPage(1); }, []);
-
-  const handleTabChange = useCallback((key) => {
-    setActiveTab(key); setPage(1); setSearchInput(''); setSearch('');
-    setSort({ field: 'createdAt', dir: 'desc' });
-  }, []);
-
-  const handleSort = useCallback((field) => {
-    setSort(prev => ({ field, dir: prev.field===field && prev.dir==='asc' ? 'desc' : 'asc' }));
+  const clearSearch = useCallback(() => {
+    setSearchInput('');
+    setSearch('');
     setPage(1);
   }, []);
 
+  // ── Refresh handler ────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
     try {
       await fetchAllData();
       refreshCompanyData?.();
       refreshCompanyQuotations();
+      refreshStats();
       addToast('Data refreshed', 'success');
     } catch (err) {
       addToast(err.message || 'Refresh failed', 'error');
     }
-  }, [fetchAllData, refreshCompanyData, refreshCompanyQuotations, addToast]);
-
-  const handleDownload = useCallback(async (q) => {
-    setExportingId(q._id);
-    try {
-      await downloadQuotationPDF(q);
-      addToast('PDF downloaded successfully!', 'success');
-    } catch (err) {
-      addToast(`PDF failed: ${err.message}`, 'error');
-    } finally {
-      setExportingId(null);
-    }
-  }, [addToast]);
-
-  // ── Approve handler ───────────────────────────────────────
-  const handleApprove = useCallback(async (id) => {
-    const result = await approveQuotation(id);
-    if (result?.success) {
-      addToast('Quotation approved successfully', 'success');
-      refreshCompanyQuotations();
-    } else {
-      addToast(result?.error || 'Failed to approve quotation', 'error');
-    }
-  }, [approveQuotation, addToast, refreshCompanyQuotations]);
-
-  // ── Reject handler ────────────────────────────────────────
-  const openReject = useCallback((id) => setRejectModal({ open: true, id, reason: '' }), []);
-  const closeReject = useCallback(() => setRejectModal({ open: false, id: null, reason: '' }), []);
-  
-  const confirmReject = useCallback(async () => {
-    if (!rejectModal.reason.trim()) { 
-      addToast('Please provide a rejection reason', 'error'); 
-      return; 
-    }
-    
-    const result = await rejectQuotation(rejectModal.id, rejectModal.reason);
-    if (result?.success) {
-      addToast('Quotation rejected', 'success');
-      closeReject();
-      refreshCompanyQuotations();
-    } else {
-      addToast(result?.error || 'Failed to reject quotation', 'error');
-    }
-  }, [rejectModal, rejectQuotation, closeReject, addToast, refreshCompanyQuotations]);
-
-  // ── Delete handler ────────────────────────────────────────
-  const openDelete = useCallback((id) => setDeleteModal({ open: true, id }), []);
-  const closeDelete = useCallback(() => setDeleteModal({ open: false, id: null }), []);
-  
-  const confirmDelete = useCallback(async () => {
-    const result = await deleteQuotation(deleteModal.id);
-    if (result?.success) {
-      addToast('Quotation deleted', 'success');
-      closeDelete();
-      refreshCompanyQuotations();
-    } else {
-      addToast(result?.error || 'Failed to delete quotation', 'error');
-    }
-  }, [deleteModal, deleteQuotation, closeDelete, addToast, refreshCompanyQuotations]);
+  }, [fetchAllData, refreshCompanyData, refreshCompanyQuotations, refreshStats, addToast]);
 
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
@@ -546,14 +574,18 @@ const { toasts, addToast, dismissToast } = useToast();
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
   // ── Tab configuration with counts ──────────────────────────
-  const TABS = useMemo(() =>
-    Object.entries(TAB_KEYS).map(([key, { label, Icon }]) => ({ 
-      key, 
-      label, 
-      Icon, 
-      count: tabCounts[key] ?? 0 
-    })),
-  [tabCounts]);
+  const TABS = useMemo(() => [
+    { key: 'pending',      label: 'Pending Review',      Icon: Clock,  count: tabCounts.pending },
+    { key: 'ops_approved', label: 'Awaiting Admin',      Icon: Shield, count: tabCounts.ops_approved },
+    { key: 'ops_rejected', label: 'Returned by Me',      Icon: Ban,    count: tabCounts.ops_rejected },
+  ], [tabCounts]);
+
+  // Get current company name for display
+  const currentCompanyName = useMemo(() => {
+    if (!selectedCompany) return 'All Companies';
+    const company = customers?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+    return company?.name || 'Selected Company';
+  }, [selectedCompany, customers]);
 
   // ─────────────────────────────────────────────────────────
   // Render
@@ -565,24 +597,26 @@ const { toasts, addToast, dismissToast } = useToast();
         @keyframes popIn   { from { transform:scale(0.95);opacity:0; } to { transform:scale(1);opacity:1; } }
         @keyframes spin    { to { transform:rotate(360deg); } }
         @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-        .adm-row:hover td  { background:#f8fafc !important; }
-        .adm-nav-btn:hover     { opacity:0.8 !important; }
-        .adm-tab:hover         { background:rgba(255,255,255,0.6) !important; }
-        .adm-action-btn:hover:not(:disabled) { opacity:0.8 !important; transform:translateY(-1px); }
+        .ops-row:hover td  { background:#f8fafc !important; }
+        .ops-nav-btn:hover     { opacity:0.8 !important; }
+        .ops-tab:hover         { background:rgba(255,255,255,0.6) !important; }
+        .ops-action-btn:hover:not(:disabled) { opacity:0.8 !important; transform:translateY(-1px); }
       `}</style>
 
-<ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* ── Topbar with Company Selector ── */}
       <div style={{ backgroundColor:'#0f172a', padding:'0 2rem', display:'flex', alignItems:'center', justifyContent:'space-between', height:60, position:'sticky', top:0, zIndex:50, boxShadow:'0 2px 8px rgba(0,0,0,0.25)' }}>
         <div>
-          <div style={{ fontSize:'1.0625rem', fontWeight:800, color:'white', letterSpacing:'-0.01em' }}>⚙ Admin Dashboard</div>
+          <div style={{ fontSize:'1.0625rem', fontWeight:800, color:'white', letterSpacing:'-0.01em' }}>
+            ⚙ Operational Manager Dashboard {selectedCompany && `- ${currentCompanyName}`}
+          </div>
           <CompanyCurrencyDisplay />
         </div>
         <div style={{ display:'flex', gap:'0.625rem', alignItems:'center' }}>
           <CompanyCurrencySelector variant="compact" />
-          <NavBtn onClick={() => onNavigate('users')}        label="Manage Users" />
-          <button onClick={handleLogout} className="adm-nav-btn" title="Logout"
+          <NavBtn onClick={() => navigate('/home')} label="Back to Home" />
+          <button onClick={handleLogout} className="ops-nav-btn" title="Logout"
             style={{ backgroundColor:'rgba(255,255,255,0.08)', color:'#94a3b8', border:'1px solid rgba(255,255,255,0.12)', borderRadius:8, padding:'0.45rem 0.85rem', fontSize:'0.8rem', fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:'0.4rem' }}>
             <LogOut size={15}/> Logout
           </button>
@@ -591,7 +625,26 @@ const { toasts, addToast, dismissToast } = useToast();
 
       <div style={{ maxWidth:1400, margin:'0 auto', padding:'2rem' }}>
 
-        {/* ── Load error banner (like HomeScreen) ── */}
+        {/* ── Company Info Banner ── */}
+        {/* {selectedCompany && (
+          <div style={{
+            backgroundColor: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '0.75rem 1rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}>
+            <Building2 size={16} color="#64748b" />
+            <span style={{ fontWeight: 500, color: '#0f172a' }}>
+              Showing data for: <strong>{currentCompanyName}</strong>
+            </span>
+          </div>
+        )} */}
+
+        {/* ── Load error banner ── */}
         {loadError && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', backgroundColor:'#fef2f2', border:'1px solid #fecaca', borderRadius:10, padding:'0.875rem 1rem', marginBottom:'1.25rem', fontSize:'0.875rem', color:'#991b1b' }}>
             <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}><AlertCircle size={16}/> {loadError}</div>
@@ -604,90 +657,86 @@ const { toasts, addToast, dismissToast } = useToast();
           </div>
         )}
 
-       
+        {/* ── Exchange Rate Info Bar ── */}
+        {/* {exchangeRates && (
+          <div style={{ 
+            backgroundColor: '#f8fafc', 
+            border: '1px solid #e2e8f0', 
+            borderRadius: 8, 
+            padding: '0.5rem 1rem', 
+            marginBottom: '1rem',
+            fontSize: '0.8rem',
+            color: '#64748b',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+            flexWrap: 'wrap'
+          }}>
+            <span style={{ fontWeight: 600 }}>Exchange Rates:</span>
+            <span>1 {selectedCurrency} = {exchangeRates.rates?.['AED']?.toFixed(4)} AED</span>
+            {exchangeRates.source && (
+              <span style={{ 
+                backgroundColor: exchangeRates.source === 'api' ? '#dcfce7' : 
+                               exchangeRates.source === 'cache' ? '#fef3c7' : '#fee2e2',
+                color: exchangeRates.source === 'api' ? '#166534' : 
+                      exchangeRates.source === 'cache' ? '#92400e' : '#991b1b',
+                padding: '2px 8px',
+                borderRadius: 999,
+                fontSize: '0.7rem',
+                fontWeight: 600
+              }}>
+                {exchangeRates.source === 'api' ? 'Live' : 
+                 exchangeRates.source === 'cache' ? 'Cached' : 'Fallback'}
+              </span>
+            )}
+          </div>
+        )} */}
 
-        {/* ── Stat cards — row 1: workflow statuses ── */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'1rem', marginBottom:'1rem' }}>
-  <StatCard 
-    label="Total Quotations"              
-    value={totalQuotations}       
-    accent="#6366f1" 
-    iconBg="#eff1ff" 
-    iconColor="#6366f1" 
-    Icon={FileText}    
-    loading={statsLoading} 
-    sub="All time" 
-  />
-  
-  <StatCard 
-    label="Action Required"    
-    value={actionRequired} 
-    accent="#3b82f6" 
-    iconBg="#dbeafe" 
-    iconColor="#3b82f6" 
-    Icon={Shield}      
-    loading={statsLoading} 
-    sub="Awaiting your approval" 
-  />
-  
-  <StatCard 
-    label="Approved"           
-    value={approved}    
-    accent="#10b981" 
-    iconBg="#d1fae5" 
-    iconColor="#10b981" 
-    Icon={TrendingUp} 
-    loading={statsLoading} 
-    sub={`quotations approved`} 
-  />
-  
-  <StatCard 
-    label="Awarded Value"            
-    value={fmtCurrency(totalAwardedValue, selectedCurrency)}     
-    accent="#059669" 
-    iconBg="#d1fae5" 
-    iconColor="#059669" 
-    Icon={Award}       
-    loading={statsLoading} 
-    sub={`${awarded} deals won`} 
-  />
-</div>
-
-<div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'1rem', marginBottom:'1.5rem' }}>
-  <StatCard 
-    label="Conversion Rate"  
-    value={`${conversionRate}%`}    
-    accent="#f59e0b" 
-    iconBg="#fef3c7" 
-    iconColor="#f59e0b" 
-    Icon={TrendingUp}         
-    loading={statsLoading} 
-    sub={`${conversionDetails.awardedCount} of ${conversionDetails.totalDecided} approved`}
-  />
-  
-  <StatCard 
-    label="Rejected by Admin"  
-    value={rejected}    
-    accent="#ec4899" 
-    iconBg="#fce7f3" 
-    iconColor="#ec4899" 
-    Icon={Ban}         
-    loading={statsLoading} 
-    sub="Rejected quotations"
-  />
-  
-  <StatCard 
-    label="Total Customers"    
-    value={customers.length} 
-    accent="#8b5cf6" 
-    iconBg="#ede9fe" 
-    iconColor="#8b5cf6" 
-    Icon={Users}    
-    loading={false} 
-    sub="Active customers"
-  />
-</div>
- 
+        {/* ── Stat cards ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'1rem', marginBottom:'1.5rem' }}>
+          <StatCard 
+            label="Total Quotations" 
+            value={totalQuotations} 
+            accent="#6366f1" 
+            iconBg="#eff1ff" 
+            iconColor="#6366f1" 
+            Icon={FileText} 
+            loading={statsLoading} 
+            sub="All quotations in system"
+          />
+          <StatCard 
+            label="Pending Review" 
+            value={pendingReview} 
+            accent="#f59e0b" 
+            iconBg="#fef3c7" 
+            iconColor="#f59e0b" 
+            Icon={Clock} 
+            loading={statsLoading} 
+            sub="Awaiting your review"
+          />
+          <StatCard 
+            label="Awaiting Admin" 
+            value={awaitingAdmin} 
+            accent="#3b82f6" 
+            iconBg="#dbeafe" 
+            iconColor="#3b82f6" 
+            Icon={Shield} 
+            loading={statsLoading} 
+            sub="Forwarded to admin"
+          />
+          <StatCard 
+            label="Returned by You" 
+            value={returnedByMe} 
+            accent="#ef4444" 
+            iconBg="#fee2e2" 
+            iconColor="#ef4444" 
+            Icon={Ban} 
+            loading={statsLoading} 
+            sub="Rejected quotations"
+          />
+        </div>
+        
+         
 
         {/* ── Table card ── */}
         <div style={{ backgroundColor:'#fff', borderRadius:14, boxShadow:'0 1px 4px rgba(0,0,0,0.07)', overflow:'visible', position:'relative' }}>
@@ -698,12 +747,11 @@ const { toasts, addToast, dismissToast } = useToast();
             <div style={{ display:'flex', gap:'0.2rem', padding:'0.35rem', backgroundColor:'#f1f5f9', borderRadius:10, flexWrap:'wrap' }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
                 const active = activeTab === key;
-                const isActionTab = key === 'ops_approved';
+                const alertColor = key === 'pending' ? '#f59e0b' : key === 'ops_approved' ? '#3b82f6' : '#ef4444';
                 const hasAlert = count > 0;
-                const alertColor = isActionTab ? '#3b82f6' : '#0f172a';
                 
                 return (
-                  <button key={key} className="adm-tab" onClick={() => handleTabChange(key)}
+                  <button key={key} className="ops-tab" onClick={() => handleTabChange(key)}
                     style={{ padding:'0.4rem 0.875rem', borderRadius:8, border:'none', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, display:'flex', alignItems:'center', gap:'0.35rem', transition:'all 0.15s',
                       backgroundColor: active ? '#fff' : 'transparent',
                       color: active ? '#0f172a' : '#64748b',
@@ -712,7 +760,7 @@ const { toasts, addToast, dismissToast } = useToast();
                     <I size={13}/>
                     {label}
                     <span style={{
-                      backgroundColor: active ? alertColor : (hasAlert ? alertColor : '#e2e8f0'),
+                      backgroundColor: active ? (hasAlert ? alertColor : '#0f172a') : (hasAlert ? alertColor : '#e2e8f0'),
                       color: (active || hasAlert) ? '#fff' : '#64748b',
                       borderRadius:999, padding:'1px 7px', fontSize:'0.68rem', fontWeight:700,
                     }}>
@@ -736,7 +784,6 @@ const { toasts, addToast, dismissToast } = useToast();
                   placeholder="Search… (press /)"
                   value={searchInput}
                   onChange={handleSearchChange}
-                  disabled={isInitialLoading}
                 />
                 {searchInput && (
                   <button onClick={clearSearch} style={{ background:'none', border:'none', cursor:'pointer', color:'#94a3b8', padding:0 }}>
@@ -746,16 +793,6 @@ const { toasts, addToast, dismissToast } = useToast();
               </div>
             </div>
           </div>
-
-          {/* Refresh overlay */}
-          {isRefreshing && (
-            <div style={{ position:'absolute', inset:0, backgroundColor:'rgba(255,255,255,0.72)', zIndex:10, display:'flex', alignItems:'center', justifyContent:'center', borderRadius:14, backdropFilter:'blur(1px)' }}>
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'0.75rem', background:'white', padding:'1.25rem 2rem', borderRadius:12, boxShadow:'0 4px 24px rgba(15,23,42,0.12)', border:'1px solid #e2e8f0' }}>
-                <RefreshCw size={24} color="#6366f1" style={{ animation:'spin 0.8s linear infinite' }}/>
-                <span style={{ fontSize:'0.82rem', color:'#6366f1', fontWeight:700 }}>Refreshing…</span>
-              </div>
-            </div>
-          )}
 
           {/* Skeleton — true first load only */}
           {isInitialLoading && (
@@ -772,6 +809,16 @@ const { toasts, addToast, dismissToast } = useToast();
                   {[1,2,3,4,5,6].map(i => <SkeletonRow key={i}/>)}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Refresh overlay */}
+          {isRefreshing && paginated.length > 0 && (
+            <div style={{ position:'absolute', inset:0, backgroundColor:'rgba(255,255,255,0.72)', zIndex:10, display:'flex', alignItems:'center', justifyContent:'center', borderRadius:14, backdropFilter:'blur(1px)' }}>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'0.75rem', background:'white', padding:'1.25rem 2rem', borderRadius:12, boxShadow:'0 4px 24px rgba(15,23,42,0.12)', border:'1px solid #e2e8f0' }}>
+                <RefreshCw size={24} color="#6366f1" style={{ animation:'spin 0.8s linear infinite' }}/>
+                <span style={{ fontSize:'0.82rem', color:'#6366f1', fontWeight:700 }}>Refreshing…</span>
+              </div>
             </div>
           )}
 
@@ -792,187 +839,110 @@ const { toasts, addToast, dismissToast } = useToast();
                 </div>
               ) : (
                 <div style={{ overflowX:'auto' }}>
-               <table style={{ width:'100%', borderCollapse:'collapse' }}>
-  <thead>
-    <tr>
-      <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
-      <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
-      <th style={{ padding:'0.75rem 1rem', fontSize:'0.72rem', fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.05em', textAlign:'left', borderBottom:'1px solid #f1f5f9', backgroundColor:'#fafafa', whiteSpace:'nowrap' }}>
-        Project Name
-      </th>
-      <SortHeader label="Query Date" field="queryDate" sort={sort} onSort={handleSort} align="center"/>
-      <SortHeader label="Submitted" field="date" sort={sort} onSort={handleSort}/>
-      <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
-      <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
-      
-      <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
-      <th style={{ padding:'0.75rem 1rem', fontSize:'0.72rem', fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.05em', textAlign:'center', borderBottom:'1px solid #f1f5f9', backgroundColor:'#fafafa', whiteSpace:'nowrap' }}>
-        Actions
-      </th>
-    </tr>
-  </thead>
-  <tbody>
-    {paginated.length === 0 ? (
-      <tr>
-        <td colSpan={10} style={{ padding:'3rem', textAlign:'center', color:'#94a3b8', fontSize:'0.875rem' }}>
-          No results for "<strong>{search}</strong>"
-          <button onClick={clearSearch} style={{ marginLeft:'0.5rem', background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:600, fontSize:'0.875rem' }}>
-            Clear
-          </button>
-        </td>
-      </tr>
-    ) : paginated.map((q) => {
-      const isExp = exportingId === q._id;
-      const canAct = q.status === 'ops_approved';
-      const canDelete = DELETABLE.has(q.status);
-      const expired = isExpired(q.expiryDate);
-      const expiring = !expired && isExpiringSoon(q.expiryDate);
-      const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
+                  <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                    <thead>
+                      <tr>
+                        <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
+                        <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
+                        <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
+                        <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
+                        <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
+                        <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
+                        <th style={{ padding:'0.75rem 1rem', fontSize:'0.72rem', fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.05em', textAlign:'center', borderBottom:'1px solid #f1f5f9', backgroundColor:'#fafafa', whiteSpace:'nowrap' }}>Items</th>
+                        <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
+                        <th style={{ padding:'0.75rem 1rem', fontSize:'0.72rem', fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.05em', textAlign:'center', borderBottom:'1px solid #f1f5f9', backgroundColor:'#fafafa', whiteSpace:'nowrap' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginated.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} style={{ padding:'3rem', textAlign:'center', color:'#94a3b8', fontSize:'0.875rem' }}>
+                            No results for "<strong>{search}</strong>"
+                            <button onClick={clearSearch} style={{ marginLeft:'0.5rem', background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:600, fontSize:'0.875rem' }}>Clear</button>
+                          </td>
+                        </tr>
+                      ) : paginated.map((q) => {
+                        const isDownloading = downloadLoadingId === q._id;
+                        const canAct = q.status === 'pending';
+                        const exp = q.expiryDate ? new Date(q.expiryDate) : null;
+                        const expired = exp && exp < new Date();
+                        const expiring = !expired && isExpiringSoon(q.expiryDate);
 
-      return (
-        <tr key={q._id} className="adm-row">
-          {/* Quote # */}
-          <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:'0.4rem', flexWrap:'wrap' }}>
-              <span style={{ fontWeight:700, color:'#0f172a', fontFamily:'monospace', fontSize:'0.8rem' }}>
-                {q.quotationNumber || '—'}
-              </span>
-              {expired && <span style={{ fontSize:'0.62rem', fontWeight:700, color:'#dc2626', background:'#fef2f2', padding:'1px 6px', borderRadius:999, border:'1px solid #fecaca' }}>Expired</span>}
-              {expiring && <span style={{ fontSize:'0.62rem', fontWeight:700, color:'#d97706', background:'#fffbeb', padding:'1px 6px', borderRadius:999, border:'1px solid #fde68a' }}>Expiring Soon</span>}
-            </div>
-          </td>
-          
-          {/* Customer */}
-          <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
-            <div style={{ fontWeight:600, color:'#0f172a', fontSize:'0.875rem' }}>
-              {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
-            </div>
-            {q.contact && <div style={{ fontSize:'0.75rem', color:'#94a3b8', marginTop:2 }}>{q.contact}</div>}
-          </td>
-          
-          {/* Project Name (TL) */}
-          <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
-            <div style={{ fontSize:'0.875rem', color:'#0f172a' }}>
-              {q.tl || '—'}
-            </div>
-            {q.trn && <div style={{ fontSize:'0.7rem', color:'#94a3b8', marginTop:2 }}>TRN: {q.trn}</div>}
-          </td>
-          
-          {/* Query Date */}
-          <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', textAlign:'center' }}>
-            {q.queryDate ? (
-              <span style={{ 
-                background: queryDatePassed ? '#fee2e2' : '#fef3c7',
-                color: queryDatePassed ? '#991b1b' : '#92400e',
-                padding: '0.25rem 0.75rem',
-                borderRadius: '999px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.25rem'
-              }}>
-                <Calendar size={12} />
-                {fmtDate(q.queryDate)}
-                {queryDatePassed && ' ⚠️'}
-              </span>
-            ) : '—'}
-          </td>
-          
-          {/* Submitted Date */}
-          <td style={{ padding:'0.85rem 1rem', fontSize:'0.8rem', color:'#64748b', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', whiteSpace:'nowrap' }}>
-            {fmtDate(q.date)}
-          </td>
-          
-          {/* Expiry Date */}
-          <td style={{ padding:'0.85rem 1rem', fontSize:'0.8rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', whiteSpace:'nowrap' }}>
-            <span style={{ color:expired?'#dc2626':expiring?'#d97706':'#64748b', fontWeight:expired||expiring?600:400 }}>
-              {fmtDate(q.expiryDate)}
-            </span>
-          </td>
-          
-          {/* Status */}
-          <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
-            <StatusBadge status={q.status}/>
-            <RejectionNote quotation={q}/>
-          </td>
-          
-         
-          
-          {/* Total Amount */}
-          <td style={{ padding:'0.85rem 1rem', fontSize:'0.875rem', fontWeight:700, color:'#0f172a', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', textAlign:'right', whiteSpace:'nowrap' }}>
-            {fmtCurrency(q.total, selectedCurrency)}
-          </td>
-          
-          {/* Actions */}
-          <td style={{ padding:'0.75rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
-            <div style={{ display:'flex', gap:'0.3rem', justifyContent:'center', flexWrap:'wrap' }}>
-              
-              {/* Approve/Reject for Action Required */}
-              {canAct && (
-                <>
-                  <ActionBtn bg="#dcfce7" color="#166534" onClick={() => handleApprove(q._id)} icon={Check} label="Approve" title="Approve (final)"/>
-                  <ActionBtn bg="#fce7f3" color="#9d174d" onClick={() => openReject(q._id)} icon={X} label="Reject" title="Reject"/>
-                </>
-              )}
-              
-              {/* View Button */}
-              <ActionBtn 
-                bg="#e0f2fe" 
-                color="#0369a1" 
-                onClick={() => {
-                  if (onViewQuotation) {
-                    onViewQuotation(q._id);
-                  } else {
-                    navigate(`/quotation/${q._id}`);
-                  }
-                }} 
-                icon={Eye} 
-                label="View" 
-                title="View quotation"
-              />
-              
-              {/* Follow-up Button - show for all except awarded/not_awarded */}
-              {/* {!['awarded', 'not_awarded'].includes(q.status) && (
-                <ActionBtn 
-                  bg={q.queryDate ? '#fef3c7' : '#f1f5f9'} 
-                  color={q.queryDate ? '#92400e' : '#64748b'} 
-                  onClick={() => setQueryDateModal({ open: true, quotation: q })} 
-                  icon={Calendar} 
-                  label="Follow-up" 
-                  title={q.queryDate ? `Follow-up: ${fmtDate(q.queryDate)}` : 'Set follow-up date'}
-                />
-              )} */}
-              
-              {/* PDF Button */}
-              <ActionBtn
-                bg={isExp?'#f1f5f9':'#f0fdf4'} 
-                color={isExp?'#94a3b8':'#166534'}
-                onClick={() => !isExp && handleDownload(q)} 
-                disabled={isExp}
-                icon={isExp?RefreshCw:Download} 
-                label={isExp?'…':'PDF'} 
-                title="Download PDF"
-              />
-              
-              {/* Delete Button */}
-              {canDelete && (
-                <ActionBtn 
-                  bg="#fff1f2" 
-                  color="#e11d48" 
-                  onClick={() => openDelete(q._id)} 
-                  icon={Trash2} 
-                  label="Del" 
-                  title="Delete quotation"
-                />
-              )}
-            </div>
-          </td>
-        </tr>
-      );
-    })}
-  </tbody>
-</table>
+                        return (
+                          <tr key={q._id} className="ops-row">
+                            <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:'0.4rem', flexWrap:'wrap' }}>
+                                <span style={{ fontWeight:700, color:'#0f172a', fontFamily:'monospace', fontSize:'0.8rem' }}>{q.quotationNumber||'—'}</span>
+                                {expired  && <span style={{ fontSize:'0.62rem', fontWeight:700, color:'#dc2626', background:'#fef2f2', padding:'1px 6px', borderRadius:999, border:'1px solid #fecaca' }}>Expired</span>}
+                                {expiring && <span style={{ fontSize:'0.62rem', fontWeight:700, color:'#d97706', background:'#fffbeb', padding:'1px 6px', borderRadius:999, border:'1px solid #fde68a' }}>Expiring Soon</span>}
+                              </div>
+                            </td>
+                            <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
+                              <div style={{ fontWeight:600, color:'#0f172a', fontSize:'0.875rem' }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
+                              {q.contact && <div style={{ fontSize:'0.75rem', color:'#94a3b8', marginTop:2 }}>{q.contact}</div>}
+                            </td>
+                            <td style={{ padding:'0.85rem 1rem', fontSize:'0.8rem', color:'#64748b', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', whiteSpace:'nowrap' }}>{fmtDate(q.date)}</td>
+                            <td style={{ padding:'0.85rem 1rem', fontSize:'0.8rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', whiteSpace:'nowrap' }}>
+                              <span style={{ color:expired?'#dc2626':expiring?'#d97706':'#64748b', fontWeight:expired||expiring?600:400 }}>
+                                {fmtDate(q.expiryDate)}
+                                {expired  && <span style={{ fontSize:'0.65rem', marginLeft:4 }}>⚠ Expired</span>}
+                                {expiring && <span style={{ fontSize:'0.65rem', marginLeft:4 }}>⚠ Soon</span>}
+                              </span>
+                            </td>
+                            <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
+                              <StatusBadge status={q.status}/>
+                              <RejectionNote quotation={q}/>
+                            </td>
+                            <td style={{ padding:'0.85rem 1rem', fontSize:'0.8rem', color:'#64748b', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>{q.createdBy?.name || '—'}</td>
+                            <td style={{ padding:'0.85rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', textAlign:'center' }}>
+                              <span style={{ background:'#f1f5f9', color:'#475569', borderRadius:6, padding:'0.2rem 0.6rem', fontSize:'0.8rem', fontWeight:600 }}>{q.items?.length ?? 0}</span>
+                            </td>
+                            <td style={{ padding:'0.85rem 1rem', fontSize:'0.875rem', fontWeight:700, color:'#0f172a', borderBottom:'1px solid #f8fafc', verticalAlign:'middle', textAlign:'right', whiteSpace:'nowrap' }}>
+                              {fmtCurrency(q.total, selectedCurrency)}
+                            </td>
+                            <td style={{ padding:'0.75rem 1rem', borderBottom:'1px solid #f8fafc', verticalAlign:'middle' }}>
+                              <div style={{ display:'flex', gap:'0.3rem', justifyContent:'center', flexWrap:'wrap' }}>
+                                <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation"/>
+                                
+                                <ActionBtn
+                                  bg={isDownloading?'#f1f5f9':'#f0fdf4'} 
+                                  color={isDownloading?'#94a3b8':'#166534'}
+                                  onClick={() => !isDownloading && handleDownload(q)} 
+                                  disabled={isDownloading}
+                                  icon={isDownloading?RefreshCw:Download} 
+                                  label={isDownloading?'…':'PDF'} 
+                                  title="Download PDF"
+                                />
+                                
+                                {canAct && (
+                                  <>
+                                    <ActionBtn 
+                                      bg="#dcfce7" 
+                                      color="#166534" 
+                                      onClick={() => handleApprove(q._id)} 
+                                      icon={Check} 
+                                      label="Approve" 
+                                      title="Approve quotation"
+                                      disabled={isOp(q._id, 'approve')}
+                                    />
+                                    <ActionBtn 
+                                      bg="#fee2e2" 
+                                      color="#991b1b" 
+                                      onClick={() => handleReject(q)} 
+                                      icon={X} 
+                                      label="Reject" 
+                                      title="Reject quotation"
+                                      disabled={isOp(q._id, 'reject')}
+                                    />
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
 
@@ -989,33 +959,29 @@ const { toasts, addToast, dismissToast } = useToast();
         </div>
       </div>
 
-      {/* ── Modals ── */}
-      <ConfirmModal
-        open={rejectModal.open}
-        title="Reject Quotation"
-        message="This quotation has been reviewed by Ops. Provide a reason for rejecting it at the admin level."
-        confirmLabel="Reject" danger
-        onConfirm={confirmReject}
-        onCancel={closeReject}
-        loading={false}
-      >
-        <textarea
-          value={rejectModal.reason}
-          onChange={e => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
-          rows={4} placeholder="Enter rejection reason…" autoFocus
-          style={{ width:'100%', padding:'0.75rem', border:'1px solid #e2e8f0', borderRadius:8, fontSize:'0.875rem', resize:'vertical', outline:'none', boxSizing:'border-box', fontFamily:'inherit' }}
-        />
-      </ConfirmModal>
-
-      <ConfirmModal
-        open={deleteModal.open}
-        title="Delete Quotation"
-        message="This action cannot be undone. The quotation and all associated images will be permanently removed."
-        confirmLabel="Delete" danger
-        onConfirm={confirmDelete}
-        onCancel={closeDelete}
-        loading={false}
-      />
+      {/* ── Reject Modal ── */}
+      {rejectTarget && (
+        <ConfirmModal
+          open={true}
+          title="Reject Quotation"
+          message={`Are you sure you want to reject ${rejectTarget.quotationNumber}? This will return it to the creator.`}
+          confirmLabel="Reject"
+          danger
+          onConfirm={handleRejectConfirm}
+          onCancel={() => setRejectTarget(null)}
+          loading={isOp(rejectTarget._id, 'reject')}
+        >
+          <textarea
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            placeholder="Enter rejection reason (required)…"
+            rows={4}
+            style={{ width:'100%', padding:'0.75rem', border:'1.5px solid #e2e8f0', borderRadius:8, fontSize:'0.875rem', fontFamily:'inherit', marginBottom:'0.5rem', resize:'vertical' }}
+            autoFocus
+          />
+          <p style={{ fontSize:'0.75rem', color:'#ef4444', margin:0 }}>Reason is required to reject a quotation.</p>
+        </ConfirmModal>
+      )}
     </div>
   );
 }

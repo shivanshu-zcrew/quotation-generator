@@ -10,12 +10,11 @@ const app = express();
 // ── CORS Configuration ───────────────────────────────────────────────────
 const allowedOrigins = [
   'http://localhost:3000', 
-  'http://51.20.109.158',
+  'http://13.232.90.158',
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -29,8 +28,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// Handle preflight requests
 app.options('*', cors(corsOptions));
 
 // ── Body parsing middleware ──────────────────────────────────────────────
@@ -62,12 +59,16 @@ const itemRoutes      = require('./routes/itemRoutes');
 const quotationRoutes = require('./routes/quotationRoutes');
 const authRoutes      = require('./routes/authRoutes');
 const adminRoutes     = require('./routes/adminRoutes');
+const exchangeRateRoutes = require('./routes/exchangeRates'); 
+const companyRoutes = require('./routes/companyRoutes');
 
 app.use('/api/customers',  customerRoutes);
 app.use('/api/items',      itemRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/auth',       authRoutes);
 app.use('/api/admin',      adminRoutes);
+app.use('/api/exchange-rates', exchangeRateRoutes);
+app.use('/api/companies', companyRoutes); 
 
 // ── Root ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
@@ -101,7 +102,6 @@ app.post('/api/zoho/create-estimate', async (req, res) => {
 app.use((err, req, res, next) => {
   console.error(err.stack);
   
-  // Handle CORS errors specifically
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ 
       message: 'CORS error: Origin not allowed',
@@ -115,13 +115,12 @@ app.use((err, req, res, next) => {
 // ── Start (for local development only) ────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
-// Only start the server if we're not in a serverless environment
 if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`CORS enabled for origins:`, allowedOrigins);
+    console.log(`Exchange rate routes available at /api/exchange-rates`);
   });
 }
 
-// Export the app for serverless environments
 module.exports = app;

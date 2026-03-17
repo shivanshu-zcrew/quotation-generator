@@ -1,16 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Plus, Edit2, Trash2, ArrowLeft, Save, X, Mail, Phone, MapPin, User, Users, Search } from 'lucide-react';
 
-export default function CustomersScreen({ customers, onAddCustomer, onUpdateCustomer, onDeleteCustomer, onBack }) {
-  const [showModal, setShowModal]   = useState(false);
-  const [editingId, setEditingId]   = useState(null);
-  const [formData, setFormData]     = useState({ name: '', email: '', phone: '', address: '' });
+// Import store hooks
+import { useCustomers } from '../hooks/customHooks';
+
+export default function CustomersScreen({ onBack }) {
+  // Get data and actions from store
+  const { customers, addCustomer, updateCustomer, deleteCustomer, isLoading: isAddingCustomer } = useCustomers();
+  
+  // Local UI state
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', address: '' });
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState(null); // Track which customer is being deleted
 
   const handleOpenModal = (customer = null) => {
     if (customer) {
-      setFormData(customer);
+      setFormData({
+        name: customer.name || '',
+        email: customer.email || '',
+        phone: customer.phone || '',
+        address: customer.address || ''
+      });
       setEditingId(customer._id);
     } else {
       setFormData({ name: '', email: '', phone: '', address: '' });
@@ -23,38 +36,70 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
     setShowModal(false);
     setEditingId(null);
     setFormData({ name: '', email: '', phone: '', address: '' });
+    setIsSubmitting(false);
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
-    if (!formData.name || !formData.email) { alert('Name and email are required'); return; }
+    if (!formData.name || !formData.email) { 
+      alert('Name and email are required'); 
+      return; 
+    }
+    
     setIsSubmitting(true);
     try {
-      const success = editingId
-        ? await onUpdateCustomer(editingId, formData)
-        : await onAddCustomer(formData);
-      if (success) {
+      let result;
+      if (editingId) {
+        result = await updateCustomer(editingId, formData);
+      } else {
+        result = await addCustomer(formData);
+      }
+      
+      if (result?.success) {
         closeModal();
         alert(editingId ? 'Customer updated successfully' : 'Customer added successfully');
+      } else {
+        alert(result?.error || 'Error saving customer. Please try again.');
       }
+    } catch (error) {
+      alert('Error saving customer. Please try again.');
+      console.error('Submit error:', error);
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [formData, editingId, addCustomer, updateCustomer]);
 
   const handleChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
-  const filtered = customers.filter(c =>
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Handle delete with local loading state
+  const handleDelete = useCallback(async (customerId, customerName) => {
+    if (window.confirm(`Delete "${customerName}"?`)) {
+      setDeletingId(customerId);
+      const result = await deleteCustomer(customerId);
+      setDeletingId(null);
+      
+      if (result?.success) {
+        alert('Customer deleted successfully');
+      } else {
+        alert(result?.error || 'Error deleting customer');
+      }
+    }
+  }, [deleteCustomer]);
+
+  // Memoized filtered customers
+  const filtered = useMemo(() => {
+    return customers.filter(c =>
+      c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.email?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [customers, searchTerm]);
 
   // Avatar initials helper
   const initials = (name) => name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 
   // Deterministic color from name
   const avatarColors = ['#6366f1','#8b5cf6','#059669','#d97706','#dc2626','#0284c7','#db2777'];
-  const avatarColor  = (name) => avatarColors[(name?.charCodeAt(0) || 0) % avatarColors.length];
+  const avatarColor = (name) => avatarColors[(name?.charCodeAt(0) || 0) % avatarColors.length];
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0f4ff', fontFamily: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif" }}>
@@ -108,9 +153,10 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
           transition: all .15s; flex-shrink: 0;
         }
         .cs-icon-btn.edit  { background: #eff1ff; color: #6366f1; }
-        .cs-icon-btn.edit:hover  { background: #e0e3ff; color: #4f46e5; transform: translateY(-1px); }
+        .cs-icon-btn.edit:hover:not(:disabled)  { background: #e0e3ff; color: #4f46e5; transform: translateY(-1px); }
         .cs-icon-btn.del   { background: #fff1f1; color: #dc2626; }
-        .cs-icon-btn.del:hover   { background: #ffe4e4; color: #b91c1c; transform: translateY(-1px); }
+        .cs-icon-btn.del:hover:not(:disabled)   { background: #ffe4e4; color: #b91c1c; transform: translateY(-1px); }
+        .cs-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* ── Primary button ── */
         .cs-primary-btn {
@@ -122,7 +168,8 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
           box-shadow: 0 4px 14px rgba(99,102,241,.35);
           transition: all .2s;
         }
-        .cs-primary-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99,102,241,.5); }
+        .cs-primary-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99,102,241,.5); }
+        .cs-primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
         /* ── Secondary button ── */
         .cs-secondary-btn {
@@ -186,7 +233,8 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
           font-family: inherit; cursor: pointer;
           display: flex; align-items: center; gap: .5rem; transition: background .15s;
         }
-        .cs-cancel-btn:hover { background: #e2e8f0; }
+        .cs-cancel-btn:hover:not(:disabled) { background: #e2e8f0; }
+        .cs-cancel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* ── Animations ── */
         @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
@@ -209,7 +257,11 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
             </h1>
           </div>
           <div style={{ display: 'flex', gap: '.75rem' }}>
-            <button className="cs-primary-btn" onClick={() => handleOpenModal()}>
+            <button 
+              className="cs-primary-btn" 
+              onClick={() => handleOpenModal()}
+              disabled={isAddingCustomer}
+            >
               <Plus size={17} /> Add Customer
             </button>
             <button className="cs-secondary-btn" onClick={onBack}>
@@ -291,71 +343,85 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((customer, index) => (
-                      <tr key={customer._id} className="cs-row" style={{ background: index % 2 === 0 ? 'white' : '#fafbff' }}>
+                    {filtered.map((customer, index) => {
+                      const isDeleting = deletingId === customer._id;
+                      
+                      return (
+                        <tr key={customer._id} className="cs-row" style={{ background: index % 2 === 0 ? 'white' : '#fafbff' }}>
 
-                        {/* Customer name with avatar */}
-                        <td style={{ padding: '.85rem 1rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
-                            <div style={{
-                              width: 36, height: 36, borderRadius: '10px',
-                              background: avatarColor(customer.name),
-                              color: 'white', fontWeight: '700', fontSize: '.8rem',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              flexShrink: 0, letterSpacing: '.02em',
-                            }}>
-                              {initials(customer.name)}
+                          {/* Customer name with avatar */}
+                          <td style={{ padding: '.85rem 1rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
+                              <div style={{
+                                width: 36, height: 36, borderRadius: '10px',
+                                background: avatarColor(customer.name),
+                                color: 'white', fontWeight: '700', fontSize: '.8rem',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                flexShrink: 0, letterSpacing: '.02em',
+                              }}>
+                                {initials(customer.name)}
+                              </div>
+                              <span style={{ color: '#0f172a', fontWeight: '700', fontSize: '.875rem' }}>{customer.name}</span>
                             </div>
-                            <span style={{ color: '#0f172a', fontWeight: '700', fontSize: '.875rem' }}>{customer.name}</span>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Email */}
-                        <td style={{ padding: '.85rem 1rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', color: '#475569', fontSize: '.85rem' }}>
-                            <Mail size={13} style={{ color: '#94a3b8', flexShrink: 0 }} />
-                            {customer.email}
-                          </div>
-                        </td>
-
-                        {/* Phone */}
-                        <td style={{ padding: '.85rem 1rem' }}>
-                          {customer.phone ? (
+                          {/* Email */}
+                          <td style={{ padding: '.85rem 1rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', color: '#475569', fontSize: '.85rem' }}>
-                              <Phone size={13} style={{ color: '#94a3b8', flexShrink: 0 }} />
-                              {customer.phone}
+                              <Mail size={13} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                              {customer.email}
                             </div>
-                          ) : (
-                            <span style={{ color: '#cbd5e1', fontSize: '.85rem' }}>—</span>
-                          )}
-                        </td>
+                          </td>
 
-                        {/* Address */}
-                        <td style={{ padding: '.85rem 1rem', maxWidth: '260px' }}>
-                          {customer.address ? (
-                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '.4rem', color: '#475569', fontSize: '.85rem' }}>
-                              <MapPin size={13} style={{ color: '#94a3b8', flexShrink: 0, marginTop: '2px' }} />
-                              <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{customer.address}</span>
+                          {/* Phone */}
+                          <td style={{ padding: '.85rem 1rem' }}>
+                            {customer.phone ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', color: '#475569', fontSize: '.85rem' }}>
+                                <Phone size={13} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                                {customer.phone}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#cbd5e1', fontSize: '.85rem' }}>—</span>
+                            )}
+                          </td>
+
+                          {/* Address */}
+                          <td style={{ padding: '.85rem 1rem', maxWidth: '260px' }}>
+                            {customer.address ? (
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '.4rem', color: '#475569', fontSize: '.85rem' }}>
+                                <MapPin size={13} style={{ color: '#94a3b8', flexShrink: 0, marginTop: '2px' }} />
+                                <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{customer.address}</span>
+                              </div>
+                            ) : (
+                              <span style={{ color: '#cbd5e1', fontSize: '.85rem' }}>—</span>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td style={{ padding: '.85rem 1rem', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', gap: '.4rem', justifyContent: 'center' }}>
+                              <button 
+                                className="cs-icon-btn edit" 
+                                onClick={() => handleOpenModal(customer)} 
+                                title="Edit"
+                                disabled={isDeleting || isSubmitting}
+                              >
+                                <Edit2 size={15} />
+                              </button>
+                              <button 
+                                className="cs-icon-btn del" 
+                                onClick={() => handleDelete(customer._id, customer.name)} 
+                                title="Delete"
+                                disabled={isDeleting || isSubmitting}
+                              >
+                                {isDeleting ? '...' : <Trash2 size={15} />}
+                              </button>
                             </div>
-                          ) : (
-                            <span style={{ color: '#cbd5e1', fontSize: '.85rem' }}>—</span>
-                          )}
-                        </td>
+                          </td>
 
-                        {/* Actions */}
-                        <td style={{ padding: '.85rem 1rem', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', gap: '.4rem', justifyContent: 'center' }}>
-                            <button className="cs-icon-btn edit" onClick={() => handleOpenModal(customer)} title="Edit">
-                              <Edit2 size={15} />
-                            </button>
-                            <button className="cs-icon-btn del" onClick={() => { if (window.confirm(`Delete ${customer.name}?`)) onDeleteCustomer(customer._id); }} title="Delete">
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </td>
-
-                      </tr>
-                    ))}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -373,7 +439,7 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
 
       {/* ── Modal ── */}
       {showModal && (
-        <div className="cs-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+        <div className="cs-overlay" onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) closeModal(); }}>
           <div className="cs-modal">
 
             {/* Modal header */}
@@ -386,9 +452,13 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                   {editingId ? 'Update the customer details below.' : 'Fill in the details to add a new customer.'}
                 </p>
               </div>
-              <button onClick={closeModal} style={{ background: '#f1f5f9', border: 'none', cursor: 'pointer', borderRadius: '10px', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', transition: 'background .15s' }}
-                onMouseEnter={(e) => e.currentTarget.style.background = '#e2e8f0'}
-                onMouseLeave={(e) => e.currentTarget.style.background = '#f1f5f9'}>
+              <button 
+                onClick={closeModal} 
+                disabled={isSubmitting}
+                style={{ background: '#f1f5f9', border: 'none', cursor: isSubmitting ? 'not-allowed' : 'pointer', borderRadius: '10px', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', transition: 'background .15s', opacity: isSubmitting ? 0.5 : 1 }}
+                onMouseEnter={(e) => { if (!isSubmitting) e.currentTarget.style.background = '#e2e8f0'; }}
+                onMouseLeave={(e) => { if (!isSubmitting) e.currentTarget.style.background = '#f1f5f9'; }}
+              >
                 <X size={18} />
               </button>
             </div>
@@ -400,7 +470,16 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                 <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
                   <User size={14} style={{ color: '#6366f1' }} /> Customer Name <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <input className="cs-field" type="text" name="name" placeholder="e.g. Acme Industries LLC" value={formData.name} onChange={handleChange} required />
+                <input 
+                  className="cs-field" 
+                  type="text" 
+                  name="name" 
+                  placeholder="e.g. Acme Industries LLC" 
+                  value={formData.name} 
+                  onChange={handleChange} 
+                  required 
+                  disabled={isSubmitting}
+                />
               </div>
 
               {/* Email */}
@@ -408,7 +487,16 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                 <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
                   <Mail size={14} style={{ color: '#6366f1' }} /> Email Address <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <input className="cs-field" type="email" name="email" placeholder="e.g. contact@acme.com" value={formData.email} onChange={handleChange} required />
+                <input 
+                  className="cs-field" 
+                  type="email" 
+                  name="email" 
+                  placeholder="e.g. contact@acme.com" 
+                  value={formData.email} 
+                  onChange={handleChange} 
+                  required 
+                  disabled={isSubmitting}
+                />
               </div>
 
               {/* Phone */}
@@ -417,7 +505,15 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                   <Phone size={14} style={{ color: '#6366f1' }} /> Phone Number
                   <span style={{ color: '#94a3b8', fontWeight: '400', marginLeft: '.25rem' }}>(optional)</span>
                 </label>
-                <input className="cs-field" type="text" name="phone" placeholder="e.g. +971 50 123 4567" value={formData.phone} onChange={handleChange} />
+                <input 
+                  className="cs-field" 
+                  type="text" 
+                  name="phone" 
+                  placeholder="e.g. +971 50 123 4567" 
+                  value={formData.phone} 
+                  onChange={handleChange} 
+                  disabled={isSubmitting}
+                />
               </div>
 
               {/* Address */}
@@ -426,16 +522,34 @@ export default function CustomersScreen({ customers, onAddCustomer, onUpdateCust
                   <MapPin size={14} style={{ color: '#6366f1' }} /> Address
                   <span style={{ color: '#94a3b8', fontWeight: '400', marginLeft: '.25rem' }}>(optional)</span>
                 </label>
-                <textarea className="cs-field" name="address" placeholder="e.g. Dubai Industrial Area, UAE" value={formData.address} onChange={handleChange} rows={3} style={{ resize: 'vertical', minHeight: '80px' }} />
+                <textarea 
+                  className="cs-field" 
+                  name="address" 
+                  placeholder="e.g. Dubai Industrial Area, UAE" 
+                  value={formData.address} 
+                  onChange={handleChange} 
+                  rows={3} 
+                  style={{ resize: 'vertical', minHeight: '80px' }}
+                  disabled={isSubmitting}
+                />
               </div>
 
               {/* Buttons */}
               <div style={{ display: 'flex', gap: '.75rem', justifyContent: 'flex-end' }}>
-                <button type="button" className="cs-cancel-btn" onClick={closeModal}>
+                <button 
+                  type="button" 
+                  className="cs-cancel-btn" 
+                  onClick={closeModal}
+                  disabled={isSubmitting}
+                >
                   <X size={16} /> Cancel
                 </button>
-                <button type="submit" className="cs-submit-btn" disabled={isSubmitting}>
-                  <Save size={16} /> {isSubmitting ? 'Saving…' : editingId ? 'Update Customer' : 'Add Customer'}
+                <button 
+                  type="submit" 
+                  className="cs-submit-btn" 
+                  disabled={isSubmitting}
+                >
+                  <Save size={16} /> {isSubmitting ? 'Saving…' : (editingId ? 'Update Customer' : 'Add Customer')}
                 </button>
               </div>
 
