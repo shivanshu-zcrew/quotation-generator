@@ -12,8 +12,8 @@ const { Company } = require('../models/quotation');
 // Company data from your hardcoded COMPANIES object
 const companiesData = [
   {
-    code: 'MEGA_REPAIR',
-    name: 'Mega Repairing Machinery Equipment LLC',
+    code: 'Megarme General Contracting',
+    name: 'Megarme General Contracting Co LLC',
     slug: 'mega-repair',
     address: {
       street: 'Dubai Industrial City',
@@ -40,8 +40,8 @@ const companiesData = [
     isActive: true
   },
   {
-    code: 'GULF_TECH',
-    name: 'Gulf Technical Services LLC',
+    code: 'POPULAR OIL FIELD',
+    name: 'POPULAR OIL FIELD SERVICES L.L.C',
     slug: 'gulf-tech',
     address: {
       street: 'Jebel Ali Free Zone',
@@ -68,8 +68,8 @@ const companiesData = [
     isActive: true
   },
   {
-    code: 'ARABIAN_MAINTENANCE',
-    name: 'Arabian Maintenance Company LLC',
+    code: 'G T G C TECHNICAL SERVICES',
+    name: 'G T G C TECHNICAL SERVICES L.L.C',
     slug: 'arabian-maintenance',
     address: {
       street: 'Mussafah Industrial Area',

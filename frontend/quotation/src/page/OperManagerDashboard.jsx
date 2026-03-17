@@ -609,7 +609,7 @@ export default function OpsDashboard({ onViewQuotation }) {
       <div style={{ backgroundColor:'#0f172a', padding:'0 2rem', display:'flex', alignItems:'center', justifyContent:'space-between', height:60, position:'sticky', top:0, zIndex:50, boxShadow:'0 2px 8px rgba(0,0,0,0.25)' }}>
         <div>
           <div style={{ fontSize:'1.0625rem', fontWeight:800, color:'white', letterSpacing:'-0.01em' }}>
-            ⚙ Operational Manager Dashboard {selectedCompany && `- ${currentCompanyName}`}
+            ⚙ Operational Manager Dashboard 
           </div>
           <CompanyCurrencyDisplay />
         </div>
