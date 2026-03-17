@@ -15,7 +15,7 @@ const User = require('../models/user'); // Add this
 async function migrateQuotations() {
   try {
     console.log('🔄 Connecting to MongoDB...');
-    await mongoose.connect('mongodb://localhost:27017/quotation-system')
+    await mongoose.connect('mongodb+srv://shivanshu:QuotationCreation@cluster0.4wrhvft.mongodb.net/?appName=Cluster0')
     console.log('✅ Connected to MongoDB successfully!\n');
 
     // Get all companies
