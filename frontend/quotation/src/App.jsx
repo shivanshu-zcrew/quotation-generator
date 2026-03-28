@@ -21,7 +21,7 @@ import LoginScreen from './page/LoginScreen';
 import RegisterScreen from './page/RegisterScreen';
 import AdminDashboard from './page/AdminDashboard';
 import OpsDashboard from './page/OperManagerDashboard';
-import PendingQuotationsScreen from './page/PendingQuotationsScreen';
+// import PendingQuotationsScreen from './page/PendingQuotationsScreen';
 import UserManagementScreen from './page/UserManagementScreen';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ function withBack(Component) {
 const CustomersScreenWithBack         = withBack(CustomersScreen);
 const ItemsScreenWithBack             = withBack(ItemsScreen);
 const QuotationScreenWithBack         = withBack(QuotationScreen);
-const PendingQuotationsScreenWithBack = withBack(PendingQuotationsScreen);
+// const PendingQuotationsScreenWithBack = withBack(PendingQuotationsScreen);
 const UserManagementScreenWithBack    = withBack(UserManagementScreen);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -266,16 +266,16 @@ function RegisterRoute() {
   return <RegisterScreen onRegister={register} onNavigate={(s) => navigate(`/${s}`)} />;
 }
 
-function PendingRoute() {
-  const navigate    = useNavigate();
-  const quotations  = useAppStore((s) => s.quotations);
-  return (
-    <PendingQuotationsScreenWithBack
-      quotations={quotations.filter((q) => q.status === 'ops_approved')}
-      onViewQuotation={(id) => navigate(`/quotation/${id}`)}
-    />
-  );
-}
+// function PendingRoute() {
+//   const navigate    = useNavigate();
+//   const quotations  = useAppStore((s) => s.quotations);
+//   return (
+//     <PendingQuotationsScreenWithBack
+//       quotations={quotations.filter((q) => q.status === 'ops_approved')}
+//       onViewQuotation={(id) => navigate(`/quotation/${id}`)}
+//     />
+//   );
+// }
 
 function QuotationNewRoute() {
   const navigate = useNavigate();
@@ -317,7 +317,7 @@ function AppContent() {
 
           {/* ── Admin ── */}
           <Route path="/admin"         element={<RequireAdmin><AdminDashboardRoute          /></RequireAdmin>} />
-          <Route path="/admin/pending" element={<RequireAdmin><PendingRoute                 /></RequireAdmin>} />
+          {/* <Route path="/admin/pending" element={<RequireAdmin><PendingRoute                 /></RequireAdmin>} /> */}
           <Route path="/admin/users"   element={<RequireAdmin><UserManagementScreenWithBack /></RequireAdmin>} />
 
           {/* ── Fallback ── */}

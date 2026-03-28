@@ -1,33 +1,20 @@
-// utils/pdfGenerator.js
-
-import { imageToBase64, numberToWords, ITEMS_PER_FIRST_PAGE, BASE_URL } from './quotationUtils';
+import { imageToBase64 } from './imageUtils';
+import { numberToWords } from './numberToWords';
+import { fmtDate } from './formatters';
 import headerImage from '../assets/header.png';
 import { quotationAPI } from '../services/api';
+import { ITEMS_PER_FIRST_PAGE, BASE_URL } from './quotationUtils';
+
+ 
 
 /**
  * Safely extract customer name from various data structures
  */
 const getCustomerName = (quotation) => {
-  // Check for customerSnapshot (HomeScreen structure)
-  if (quotation.customerSnapshot?.name) {
-    return quotation.customerSnapshot.name;
-  }
-  
-  // Check for direct customer string
-  if (typeof quotation.customer === 'string' && quotation.customer) {
-    return quotation.customer;
-  }
-  
-  // Check for customer object with name
-  if (quotation.customer?.name) {
-    return quotation.customer.name;
-  }
-  
-  // Check for customerId with name
-  if (quotation.customerId?.name) {
-    return quotation.customerId.name;
-  }
-  
+  if (quotation.customerSnapshot?.name) return quotation.customerSnapshot.name;
+  if (typeof quotation.customer === 'string' && quotation.customer) return quotation.customer;
+  if (quotation.customer?.name) return quotation.customer.name;
+  if (quotation.customerId?.name) return quotation.customerId.name;
   return 'N/A';
 };
 
@@ -48,14 +35,11 @@ const getItemDetails = (item) => {
   let name = '—';
   let description = '';
   
-  // Check various possible structures
   if (item.itemId) {
-    // If itemId is an object with name/description
     if (typeof item.itemId === 'object') {
       name = item.itemId.name || item.name || '—';
       description = item.itemId.description || item.description || '';
     } else {
-      // If itemId is just an ID, use direct item fields
       name = item.name || '—';
       description = item.description || '';
     }
@@ -71,11 +55,9 @@ const getItemDetails = (item) => {
  * Build HTML for PDF generation
  */
 export const buildPDFHTML = async (quotation, options = {}) => {
-  const {
-    newImages = {}, // For edit mode with new images
-  } = options;
+  const { newImages = {} } = options;
 
-  // Extract basic fields with fallbacks - ADDED projectName, tl, trn
+  // Extract basic fields with fallbacks
   const items = quotation.items || [];
   const taxPercent = quotation.taxPercent || quotation.tax || 0;
   const discountPercent = quotation.discountPercent || quotation.discount || 0;
@@ -83,9 +65,9 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const contact = getContact(quotation);
   const date = quotation.date || new Date().toISOString().split('T')[0];
   const expiryDate = quotation.expiryDate || '';
-  const projectName = quotation.projectName || '';  // ADDED
-  const tl = quotation.tl || '';  // ADDED
-  const trn = quotation.trn || '';  // ADDED
+  const projectName = quotation.projectName || '';
+  const tl = quotation.tl || '';
+  const trn = quotation.trn || '';
   const ourRef = quotation.ourRef || '';
   const ourContact = quotation.ourContact || '';
   const salesOffice = quotation.salesOffice || '';
@@ -106,13 +88,11 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     items.map(async (item) => {
       const { name, description } = getItemDetails(item);
       
-      // Collect all image paths (existing + new)
       const imagePaths = [
         ...(item.imagePaths || []),
         ...((newImages[item.id] || []))
       ];
       
-      // Convert images to base64
       const paths = await Promise.all(
         imagePaths.map(p => imageToBase64(p))
       );
@@ -130,8 +110,8 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 
   // Calculate totals
   const subtotal = itemsWithImages.reduce((s, i) => s + (i.quantity * i.unitPrice), 0);
-  const taxAmt = (subtotal * (taxPercent)) / 100;
-  const discAmt = (subtotal * (discountPercent)) / 100;
+  const taxAmt = (subtotal * taxPercent) / 100;
+  const discAmt = (subtotal * discountPercent) / 100;
   const grandTotal = subtotal + taxAmt - discAmt;
   const amountInWords = numberToWords(grandTotal);
 
@@ -203,16 +183,14 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
       <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
       <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo.name}</div>
-      ${companyInfo.vatNumber ? `<div style="font-size:9px;color:#6b7280;margin-top:4px;">VAT: ${companyInfo.vatNumber}</div>` : ''}
-      ${companyInfo.email ? `<div style="font-size:9px;color:#6b7280;">${companyInfo.email}</div>` : ''}
-      ${companyInfo.phone ? `<div style="font-size:9px;color:#6b7280;">${companyInfo.phone}</div>` : ''}
+      
     </div>
   ` : `<div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
     <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
     <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">Mega Repairing Machinery Equipment LLC</div>
   </div>`;
 
-  // Build complete HTML - UPDATED to include projectName, tl, trn
+  // Build complete HTML
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -241,20 +219,18 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </div>
       <div style="text-align:right;">
         <div style="font-size:10px;font-weight:600;color:#6b7280;">VALID UNTIL</div>
-        <div style="font-size:16px;font-weight:700;">${new Date(expiryDate).toLocaleDateString("en-IN")}</div>
+        <div style="font-size:16px;font-weight:700;">${fmtDate(expiryDate)}</div>
       </div>
     </div>
 
-  
-
-    <!-- Details Grid - UPDATED to include TL and TRN -->
+    <!-- Details Grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
       <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
-      <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Customer</span><span>:</span><span>${customerName}</span>
         <span style="font-weight:600;color:#4b5563;">Contact</span><span>:</span><span>${contact}</span>
-        <span style="font-weight:600;color:#4b5563;">Date</span><span>:</span><span>${new Date(date).toLocaleDateString("en-IN")}</span>
-        <span style="font-weight:600;color:#4b5563;">Expiry Date</span><span>:</span><span>${new Date(expiryDate).toLocaleDateString("en-IN")}</span>
+        <span style="font-weight:600;color:#4b5563;">Date</span><span>:</span><span>${fmtDate(date)}</span>
+        <span style="font-weight:600;color:#4b5563;">Expiry Date</span><span>:</span><span>${fmtDate(expiryDate)}</span>
         <span style="font-weight:600;color:#4b5563;">TL</span><span>:</span><span>${tl || "N/A"}</span>
       </div>
       <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
@@ -263,8 +239,6 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         <span style="font-weight:600;color:#4b5563;">Sales Office</span><span>:</span><span>${salesOffice || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Payment</span><span>:</span><span>${paymentTerms || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Delivery</span><span>:</span><span>${deliveryTerms || "N/A"}</span>
-        <!-- ADDED TL and TRN -->
-        
         <span style="font-weight:600;color:#4b5563;">TRN</span><span>:</span><span>${trn || "N/A"}</span>
       </div>
     </div>

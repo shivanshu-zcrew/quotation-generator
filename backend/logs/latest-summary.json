@@ -1,0 +1,908 @@
+{
+  "lastSync": "2026-03-27T09:18:31.600Z",
+  "syncType": "customers",
+  "summary": {
+    "total": 187,
+    "created": 0,
+    "updated": 1,
+    "errors": 179,
+    "skipped": 7
+  },
+  "errors": [
+    {
+      "zohoId": "4698901000007975026",
+      "name": "01310",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025812277",
+      "name": "A ravi",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002762031",
+      "name": "aadarshTech",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003137890",
+      "name": "Aaron Brown",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002775003",
+      "name": "abc",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000019848031",
+      "name": "ABC",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000466003",
+      "name": "ABC 1 Company",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001461001",
+      "name": "Abdul Moomin Mumuni",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803611",
+      "name": "ABTCO TRADING CO LLC",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803083",
+      "name": "Abu Alhasan Mohammed Gerashi",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000800030",
+      "name": "Adam Al Aadh Technical Services",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000005445015",
+      "name": "Adarsh",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025812047",
+      "name": "Adfghj",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803827",
+      "name": "AL AHMED SONS COMPANY",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803587",
+      "name": "AL HAYAT GENERAL TRADING CO L.L.C",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001126316",
+      "name": "ANR Global Trading",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000009189015",
+      "name": "appvin",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803011",
+      "name": "ARD AL JANOOB TRADING L.L.C",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803851",
+      "name": "ARD AL JANOOB TRADING L.L.C",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000018543041",
+      "name": "Atta AL - Rahman Company for Oils and Fats",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000018543025",
+      "name": "Atta Al Rahman Company",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002571409",
+      "name": "Baroque Works",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000141007",
+      "name": "Benton (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803203",
+      "name": "Bitar for General Trading",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000244002",
+      "name": "Bitcode",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003137849",
+      "name": "Brandon Tyler",
+      "error": "Customer validation failed: email: Please provide an email, taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000001803107",
+      "name": "Candy Cloud FZE",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803131",
+      "name": "Candy Cloud FZE",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803563",
+      "name": "Candy Cloud FZE",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000141042",
+      "name": "Chanay (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000141182",
+      "name": "Chapman (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003137922",
+      "name": "Charles Stone",
+      "error": "Customer validation failed: email: Please provide an email, taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000000141077",
+      "name": "Chemel (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025977088",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000025980027",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000025986039",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000025987027",
+      "name": "clinet1",
+      "error": "Customer validation failed: defaultCurrency.code: `CAD` is not a valid enum value for path `defaultCurrency.code`."
+    },
+    {
+      "zohoId": "4698901000025991029",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000025994121",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000026002029",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000026055028",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000026071052",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000026078147",
+      "name": "clinet1",
+      "error": "E11000 duplicate key error collection: quotation-system.customers index: email_1 dup key: { email: \"client@gmail.com\" }"
+    },
+    {
+      "zohoId": "4698901000025820050",
+      "name": "clinetzoho",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000141252",
+      "name": "Commercial Press (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000026097211",
+      "name": "CompanyAZ",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000530003",
+      "name": "Cool School 101",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003064947",
+      "name": "Cron Ss",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025812063",
+      "name": "Customer ABC",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025813105",
+      "name": "Daeas wdsa",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025813227",
+      "name": "Deepak K",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025873065",
+      "name": "df",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001865003",
+      "name": "dfghb",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003134285",
+      "name": "Diya Gupta",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000655057",
+      "name": "DSDS Kompany",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001813025",
+      "name": "DTC",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002042623",
+      "name": "Dubai Insurance Company",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002571605",
+      "name": "Em's Emporium",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000634003",
+      "name": "ERFADG Company",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001803659",
+      "name": "FAR WAY GENERAL TRADING LLC",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000141112",
+      "name": "Feltz Printing Service (Sample)",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000026097195",
+      "name": "FinalV1",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000814016",
+      "name": "Flomatic International",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000001409003",
+      "name": "gdjdsd",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002762005",
+      "name": "gemaro",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000025877111",
+      "name": "gfd",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000026080001",
+      "name": "gfddf",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000026044064",
+      "name": "ghhj",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000005218007",
+      "name": "Globus",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000002836005",
+      "name": "GoPro",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000020434009",
+      "name": "Grayson",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000856011",
+      "name": "Has Kompany",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003664057",
+      "name": "Hero Electric",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000026051005",
+      "name": "hjkj",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000026097173",
+      "name": "hjkj",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000510011",
+      "name": "huss 101",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000000804010",
+      "name": "Inotech LLC",
+      "error": "Customer validation failed: taxRegistrationNumber: TRN must be exactly 15 digits for VAT registered customers"
+    },
+    {
+      "zohoId": "4698901000003150091",
+      "name": "Jacqueline Baldwin",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003150136",
+      "name": "Jaiden Perez",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001835005",
+      "name": "JCTSL",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000003132633",
+      "name": "Jhon Wick",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725121",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725145",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725169",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725193",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725217",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725241",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725265",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725289",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725313",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725337",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725361",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725385",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725409",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725433",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725457",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725481",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725505",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725529",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725553",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725577",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725601",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725625",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725649",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725673",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725697",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725721",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725745",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725769",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725793",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725817",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725841",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725865",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725889",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725913",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725937",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725961",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001725985",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001746525",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001750691",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757009",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757033",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757057",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757081",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757105",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757129",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757153",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757177",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757201",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757225",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757249",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757273",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757297",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757321",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757345",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757369",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757393",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757417",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757441",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757465",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757489",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757513",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757537",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757561",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757585",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757609",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757633",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757657",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757681",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757705",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757729",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757753",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757777",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757801",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757825",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757849",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757873",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757897",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757921",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757945",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757969",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001757993",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758017",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758041",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758065",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758089",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758113",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758137",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758161",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758185",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758209",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758233",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758257",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758281",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758305",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758329",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758353",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758377",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    },
+    {
+      "zohoId": "4698901000001758401",
+      "name": "John Smith",
+      "error": "Customer validation failed: email: Please provide an email"
+    }
+  ]
+}

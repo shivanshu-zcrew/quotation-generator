@@ -145,7 +145,7 @@ exports.getOpsPendingQuotations = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-    console.error('[getOpsPendingQuotations] Error:', error);
+     
     res.status(500).json({ 
       message: 'Error fetching pending quotations', 
       error: error.message 
@@ -181,7 +181,7 @@ exports.opsApproveQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-    console.error('[opsApproveQuotation] Error:', error);
+     
     res.status(500).json({ message: 'Error approving quotation (ops)', error: error.message });
   }
 };
@@ -219,7 +219,7 @@ exports.opsRejectQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-    console.error('[opsRejectQuotation] Error:', error);
+     
     res.status(500).json({ message: 'Error rejecting quotation (ops)', error: error.message });
   }
 };
@@ -237,7 +237,7 @@ exports.getOpsReviewHistory = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-    console.error('[getOpsReviewHistory] Error:', error);
+     
     res.status(500).json({
       message: 'Error fetching ops review history',
       error: error.message
@@ -260,7 +260,7 @@ exports.getPendingQuotations = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-    console.error('[getPendingQuotations] Error:', error);
+     
     res.status(500).json({ message: 'Error fetching pending quotations', error: error.message });
   }
 };
@@ -292,7 +292,7 @@ exports.approveQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-    console.error('[approveQuotation] Error:', error);
+     
     res.status(500).json({ message: 'Error approving quotation', error: error.message });
   }
 };
@@ -330,7 +330,7 @@ exports.rejectQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-    console.error('[rejectQuotation] Error:', error);
+     
     res.status(500).json({ message: 'Error rejecting quotation', error: error.message });
   }
 };
@@ -361,7 +361,7 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-    console.error('[getAllQuotationsAdmin] Error:', error);
+     
     res.status(500).json({ 
       message: 'Error fetching quotations', 
       error: error.message 
@@ -486,7 +486,7 @@ exports.getAdminDashboardStats = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('[getAdminDashboardStats]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error fetching admin dashboard stats', 
@@ -542,7 +542,7 @@ exports.getOpsDashboardStats = async (req, res) => {
       stats
     });
   } catch (err) {
-    console.error('[getOpsDashboardStats]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error fetching ops dashboard stats', 

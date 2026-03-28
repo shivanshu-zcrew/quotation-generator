@@ -7,7 +7,7 @@ const User = require('../models/user');
 // Helper function for error handling
 // ===========================================================
 const handleError = (res, error, message = 'Server error') => {
-  console.error(`[CompanyController] ${message}:`, error);
+   
   res.status(500).json({ 
     success: false, 
     message, 

@@ -118,14 +118,140 @@ export const opsAPI = {
 };
 
 /* =========================================================
-   CUSTOMER APIs
+   CUSTOMER APIs - UPDATED WITH GCC TAX FIELDS
 ========================================================= */
+
+ 
 export const customerAPI = {
+  /**
+   * Get all customers with pagination and filters
+   * @param {Object} params - Query parameters
+   * @param {number} params.page - Page number
+   * @param {number} params.limit - Items per page
+   * @param {string} params.search - Search term
+   * @param {string} params.taxTreatment - Filter by tax treatment
+   * @param {string} params.placeOfSupply - Filter by place of supply
+   * @param {boolean} params.includeZoho - Include Zoho data
+   */
   getAll: (params) => api.get("/customers", { params }),
+
+  /**
+   * Create a new customer with GCC tax fields
+   * @param {Object} data - Customer data
+   * @param {string} data.name - Customer name (required)
+   * @param {string} data.email - Customer email (required, unique)
+   * @param {string} data.phone - Customer phone
+   * @param {string} data.address - Customer address
+   * @param {string} data.companyName - Company name
+   * @param {string} data.website - Company website
+   * @param {string} data.notes - Additional notes
+   * @param {string} data.taxTreatment - Tax treatment: 'gcc_vat_registered' or 'gcc_non_vat_registered'
+   * @param {string} data.taxRegistrationNumber - TRN (required if VAT registered, 15 digits)
+   * @param {string} data.placeOfSupply - GCC country (e.g., 'United Arab Emirates (UAE)')
+   * @param {string} data.defaultCurrency - Currency code (e.g., 'AED', 'SAR', 'USD')
+   */
   create: (data) => api.post("/customers", data),
-  getById: (id) => api.get(`/customers/${id}`),
+
+  /**
+   * Get customer by ID
+   * @param {string} id - Customer ID
+   * @param {boolean} includeZoho - Include Zoho data
+   */
+  getById: (id, includeZoho = true) => 
+    api.get(`/customers/${id}`),
+
+  /**
+   * Update customer with GCC tax fields
+   * @param {string} id - Customer ID
+   * @param {Object} data - Updated customer data
+   */
   update: (id, data) => api.put(`/customers/${id}`, data),
+
+  /**
+   * Delete/Deactivate customer
+   * @param {string} id - Customer ID
+   */
   delete: (id) => api.delete(`/customers/${id}`),
+
+  /**
+   * Search customers by name, email, or phone
+   * @param {string} query - Search query
+   * @param {number} limit - Max results
+   * @param {number} offset - Offset for pagination
+   */
+  search: (query, limit = 20, offset = 0) => 
+    api.get("/customers/search", { params: { query, limit, offset } }),
+
+  syncFromZoho: () => api.post("/customers/sync-from-zoho"),
+  /**
+   * Get customer statistics
+   * Returns: totalCustomers, activeCustomers, vatRegistered, 
+   * nonVatRegistered, synced, unsynced, byPlaceOfSupply
+   */
+  getStats: () => api.get("/customers/stats"),
+
+  /**
+   * Get GCC countries for place of supply dropdown
+   * @returns {Promise} List of GCC countries
+   */
+  getGccCountries: () => api.get("/customers/gcc-countries"),
+
+  /**
+   * Get available currency options
+   * @returns {Promise} List of supported currencies with codes, names, symbols
+   */
+  getCurrencies: () => api.get("/customers/currencies"),
+
+  /**
+   * Get tax treatment options
+   * @returns {Promise} List of tax treatments with labels and validation rules
+   */
+  getTaxTreatments: () => api.get("/customers/tax-treatments"),
+
+  /**
+   * Get tax summary report
+   * @returns {Promise} Tax registration summary with breakdown by country
+   */
+  getTaxSummary: () => api.get("/customers/tax-summary"),
+
+  /**
+   * Sync customer with Zoho Books
+   * @param {string} id - Customer ID
+   */
+  syncWithZoho: (id) => api.post(`/customers/${id}/sync`),
+
+  /**
+   * Get customers by tax treatment
+   * @param {string} taxTreatment - 'gcc_vat_registered' or 'gcc_non_vat_registered'
+   * @param {Object} params - Additional filters
+   */
+  getByTaxTreatment: (taxTreatment, params = {}) => 
+    api.get("/customers", { params: { ...params, taxTreatment } }),
+
+  /**
+   * Get customers by place of supply (GCC country)
+   * @param {string} placeOfSupply - GCC country name
+   * @param {Object} params - Additional filters
+   */
+  getByPlaceOfSupply: (placeOfSupply, params = {}) => 
+    api.get("/customers", { params: { ...params, placeOfSupply } }),
+
+  /**
+   * Bulk import customers with tax fields
+   * @param {Array} customers - Array of customer objects
+   */
+  bulkImport: (customers) => api.post("/customers/bulk", { customers }),
+
+  /**
+   * Export customers with tax information
+   * @param {Object} params - Filter parameters
+   * @param {string} format - Export format ('csv' or 'excel')
+   */
+  export: (params, format = 'csv') => 
+    api.get("/customers/export", { 
+      params: { ...params, format },
+      responseType: 'blob'
+    }),
 };
 
 /* =========================================================
@@ -147,6 +273,16 @@ export const itemAPI = {
     }),
 
   delete: (id) => api.delete(`/items/${id}`),
+
+  syncItems: () => api.get("/items/sync/items"),
+  
+  getSyncStatus: () => api.get("/items/sync/status"),
+ 
+  getAllWithRefresh: (params, forceRefresh = false) => 
+    api.get("/items", { 
+      params: { ...params, forceRefresh: forceRefresh ? 'true' : 'false' }
+    }),
+  
 };
 
 /* =========================================================
@@ -417,17 +553,131 @@ export const quotationAPI = {
 };
 
 /* =========================================================
-   Currency Helper Functions (Updated)
+   CUSTOMER HELPER FUNCTIONS (Updated)
 ========================================================= */
-export const currencyUtils = {
-  // Format amount with currency symbol
-  format: (amount, currencyCode = 'AED', decimalPlaces = 2) => {
-    const symbols = {
-      AED: 'د.إ', SAR: '﷼', QAR: '﷼', KWD: 'د.ك',
-      BHD: '.د.ب', OMR: '﷼', USD: '$', EUR: '€', GBP: '£'
+
+/**
+ * Customer tax utilities
+ */
+export const customerTaxUtils = {
+  /**
+   * Get available tax treatments with labels
+   */
+  getTaxTreatments: () => [
+    { value: 'gcc_vat_registered', label: 'GCC VAT Registered', requiresTrn: true },
+    { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT Registered', requiresTrn: false }
+  ],
+
+  /**
+   * Check if tax treatment requires TRN
+   */
+  requiresTrn: (taxTreatment) => taxTreatment === 'gcc_vat_registered',
+
+  /**
+   * Validate TRN format
+   * @param {string} trn - Tax Registration Number
+   * @returns {boolean} True if valid (15 digits)
+   */
+  validateTrn: (trn) => /^\d{15}$/.test(trn),
+
+  /**
+   * Format TRN for display (groups of 3 digits)
+   * @param {string} trn - Raw TRN
+   * @returns {string} Formatted TRN
+   */
+  formatTrn: (trn) => {
+    if (!trn) return '';
+    return trn.replace(/(\d{3})(?=\d)/g, '$1-').replace(/-$/, '');
+  },
+
+  /**
+   * Get TRN validation error message
+   * @param {string} trn - TRN to validate
+   * @returns {string|null} Error message or null if valid
+   */
+  getTrnValidationError: (trn) => {
+    if (!trn) return 'Tax Registration Number is required';
+    if (!/^\d{15}$/.test(trn)) return 'TRN must be exactly 15 digits';
+    return null;
+  }
+};
+
+/**
+ * Customer place of supply utilities
+ */
+export const placeOfSupplyUtils = {
+  /**
+   * Get all GCC countries
+   */
+  getGccCountries: () => [
+    'United Arab Emirates (UAE)',
+    'Saudi Arabia',
+    'Kuwait',
+    'Qatar',
+    'Bahrain',
+    'Oman'
+  ],
+
+  /**
+   * Get country code from place of supply name
+   * @param {string} placeName - Place of supply name
+   * @returns {string} Country code (e.g., 'AE', 'SA')
+   */
+  getCountryCode: (placeName) => {
+    const map = {
+      'United Arab Emirates (UAE)': 'AE',
+      'Saudi Arabia': 'SA',
+      'Kuwait': 'KW',
+      'Qatar': 'QA',
+      'Bahrain': 'BH',
+      'Oman': 'OM'
     };
-    const symbol = symbols[currencyCode] || currencyCode;
-    return `${symbol} ${amount.toFixed(decimalPlaces)}`;
+    return map[placeName] || 'AE';
+  },
+
+  /**
+   * Get place of supply name from country code
+   * @param {string} countryCode - Country code
+   * @returns {string} Place of supply name
+   */
+  getPlaceName: (countryCode) => {
+    const map = {
+      'AE': 'United Arab Emirates (UAE)',
+      'SA': 'Saudi Arabia',
+      'KW': 'Kuwait',
+      'QA': 'Qatar',
+      'BH': 'Bahrain',
+      'OM': 'Oman'
+    };
+    return map[countryCode] || 'United Arab Emirates (UAE)';
+  }
+};
+
+/**
+ * Currency utilities (enhanced)
+ */
+export const currencyUtils = {
+  // Supported currencies with details
+  supportedCurrencies: {
+    AED: { code: 'AED', symbol: 'د.إ', name: 'United Arab Emirates Dirham', decimalPlaces: 2 },
+    SAR: { code: 'SAR', symbol: '﷼', name: 'Saudi Riyal', decimalPlaces: 2 },
+    KWD: { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar', decimalPlaces: 3 },
+    QAR: { code: 'QAR', symbol: '﷼', name: 'Qatari Riyal', decimalPlaces: 2 },
+    BHD: { code: 'BHD', symbol: '.د.ب', name: 'Bahraini Dinar', decimalPlaces: 3 },
+    OMR: { code: 'OMR', symbol: '﷼', name: 'Omani Rial', decimalPlaces: 3 },
+    USD: { code: 'USD', symbol: '$', name: 'US Dollar', decimalPlaces: 2 },
+    EUR: { code: 'EUR', symbol: '€', name: 'Euro', decimalPlaces: 2 },
+    GBP: { code: 'GBP', symbol: '£', name: 'British Pound', decimalPlaces: 2 }
+  },
+
+  // Format amount with currency symbol
+  format: (amount, currencyCode = 'AED') => {
+    const currency = currencyUtils.supportedCurrencies[currencyCode];
+    if (!currency) return `${currencyCode} ${amount.toFixed(2)}`;
+    
+    const decimalPlaces = currency.decimalPlaces || 2;
+    const formattedAmount = amount.toFixed(decimalPlaces);
+    return `${currency.symbol} ${formattedAmount}`;
   },
 
   // Convert amount using exchange rate
@@ -450,6 +700,21 @@ export const currencyUtils = {
       console.error('Failed to fetch company currencies:', error);
       return ['AED']; // Fallback
     }
+  },
+
+  // Get currency symbol
+  getSymbol: (currencyCode) => {
+    return currencyUtils.supportedCurrencies[currencyCode]?.symbol || currencyCode;
+  },
+
+  // Get currency name
+  getName: (currencyCode) => {
+    return currencyUtils.supportedCurrencies[currencyCode]?.name || currencyCode;
+  },
+
+  // Get decimal places for currency
+  getDecimalPlaces: (currencyCode) => {
+    return currencyUtils.supportedCurrencies[currencyCode]?.decimalPlaces || 2;
   }
 };
 

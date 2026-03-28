@@ -1,621 +1,706 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ArrowLeft, Save, X, Upload, Image as ImageIcon, Package, Search, Tag } from 'lucide-react';
+// screens/ItemsScreen.jsx
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { Plus, Edit2, Trash2, ArrowLeft, Search, RefreshCw, ChevronLeft, ChevronRight, Package, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { usePaginatedItems, useItemSearch, useItemStats } from '../hooks/itemHooks';
+import { itemAPI } from '../services/api';
 
-// Import store hooks
-import { useItems } from '../hooks/customHooks';
-import { useAppStore } from '../services/store';
-
-export default function ItemsScreen({ onBack }) {
-  // Get data and actions from store
-  const { items, addItem, updateItem, deleteItem, isLoading: isAddingItem } = useItems();
-  
-  // Local UI state
-  const [showModal, setShowModal] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [formData, setFormData] = useState({ name: '', price: '', description: '', image: null });
-  const [imagePreview, setImagePreview] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('name');
-  const [dragOver, setDragOver] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState(null); // Track which item is being deleted
-
-  const handleOpenModal = (item = null) => {
-    if (item) {
-      setFormData({ 
-        name: item.name, 
-        price: item.price, 
-        description: item.description || '', 
-        image: null 
-      });
-      setImagePreview(item.imagePath ? `http://13.232.90.158:5000${item.imagePath}` : null);
-      setEditingId(item._id);
-    } else {
-      setFormData({ name: '', price: '', description: '', image: null });
-      setImagePreview(null);
-      setEditingId(null);
-    }
-    setShowModal(true);
-  };
-
-  const closeModal = () => {
-    setShowModal(false);
-    setEditingId(null);
-    setFormData({ name: '', price: '', description: '', image: null });
-    setImagePreview(null);
-    setIsSubmitting(false);
-  };
-
-  const handleChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-
-  const handleImageChange = (file) => {
-    if (!file) return;
-    setFormData(prev => ({ ...prev, image: file }));
-    const reader = new FileReader();
-    reader.onload = () => setImagePreview(reader.result);
-    reader.readAsDataURL(file);
-  };
-
-  const handleSubmit = useCallback(async (e) => {
-    e.preventDefault();
-    if (!formData.name.trim() || !formData.price) { 
-      alert('Name and price are required'); 
-      return; 
-    }
-    
-    setIsSubmitting(true);
-    const fd = new FormData();
-    fd.append('name', formData.name.trim());
-    fd.append('price', parseFloat(formData.price));
-    fd.append('description', formData.description.trim());
-    if (formData.image) fd.append('image', formData.image);
-    
-    try {
-      let result;
-      if (editingId) {
-        result = await updateItem(editingId, fd);
-      } else {
-        result = await addItem(fd);
-      }
-      
-      if (result?.success) {
-        closeModal();
-        alert(editingId ? 'Item updated successfully' : 'Item added successfully');
-      } else {
-        alert(result?.error || 'Error saving item. Please try again.');
-      }
-    } catch (error) {
-      alert('Error saving item. Please try again.');
-      console.error('Submit error:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [formData, editingId, addItem, updateItem]);
-
-  // Memoized filtered and sorted items
-  const filtered = useMemo(() => {
-    return items
-      .filter(i => 
-        i.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        i.description?.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-      .sort((a, b) => {
-        if (sortBy === 'name') return a.name.localeCompare(b.name);
-        if (sortBy === 'price-low') return a.price - b.price;
-        if (sortBy === 'price-high') return b.price - a.price;
-        if (sortBy === 'date') return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-        return 0;
-      });
-  }, [items, searchTerm, sortBy]);
-
-  const avgPrice = useMemo(() => 
-    items.length ? items.reduce((s, i) => s + i.price, 0) / items.length : 0,
-    [items]
-  );
-
-  // Handle delete with local loading state
-  const handleDelete = useCallback(async (itemId, itemName) => {
-    if (window.confirm(`Delete "${itemName}"?`)) {
-      setDeletingId(itemId);
-      const result = await deleteItem(itemId);
-      setDeletingId(null);
-      
-      if (result?.success) {
-        alert('Item deleted successfully');
-      } else {
-        alert(result?.error || 'Error deleting item');
-      }
-    }
-  }, [deleteItem]);
+// ─────────────────────────────────────────────────────────────
+// Toast Notification Component
+// ─────────────────────────────────────────────────────────────
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f0f4ff', fontFamily: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-        * { box-sizing: border-box; }
+    <div style={{
+      position: 'fixed',
+      bottom: '24px',
+      right: '24px',
+      background: type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6',
+      color: 'white',
+      padding: '12px 20px',
+      borderRadius: '12px',
+      boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      zIndex: 1000,
+      animation: 'slideIn 0.3s ease'
+    }}>
+      {type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+      <span style={{ fontWeight: '500' }}>{message}</span>
+    </div>
+  );
+};
 
-        /* ── Stat cards ── */
-        .is-stat {
-          background: white; border-radius: 18px;
-          padding: 1.5rem;
-          box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.05);
-          transition: transform .2s, box-shadow .2s;
-          position: relative; overflow: hidden;
-        }
-        .is-stat::before {
-          content: ''; position: absolute; top: 0; left: 0; right: 0;
-          height: 3px; border-radius: 18px 18px 0 0;
-        }
-        .is-stat.amber::before   { background: linear-gradient(90deg,#d97706,#fbbf24); }
-        .is-stat.violet::before  { background: linear-gradient(90deg,#8b5cf6,#a78bfa); }
-        .is-stat.emerald::before { background: linear-gradient(90deg,#059669,#34d399); }
-        .is-stat:hover { transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,.07), 0 12px 28px rgba(0,0,0,.1); }
+// ─────────────────────────────────────────────────────────────
+// Pagination Controls Component
+// ─────────────────────────────────────────────────────────────
+const PaginationControls = ({ pagination, onPageChange, loading }) => {
+  if (!pagination || pagination.totalPages <= 1) return null;
 
-        /* ── Item card ── */
-        .is-card {
-          background: white; border-radius: 16px; overflow: hidden;
-          border: 1.5px solid #f1f5f9;
-          box-shadow: 0 1px 3px rgba(0,0,0,.05);
-          transition: all .22s cubic-bezier(.4,0,.2,1);
-          display: flex; flex-direction: column;
-        }
-        .is-card:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 8px 32px rgba(99,102,241,.12), 0 2px 8px rgba(0,0,0,.07);
-          border-color: #e0e3ff;
-        }
+  const { page, totalPages, hasNextPage, hasPreviousPage } = pagination;
 
-        /* ── Image area ── */
-        .is-img-area {
-          height: 190px; overflow: hidden;
-          background: #f8fafc;
-          display: flex; align-items: center; justify-content: center;
-          position: relative;
-        }
+  const maxButtons = 5;
+  const halfWindow = Math.floor(maxButtons / 2);
+  let startPage = Math.max(1, page - halfWindow);
+  let endPage = Math.min(totalPages, startPage + maxButtons - 1);
 
-        /* ── Card action buttons ── */
-        .is-card-btn {
-          flex: 1; border: none; border-radius: 9px;
-          padding: .5rem; cursor: pointer; font-family: inherit;
-          font-size: .8125rem; font-weight: 600;
-          display: flex; align-items: center; justify-content: center; gap: .4rem;
-          transition: all .15s;
-        }
-        .is-card-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(.93); }
-        .is-card-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .is-card-btn.edit { background: #eff1ff; color: #6366f1; }
-        .is-card-btn.del  { background: #fff1f1; color: #dc2626; }
+  if (endPage - startPage < maxButtons - 1) {
+    startPage = Math.max(1, endPage - maxButtons + 1);
+  }
 
-        /* ── Search ── */
-        .is-search {
-          background: white; border: 1.5px solid #e2e8f0; border-radius: 12px;
-          color: #1f2937; padding: .65rem 1rem .65rem 2.6rem;
-          font-size: .875rem; font-family: inherit; outline: none;
-          flex: 1; transition: border-color .2s, box-shadow .2s;
-          box-shadow: 0 1px 3px rgba(0,0,0,.04);
-        }
-        .is-search:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.12); }
-        .is-search::placeholder { color: #94a3b8; }
+  const pageButtons = [];
 
-        /* ── Sort select ── */
-        .is-sort {
-          background: white; border: 1.5px solid #e2e8f0; border-radius: 12px;
-          color: #374151; padding: .65rem 1rem; font-size: .875rem;
-          font-family: inherit; outline: none; cursor: pointer;
-          transition: border-color .2s; min-width: 170px;
-          box-shadow: 0 1px 3px rgba(0,0,0,.04);
-        }
-        .is-sort:focus { border-color: #6366f1; }
+  // Previous button
+  pageButtons.push(
+    <button
+      key="prev"
+      onClick={() => onPageChange(page - 1)}
+      disabled={!hasPreviousPage || loading}
+      style={{
+        padding: '0.5rem 0.75rem',
+        border: '1px solid #e2e8f0',
+        background: 'white',
+        borderRadius: '8px',
+        cursor: loading || !hasPreviousPage ? 'not-allowed' : 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        opacity: loading || !hasPreviousPage ? 0.5 : 1,
+        transition: 'all 0.2s',
+      }}
+    >
+      <ChevronLeft size={16} />
+    </button>
+  );
 
-        /* ── Primary button ── */
-        .is-primary-btn {
-          background: linear-gradient(135deg,#6366f1,#8b5cf6);
-          color: white; border: none; border-radius: 12px;
-          padding: .7rem 1.4rem; font-size: .875rem; font-weight: 700;
-          font-family: inherit; cursor: pointer;
-          display: flex; align-items: center; gap: .5rem;
-          box-shadow: 0 4px 14px rgba(99,102,241,.35); transition: all .2s;
-        }
-        .is-primary-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99,102,241,.5); }
-        .is-primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  // Page numbers
+  if (startPage > 1) {
+    pageButtons.push(
+      <button
+        key="page-1"
+        onClick={() => onPageChange(1)}
+        disabled={loading}
+        style={{
+          padding: '0.5rem 0.75rem',
+          border: '1px solid #e2e8f0',
+          background: 'white',
+          borderRadius: '8px',
+          fontSize: '0.875rem',
+          fontWeight: '500',
+          cursor: loading ? 'not-allowed' : 'pointer',
+        }}
+      >
+        1
+      </button>
+    );
 
-        /* ── Secondary button ── */
-        .is-secondary-btn {
-          background: white; color: #475569;
-          border: 1.5px solid #e2e8f0; border-radius: 12px;
-          padding: .7rem 1.4rem; font-size: .875rem; font-weight: 600;
-          font-family: inherit; cursor: pointer;
-          display: flex; align-items: center; gap: .5rem; transition: all .2s;
-        }
-        .is-secondary-btn:hover { border-color: #cbd5e1; background: #f8fafc; transform: translateY(-1px); }
+    if (startPage > 2) {
+      pageButtons.push(
+        <span key="dots-start" style={{ color: '#94a3b8', padding: '0.5rem 0.25rem' }}>
+          ...
+        </span>
+      );
+    }
+  }
 
-        /* ── Modal ── */
-        .is-overlay {
-          position: fixed; inset: 0; background: rgba(15,23,42,.45);
-          backdrop-filter: blur(4px);
-          display: flex; align-items: center; justify-content: center;
-          z-index: 50; padding: 1rem;
-        }
-        .is-modal {
-          background: white; border-radius: 20px;
-          width: 100%; max-width: 500px; max-height: 92vh; overflow-y: auto;
-          box-shadow: 0 24px 60px rgba(0,0,0,.18);
-          animation: modalIn .22s cubic-bezier(.4,0,.2,1) both;
-        }
-        @keyframes modalIn {
-          from { opacity:0; transform:scale(.97) translateY(8px); }
-          to   { opacity:1; transform:scale(1) translateY(0); }
-        }
+  for (let i = startPage; i <= endPage; i++) {
+    pageButtons.push(
+      <button
+        key={`page-${i}`}
+        onClick={() => onPageChange(i)}
+        disabled={loading}
+        style={{
+          padding: '0.5rem 0.75rem',
+          border: i === page ? '1px solid #6366f1' : '1px solid #e2e8f0',
+          background: i === page ? '#6366f1' : 'white',
+          color: i === page ? 'white' : '#0f172a',
+          borderRadius: '8px',
+          fontSize: '0.875rem',
+          fontWeight: '600',
+          cursor: loading ? 'not-allowed' : 'pointer',
+          opacity: loading ? 0.5 : 1,
+        }}
+      >
+        {i}
+      </button>
+    );
+  }
 
-        /* ── Form field ── */
-        .is-field {
-          background: #f8fafc; border: 1.5px solid #e2e8f0;
-          border-radius: 10px; padding: .7rem .9rem;
-          font-size: .875rem; font-family: inherit; color: #1f2937;
-          width: 100%; outline: none; transition: border-color .2s, box-shadow .2s;
-        }
-        .is-field:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.1); background: white; }
-        .is-field::placeholder { color: #94a3b8; }
+  if (endPage < totalPages) {
+    if (endPage < totalPages - 1) {
+      pageButtons.push(
+        <span key="dots-end" style={{ color: '#94a3b8', padding: '0.5rem 0.25rem' }}>
+          ...
+        </span>
+      );
+    }
 
-        /* ── Drop zone ── */
-        .is-dropzone {
-          border: 2px dashed #e2e8f0; border-radius: 12px;
-          padding: 1.5rem; text-align: center; cursor: pointer;
-          transition: all .2s; background: #f8fafc;
-        }
-        .is-dropzone:hover, .is-dropzone.over { border-color: #6366f1; background: #f5f3ff; }
+    pageButtons.push(
+      <button
+        key={`page-${totalPages}`}
+        onClick={() => onPageChange(totalPages)}
+        disabled={loading}
+        style={{
+          padding: '0.5rem 0.75rem',
+          border: '1px solid #e2e8f0',
+          background: 'white',
+          borderRadius: '8px',
+          fontSize: '0.875rem',
+          fontWeight: '500',
+          cursor: loading ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {totalPages}
+      </button>
+    );
+  }
 
-        /* ── Submit/cancel ── */
-        .is-submit-btn {
-          background: linear-gradient(135deg,#6366f1,#8b5cf6);
-          color: white; border: none; border-radius: 10px;
-          padding: .75rem 1.5rem; font-size: .875rem; font-weight: 700;
-          font-family: inherit; cursor: pointer;
-          display: flex; align-items: center; gap: .5rem;
-          box-shadow: 0 4px 12px rgba(99,102,241,.35); transition: all .2s;
-        }
-        .is-submit-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(99,102,241,.45); }
-        .is-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  // Next button
+  pageButtons.push(
+    <button
+      key="next"
+      onClick={() => onPageChange(page + 1)}
+      disabled={!hasNextPage || loading}
+      style={{
+        padding: '0.5rem 0.75rem',
+        border: '1px solid #e2e8f0',
+        background: 'white',
+        borderRadius: '8px',
+        cursor: loading || !hasNextPage ? 'not-allowed' : 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        opacity: loading || !hasNextPage ? 0.5 : 1,
+      }}
+    >
+      <ChevronRight size={16} />
+    </button>
+  );
+
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: '0.5rem',
+      flexWrap: 'wrap',
+      padding: '1rem',
+    }}>
+      {pageButtons}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// Item Card Component
+// ─────────────────────────────────────────────────────────────
+const ItemCard = ({ item, onEdit, onDelete, isDeleting }) => {
+  return (
+    <div
+      style={{
+        border: '1.5px solid #f1f5f9',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        transition: 'all 0.2s',
+        cursor: 'pointer',
+        background: 'white',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+        e.currentTarget.style.transform = 'translateY(-2px)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.boxShadow = 'none';
+        e.currentTarget.style.transform = 'translateY(0)';
+      }}
+    >
+      {/* Image Container */}
+      <div style={{ background: '#f8fafc', padding: '1rem', height: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {item?.imagePath ? (
+          <img
+            src={item.imagePath.startsWith('http') ? item.imagePath : `http://13.232.90.158:5000${item.imagePath}`}
+            alt={item?.name || 'Item'}
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }}
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        ) : (
+          <Package size={32} style={{ color: '#cbd5e1' }} />
+        )}
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: '1rem' }}>
+        <h3 style={{ margin: 0, fontSize: '.9rem', fontWeight: '700', color: '#0f172a' }}>
+          {item?.name || 'Unnamed Item'}
+        </h3>
+        <p style={{ margin: '0.25rem 0', color: '#64748b', fontSize: '.8rem' }}>
+          {item?.sku ? `SKU: ${item.sku}` : 'No SKU'}
+        </p>
+        <p style={{ margin: '0.5rem 0 0', fontSize: '.9rem', fontWeight: '700', color: '#059669' }}>
+          AED {item?.price ? parseFloat(item.price).toFixed(2) : '0.00'}
+        </p>
+        <p style={{ margin: '0.5rem 0 0', color: '#94a3b8', fontSize: '.75rem' }}>
+          Status: <span style={{ color: item?.status === 'active' ? '#059669' : '#dc2626' }}>
+            {item?.status || 'active'}
+          </span>
+        </p>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+          <button
+            onClick={() => onEdit(item)}
+            disabled={isDeleting}
+            style={{
+              flex: 1,
+              padding: '0.5rem',
+              background: '#eff1ff',
+              color: '#6366f1',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '.75rem',
+              fontWeight: '600',
+              cursor: isDeleting ? 'not-allowed' : 'pointer',
+              opacity: isDeleting ? 0.5 : 1,
+            }}
+          >
+            <Edit2 size={14} style={{ display: 'inline', marginRight: '0.25rem' }} /> Edit
+          </button>
+          <button
+            onClick={() => onDelete(item)}
+            disabled={isDeleting}
+            style={{
+              flex: 1,
+              padding: '0.5rem',
+              background: '#fff1f1',
+              color: '#dc2626',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '.75rem',
+              fontWeight: '600',
+              cursor: isDeleting ? 'not-allowed' : 'pointer',
+              opacity: isDeleting ? 0.5 : 1,
+            }}
+          >
+            {isDeleting ? '...' : <Trash2 size={14} style={{ display: 'inline', marginRight: '0.25rem' }} />} Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// Main Items Screen Component
+// ─────────────────────────────────────────────────────────────
+export default function ItemsScreen({ onBack }) {
+  // Hooks
+  const pagination = usePaginatedItems(1);
+  const search = useItemSearch();
+  const stats = useItemStats();
+
+  // Local state
+  const [mode, setMode] = useState('browse');
+  const [toast, setToast] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Computed state
+  const currentItems = mode === 'search' ? search.items : pagination.items;
+  const currentLoading = mode === 'search' ? search.loading : pagination.loading;
+  const currentError = mode === 'search' ? search.error : pagination.error;
+  const currentPagination = mode === 'browse' ? pagination.pagination : null;
+
+  // Ensure pagination object exists
+  const safePageInfo = useMemo(() => {
+    if (!currentPagination) return { page: 1, totalPages: 1, totalItems: 0 };
+    return {
+      page: currentPagination.page || 1,
+      totalPages: currentPagination.totalPages || 1,
+      totalItems: currentPagination.totalItems || 0,
+      hasNextPage: currentPagination.hasNextPage || false,
+      hasPreviousPage: currentPagination.hasPreviousPage || false,
+    };
+  }, [currentPagination]);
+
+  // Handle sync from Zoho (same logic as InfiniteItemSelector)
+  const handleSync = useCallback(async () => {
+    if (isSyncing) {
+      setToast({ message: 'Sync already in progress...', type: 'info' });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    setIsSyncing(true);
+    setToast({ message: 'Syncing items from Zoho...', type: 'info' });
+
+    try {
+      const response = await itemAPI.syncItems();
+      
+      if (response.data.success) {
+        // Poll for completion
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await itemAPI.getSyncStatus();
+            if (!statusRes.data.status.isSyncing) {
+              clearInterval(pollInterval);
+              setIsSyncing(false);
+              
+              const result = statusRes.data.status.lastSyncResult;
+              
+              if (result?.success) {
+                setToast({
+                  message: `✅ Sync complete! ${result.created || 0} new, ${result.updated || 0} updated`,
+                  type: 'success'
+                });
+                
+                // Refresh the items list
+                setTimeout(() => {
+                  if (mode === 'browse') {
+                    pagination.refetch();
+                  } else if (search.query) {
+                    search.search(search.query);
+                  }
+                  // Refresh stats
+                  stats.refetch();
+                }, 500);
+              } else {
+                setToast({
+                  message: `❌ Sync failed: ${result?.error || 'Unknown error'}`,
+                  type: 'error'
+                });
+              }
+            }
+          } catch (error) {
+            clearInterval(pollInterval);
+            setIsSyncing(false);
+            setToast({
+              message: `❌ Sync failed: ${error.message}`,
+              type: 'error'
+            });
+          }
+        }, 2000);
         
-        .is-cancel-btn {
-          background: #f1f5f9; color: #64748b; border: none; border-radius: 10px;
-          padding: .75rem 1.5rem; font-size: .875rem; font-weight: 600;
-          font-family: inherit; cursor: pointer;
-          display: flex; align-items: center; gap: .5rem; transition: background .15s;
-        }
-        .is-cancel-btn:hover:not(:disabled) { background: #e2e8f0; }
-        .is-cancel-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        // Timeout after 60 seconds
+        setTimeout(() => {
+          clearInterval(pollInterval);
+          if (isSyncing) {
+            setIsSyncing(false);
+            setToast({
+              message: '❌ Sync timeout after 60 seconds',
+              type: 'error'
+            });
+          }
+        }, 60000);
+      } else {
+        setIsSyncing(false);
+        setToast({
+          message: `❌ Sync failed: ${response.data.message || 'Unknown error'}`,
+          type: 'error'
+        });
+      }
+    } catch (error) {
+      console.error('Sync error:', error);
+      setIsSyncing(false);
+      setToast({
+        message: `❌ Sync failed: ${error.message}`,
+        type: 'error'
+      });
+    }
+    
+    // Auto-hide toast after 3 seconds
+    setTimeout(() => setToast(null), 3000);
+  }, [isSyncing, pagination, search, mode, stats]);
 
-        /* ── Animations ── */
-        @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
-        .fa1{animation:fadeUp .35s ease both}
-        .fa2{animation:fadeUp .35s .07s ease both}
-        .fa3{animation:fadeUp .35s .14s ease both}
-        .fa4{animation:fadeUp .35s .21s ease both}
+  // Handle search
+  const handleSearch = useCallback((value) => {
+    if (!value || value.trim().length === 0) {
+      search.clearSearch();
+      setMode('browse');
+    } else {
+      search.search(value);
+      setMode('search');
+    }
+  }, [search]);
 
-        /* ── Price badge ── */
-        .is-price-badge {
-          position: absolute; top: 12px; right: 12px;
-          background: white; color: #059669;
-          border: 1.5px solid #bbf7d0;
-          border-radius: 999px; padding: .25rem .7rem;
-          font-size: .78rem; font-weight: 700; font-family: monospace;
-          box-shadow: 0 2px 8px rgba(0,0,0,.08);
-        }
-      `}</style>
+  // Handle pagination
+  const handlePageChange = useCallback((newPage) => {
+    if (newPage >= 1 && newPage <= safePageInfo.totalPages) {
+      pagination.setPage(newPage);
+    }
+  }, [pagination, safePageInfo.totalPages]);
 
+  // Handle sort change
+  const handleSortChange = useCallback((field) => {
+    const newOrder = pagination.filters.sortOrder === 'asc' ? 'desc' : 'asc';
+    pagination.setSorting(field, newOrder);
+  }, [pagination]);
+
+  // Handle limit change
+  const handleLimitChange = useCallback((newLimit) => {
+    pagination.setLimit(parseInt(newLimit, 10));
+  }, [pagination]);
+
+  // Add animations
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#f0f4ff', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem 1.5rem' }}>
 
-        {/* ── Page header ── */}
-        <div className="fa1" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2rem' }}>
+        {/* Header with Sync Button */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
-            <p style={{ margin: '0 0 .35rem', color: '#94a3b8', fontSize: '.75rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-              Product Catalogue
+            <h1 style={{ margin: 0, fontSize: '1.9rem', fontWeight: '800', color: '#0f172a' }}>Items</h1>
+            <p style={{ margin: '0.5rem 0 0', color: '#94a3b8', fontSize: '.875rem' }}>
+              Zoho Books Inventory (Read-Only)
             </p>
-            <h1 style={{ margin: 0, fontSize: '1.9rem', fontWeight: '800', color: '#0f172a', letterSpacing: '-.03em' }}>
-              Items
-            </h1>
           </div>
           <div style={{ display: 'flex', gap: '.75rem' }}>
-            <button 
-              className="is-primary-btn" 
-              onClick={() => handleOpenModal()}
-              disabled={isAddingItem}
+            {/* Sync Button with loading state */}
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              style={{
+                background: isSyncing ? '#9ca3af' : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                border: 'none',
+                borderRadius: '12px',
+                padding: '.7rem 1.4rem',
+                cursor: isSyncing ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '.5rem',
+                opacity: isSyncing ? 0.6 : 1,
+                transition: 'all 0.2s',
+                color: 'white',
+                fontWeight: '600',
+                boxShadow: isSyncing ? 'none' : '0 4px 12px rgba(99,102,241,0.35)',
+              }}
             >
-              <Plus size={17} /> Add Item
+              {isSyncing ? (
+                <Loader2 size={17} style={{ animation: 'spin 1s linear infinite' }} />
+              ) : (
+                <RefreshCw size={17} />
+              )}
+              {isSyncing ? 'Syncing...' : 'Sync from Zoho'}
             </button>
-            <button className="is-secondary-btn" onClick={onBack}>
+
+     
+
+            {/* Back Button */}
+            <button
+              onClick={onBack}
+              style={{
+                background: 'white',
+                border: '1px solid #e2e8f0',
+                borderRadius: '12px',
+                padding: '.7rem 1.4rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '.5rem',
+                transition: 'all 0.2s',
+              }}
+            >
               <ArrowLeft size={17} /> Back
             </button>
           </div>
         </div>
 
-        {/* ── Stat cards ── */}
-        <div className="fa2" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
-          {[
-            { cls: 'amber',   label: 'Total Items',    value: items.length,                                                                       iconBg: '#fffbeb', iconColor: '#d97706', Icon: Package },
-            { cls: 'violet',  label: 'Showing',        value: filtered.length,                                                                    iconBg: '#f5f3ff', iconColor: '#8b5cf6', Icon: Search  },
-            { cls: 'emerald', label: 'Avg. Price (AED)',value: `${avgPrice.toLocaleString('en-AE',{minimumFractionDigits:2,maximumFractionDigits:2})}`, iconBg: '#ecfdf5', iconColor: '#059669', Icon: Tag, small: true },
-          ].map(({ cls, label, value, iconBg, iconColor, Icon, small }) => (
-            <div key={label} className={`is-stat ${cls}`}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                <div style={{ background: iconBg, borderRadius: '10px', padding: '.5rem', display: 'flex', color: iconColor }}>
-                  <Icon size={20} />
-                </div>
+        {/* Stats Cards */}
+        {!stats.loading && stats.data && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.75rem' }}>
+            {[
+              { label: 'Total Items', value: stats.data.totalItems || 0 },
+              { label: 'Avg. Price', value: `AED ${(stats.data.averagePrice || 0).toFixed(2)}` },
+              { label: 'Highest Price', value: `AED ${(stats.data.highestPrice || 0).toFixed(2)}` },
+            ].map(({ label, value }) => (
+              <div
+                key={label}
+                style={{
+                  background: 'white',
+                  borderRadius: '12px',
+                  padding: '1.5rem',
+                  boxShadow: '0 1px 3px rgba(0,0,0,.06)',
+                }}
+              >
+                <p style={{ margin: 0, color: '#94a3b8', fontSize: '.75rem', fontWeight: '600', marginBottom: '.5rem' }}>
+                  {label}
+                </p>
+                <p style={{ margin: 0, color: '#0f172a', fontSize: '1.5rem', fontWeight: '800' }}>{value}</p>
               </div>
-              <p style={{ margin: '0 0 .25rem', color: '#94a3b8', fontSize: '.72rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</p>
-              <p style={{ margin: 0, color: '#0f172a', fontSize: small ? '1.2rem' : '1.8rem', fontWeight: '800', letterSpacing: '-.02em', lineHeight: 1.1 }}>{value}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
-        {/* ── Search & Sort bar ── */}
-        <div className="fa3" style={{ display: 'flex', gap: '.75rem', marginBottom: '1.75rem', alignItems: 'center' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Search size={15} style={{ position: 'absolute', left: '.9rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none' }} />
+        {/* Search & Controls */}
+        <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: '200px' }}>
+            <Search size={15} style={{ position: 'absolute', left: '.9rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
             <input
-              className="is-search"
               type="text"
-              placeholder="Search by name or description…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search items by name, SKU..."
+              onChange={(e) => handleSearch(e.target.value)}
+              style={{
+                background: 'white',
+                border: '1.5px solid #e2e8f0',
+                borderRadius: '12px',
+                padding: '.65rem 1rem .65rem 2.6rem',
+                fontSize: '.875rem',
+                fontFamily: 'inherit',
+                outline: 'none',
+                width: '100%',
+                transition: 'all 0.2s',
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#6366f1';
+                e.currentTarget.style.boxShadow = '0 0 0 3px rgba(99,102,241,.12)';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#e2e8f0';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             />
           </div>
-          <select className="is-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-            <option value="name">Sort: Name A–Z</option>
-            <option value="price-low">Price: Low to High</option>
-            <option value="price-high">Price: High to Low</option>
-            <option value="date">Date Added</option>
-          </select>
-        </div>
 
-        {/* ── Items grid ── */}
-        <div className="fa4">
-          {filtered.length === 0 ? (
-            <div style={{ background: 'white', borderRadius: '18px', boxShadow: '0 1px 3px rgba(0,0,0,.06), 0 4px 20px rgba(0,0,0,.05)', padding: '4rem', textAlign: 'center' }}>
-              <div style={{ width: 64, height: 64, background: '#f1f5f9', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem' }}>
-                <Package size={28} style={{ color: '#cbd5e1' }} />
-              </div>
-              <p style={{ color: '#475569', margin: 0, fontWeight: '600' }}>
-                {searchTerm ? `No results for "${searchTerm}"` : 'No items yet'}
-              </p>
-              <p style={{ color: '#94a3b8', margin: '.4rem 0 1.5rem', fontSize: '.875rem' }}>
-                {searchTerm ? 'Try a different keyword.' : 'Add your first item to build your catalogue.'}
-              </p>
-              {!searchTerm && (
-                <button className="is-primary-btn" style={{ margin: '0 auto' }} onClick={() => handleOpenModal()}>
-                  <Plus size={16} /> Add First Item
-                </button>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem' }}>
-              {filtered.map((item) => {
-                const isItemDeleting = deletingId === item._id; // Use local state instead of hook
-                
-                return (
-                  <div key={item._id} className="is-card">
+          {mode === 'browse' && (
+            <>
+              <select
+                value={pagination.filters.sortBy}
+                onChange={(e) => handleSortChange(e.target.value)}
+                style={{
+                  background: 'white',
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '12px',
+                  padding: '.65rem 1rem',
+                  fontSize: '.875rem',
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  minWidth: '150px',
+                  outline: 'none',
+                }}
+              >
+                <option value="name">Sort: Name</option>
+                <option value="price">Sort: Price</option>
+                <option value="sku">Sort: SKU</option>
+                <option value="status">Sort: Status</option>
+              </select>
 
-                    {/* Image */}
-                    <div className="is-img-area">
-                      {item.imagePath ? (
-                        <img
-                          src={`http://13.232.90.158:5000${item.imagePath}`}
-                          alt={item.name}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform .3s' }}
-                          onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.04)'}
-                          onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                        />
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', color: '#cbd5e1', gap: '.5rem' }}>
-                          <div style={{ width: 52, height: 52, borderRadius: '14px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <ImageIcon size={24} style={{ color: '#94a3b8' }} />
-                          </div>
-                          <span style={{ fontSize: '.75rem', color: '#94a3b8' }}>No image</span>
-                        </div>
-                      )}
-                      {/* Price badge overlaid */}
-                      <div className="is-price-badge">
-                        AED {parseFloat(item.price).toFixed(2)}
-                      </div>
-                    </div>
-
-                    {/* Body */}
-                    <div style={{ padding: '1.1rem 1.1rem .9rem', flex: 1, display: 'flex', flexDirection: 'column' }}>
-                      <h3 style={{ margin: '0 0 .4rem', fontSize: '.9375rem', fontWeight: '700', color: '#0f172a', lineHeight: 1.3 }}>
-                        {item.name}
-                      </h3>
-                      {item.description ? (
-                        <p style={{ margin: '0 0 .75rem', color: '#64748b', fontSize: '.8125rem', lineHeight: 1.5, flex: 1, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                          {item.description}
-                        </p>
-                      ) : (
-                        <p style={{ margin: '0 0 .75rem', color: '#cbd5e1', fontSize: '.8125rem', fontStyle: 'italic', flex: 1 }}>No description</p>
-                      )}
-
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: '.5rem', paddingTop: '.75rem', borderTop: '1px solid #f1f5f9' }}>
-                        <button 
-                          className="is-card-btn edit" 
-                          onClick={() => handleOpenModal(item)}
-                          disabled={isItemDeleting || isSubmitting}
-                        >
-                          <Edit2 size={14} /> Edit
-                        </button>
-                        <button 
-                          className="is-card-btn del" 
-                          onClick={() => handleDelete(item._id, item.name)}
-                          disabled={isItemDeleting || isSubmitting}
-                        >
-                          {isItemDeleting ? <><Trash2 size={14} /> Deleting...</> : <><Trash2 size={14} /> Delete</>}
-                        </button>
-                      </div>
-                    </div>
-
-                  </div>
-                );
-              })}
-            </div>
+              <select
+                value={pagination.filters.limit}
+                onChange={(e) => handleLimitChange(e.target.value)}
+                style={{
+                  background: 'white',
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: '12px',
+                  padding: '.65rem 1rem',
+                  fontSize: '.875rem',
+                  fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  minWidth: '100px',
+                  outline: 'none',
+                }}
+              >
+                <option value="10">10/page</option>
+                <option value="25">25/page</option>
+                <option value="50">50/page</option>
+                <option value="100">100/page</option>
+              </select>
+            </>
           )}
         </div>
 
-      </div>
-
-      {/* ── Modal ── */}
-      {showModal && (
-        <div className="is-overlay" onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) closeModal(); }}>
-          <div className="is-modal">
-
-            {/* Modal header */}
-            <div style={{ padding: '1.5rem 1.5rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', color: '#0f172a', letterSpacing: '-.02em' }}>
-                  {editingId ? 'Edit Item' : 'Add New Item'}
-                </h2>
-                <p style={{ margin: '.2rem 0 0', color: '#94a3b8', fontSize: '.8rem' }}>
-                  {editingId ? 'Update the item details below.' : 'Fill in the details to add to your catalogue.'}
-                </p>
-              </div>
-              <button 
-                onClick={closeModal} 
-                disabled={isSubmitting}
-                style={{ background: '#f1f5f9', border: 'none', cursor: isSubmitting ? 'not-allowed' : 'pointer', borderRadius: '10px', width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexShrink: 0, transition: 'background .15s', opacity: isSubmitting ? 0.5 : 1 }}
-                onMouseEnter={(e) => { if (!isSubmitting) e.currentTarget.style.background = '#e2e8f0'; }}
-                onMouseLeave={(e) => { if (!isSubmitting) e.currentTarget.style.background = '#f1f5f9'; }}
-              >
-                <X size={18} />
-              </button>
+        {/* Items Display */}
+        {currentLoading ? (
+          <div style={{ textAlign: 'center', padding: '4rem' }}>
+            <Loader2 size={32} style={{ color: '#cbd5e1', margin: '0 auto 1rem', animation: 'spin 1s linear infinite' }} />
+            <p style={{ color: '#475569', margin: 0 }}>Loading items...</p>
+          </div>
+        ) : currentError ? (
+          <div style={{ background: 'white', borderRadius: '12px', padding: '2rem', textAlign: 'center' }}>
+            <AlertCircle size={32} style={{ color: '#dc2626', margin: '0 auto 1rem' }} />
+            <p style={{ color: '#dc2626', margin: 0, fontWeight: '600' }}>Error: {currentError}</p>
+            <p style={{ color: '#94a3b8', margin: '.5rem 0 0', fontSize: '.875rem' }}>Please try refreshing the page.</p>
+          </div>
+        ) : !currentItems || currentItems.length === 0 ? (
+          <div style={{ background: 'white', borderRadius: '12px', padding: '4rem', textAlign: 'center' }}>
+            <Package size={48} style={{ color: '#cbd5e1', margin: '0 auto 1rem' }} />
+            <p style={{ color: '#475569', margin: 0, fontWeight: '600' }}>
+              {search.query ? `No items match "${search.query}"` : 'No items found'}
+            </p>
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              style={{
+                marginTop: '1rem',
+                padding: '0.5rem 1rem',
+                background: '#6366f1',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '0.875rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              {isSyncing ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={16} />}
+              {isSyncing ? 'Syncing...' : 'Sync from Zoho'}
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Items Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+              {currentItems.map((item) => (
+                <ItemCard
+                  key={item._id}
+                  item={item}
+                  onEdit={() => console.log('Edit:', item._id)}
+                  onDelete={() => console.log('Delete:', item._id)}
+                  isDeleting={deletingId === item._id}
+                />
+              ))}
             </div>
 
-            <form onSubmit={handleSubmit} style={{ padding: '1.25rem 1.5rem 1.5rem' }}>
+            {/* Info & Pagination */}
+            <div style={{ background: 'white', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 1px 3px rgba(0,0,0,.06)' }}>
+              <p style={{ margin: '0 0 1rem', color: '#0f172a', fontWeight: '600' }}>
+                Page {safePageInfo.page} of {safePageInfo.totalPages} | Total: {safePageInfo.totalItems}
+              </p>
 
-              {/* Name */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
-                  <Package size={14} style={{ color: '#6366f1' }} /> Item Name <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input 
-                  className="is-field" 
-                  type="text" 
-                  name="name" 
-                  placeholder="e.g. Industrial Bearing 6205" 
-                  value={formData.name} 
-                  onChange={handleChange} 
-                  required 
-                  disabled={isSubmitting}
+              {mode === 'browse' && safePageInfo.totalPages > 1 && (
+                <PaginationControls
+                  pagination={safePageInfo}
+                  onPageChange={handlePageChange}
+                  loading={currentLoading}
                 />
-              </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
-              {/* Price */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
-                  <Tag size={14} style={{ color: '#6366f1' }} /> Price (AED) <span style={{ color: '#ef4444' }}>*</span>
-                </label>
-                <input 
-                  className="is-field" 
-                  type="number" 
-                  name="price" 
-                  placeholder="0.00" 
-                  value={formData.price} 
-                  onChange={handleChange} 
-                  required 
-                  min="0" 
-                  step="0.01"
-                  disabled={isSubmitting}
-                />
-              </div>
-
-              {/* Description */}
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
-                  Description
-                  <span style={{ color: '#94a3b8', fontWeight: '400', marginLeft: '.25rem' }}>(optional)</span>
-                </label>
-                <textarea 
-                  className="is-field" 
-                  name="description" 
-                  placeholder="Describe the item, specs, usage…" 
-                  value={formData.description} 
-                  onChange={handleChange} 
-                  rows={3} 
-                  style={{ resize: 'vertical', minHeight: '80px' }}
-                  disabled={isSubmitting}
-                />
-              </div>
-
-              {/* Image upload */}
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '.4rem', fontWeight: '600', color: '#374151', marginBottom: '.4rem', fontSize: '.8125rem' }}>
-                  <ImageIcon size={14} style={{ color: '#6366f1' }} /> Item Image
-                  <span style={{ color: '#94a3b8', fontWeight: '400', marginLeft: '.25rem' }}>(optional)</span>
-                </label>
-
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  id="is-img-input" 
-                  style={{ display: 'none' }} 
-                  onChange={(e) => handleImageChange(e.target.files[0])}
-                  disabled={isSubmitting}
-                />
-
-                {imagePreview ? (
-                  <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', border: '1.5px solid #e2e8f0' }}>
-                    <img src={imagePreview} alt="Preview" style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', display: 'block' }} />
-                    <button
-                      type="button"
-                      onClick={() => { setImagePreview(null); setFormData(prev => ({ ...prev, image: null })); }}
-                      disabled={isSubmitting}
-                      style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(239,68,68,.9)', color: 'white', border: 'none', borderRadius: '8px', width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: isSubmitting ? 'not-allowed' : 'pointer', opacity: isSubmitting ? 0.5 : 1 }}
-                    >
-                      <X size={14} />
-                    </button>
-                    <label htmlFor="is-img-input" style={{ position: 'absolute', bottom: 8, right: 8, background: 'rgba(255,255,255,.9)', color: '#6366f1', border: '1.5px solid #e0e3ff', borderRadius: '8px', padding: '.3rem .7rem', fontSize: '.75rem', fontWeight: '600', cursor: isSubmitting ? 'not-allowed' : 'pointer', opacity: isSubmitting ? 0.5 : 1 }}>
-                      Change
-                    </label>
-                  </div>
-                ) : (
-                  <label
-                    htmlFor="is-img-input"
-                    className={`is-dropzone${dragOver ? ' over' : ''}`}
-                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                    onDragLeave={() => setDragOver(false)}
-                    onDrop={(e) => { e.preventDefault(); setDragOver(false); handleImageChange(e.dataTransfer.files[0]); }}
-                    style={{ cursor: isSubmitting ? 'not-allowed' : 'pointer', opacity: isSubmitting ? 0.5 : 1 }}
-                  >
-                    <div style={{ width: 44, height: 44, borderRadius: '12px', background: '#eff1ff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto .75rem', color: '#6366f1' }}>
-                      <Upload size={20} />
-                    </div>
-                    <p style={{ margin: 0, color: '#475569', fontSize: '.875rem', fontWeight: '600' }}>Click to upload or drag & drop</p>
-                    <p style={{ margin: '.25rem 0 0', color: '#94a3b8', fontSize: '.75rem' }}>JPG, PNG, WEBP up to 5MB</p>
-                  </label>
-                )}
-              </div>
-
-              {/* Buttons */}
-              <div style={{ display: 'flex', gap: '.75rem', justifyContent: 'flex-end', paddingTop: '1rem', borderTop: '1px solid #f1f5f9' }}>
-                <button 
-                  type="button" 
-                  className="is-cancel-btn" 
-                  onClick={closeModal}
-                  disabled={isSubmitting}
-                >
-                  <X size={16} /> Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  className="is-submit-btn"
-                  disabled={isSubmitting}
-                >
-                  <Save size={16} /> 
-                  {isSubmitting ? 'Saving...' : (editingId ? 'Update Item' : 'Add Item')}
-                </button>
-              </div>
-
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Toast */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }

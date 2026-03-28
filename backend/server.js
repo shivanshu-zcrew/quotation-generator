@@ -4,7 +4,8 @@ const cors    = require('cors');
 const cloudinary = require('cloudinary').v2;
 
 const connectDB = require('./config/db');
-
+const redisService = require('./config/redisService'); 
+const ItemSyncService = require('./utils/itemsSync');
 const app = express();
 
 // ── CORS Configuration ───────────────────────────────────────────────────
@@ -98,6 +99,28 @@ app.post('/api/zoho/create-estimate', async (req, res) => {
   }
 });
 
+// ── Redis Health Check Endpoint ───────────────────────────────────────────
+app.get('/api/health/redis', async (req, res) => {
+  try {
+    // Test Redis connection by setting and getting a test key
+    await redisService.set('health_check', 'ok', 10);
+    const result = await redisService.get('health_check');
+    
+    res.json({
+      success: true,
+      connected: redisService.isConnected,
+      test: result === 'ok' ? 'passed' : 'failed',
+      message: redisService.isConnected ? 'Redis is connected' : 'Redis is not connected'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      connected: false,
+      error: error.message
+    });
+  }
+});
+
 // ── Global error handler ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -112,14 +135,68 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'Something went wrong!', error: err.message });
 });
 
-// ── Start (for local development only) ────────────────────────────────────
+(async () => {
+   
+  const result = await ItemSyncService.syncFromZoho();
+  if (result.success) {
+     
+  } else {
+    console.error('❌ Initial sync failed:', result.error);
+  }
+})();
+
+const cron = require('node-cron');
+cron.schedule('*/30 * * * *', async () => {
+   
+  await ItemSyncService.syncFromZoho();
+});
+
+
+// ── Start Server (for local development only) ────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`CORS enabled for origins:`, allowedOrigins);
-    console.log(`Exchange rate routes available at /api/exchange-rates`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+     
+     
+     
+     
+  });
+
+  // ── Graceful Shutdown ─────────────────────────────────────────────────
+  const gracefulShutdown = async (signal) => {
+     
+    
+    server.close(async () => {
+       
+      
+      // Disconnect Redis
+      await redisService.disconnect();
+      
+       
+      process.exit(0);
+    });
+
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+      console.error('⚠️ Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  };
+
+  // Handle various shutdown signals
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
+
+  // Handle uncaught errors
+  process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    gracefulShutdown('uncaughtException');
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   });
 }
 

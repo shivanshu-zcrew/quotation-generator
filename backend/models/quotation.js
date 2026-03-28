@@ -125,7 +125,7 @@ class ExchangeRateService {
       try {
         console.log(`[ExchangeRateService] Fetching fresh rates for ${baseCurrency}...`);
         
-        const response = await axios.get(`https://api.frankfurter.app/latest?from=${baseCurrency}`, {
+        const response = await axios.get(`https://open.er-api.com/v6/latest/${baseCurrency}`, {
           timeout: 5000
         });
         
@@ -576,6 +576,24 @@ const quotationSchema = new mongoose.Schema(
       type: String, 
       default: '' 
     },
+   
+zohoEstimateId: {
+  type: String,
+  default: null,
+  index: true
+},
+zohoEstimateNumber: {
+  type: String,
+  default: null
+},
+zohoEstimateUrl: {
+  type: String,
+  default: null
+},
+zohoSyncedAt: {
+  type: Date,
+  default: null
+},
 
     // Award
     awardedBy: { 

@@ -29,20 +29,24 @@ export const useAuth = () => {
  * Hook to access customers and their CRUD operations
  * @returns {{ customers, addCustomer, updateCustomer, deleteCustomer, isLoading }}
  */
-export const useCustomers = () => {
+export const useCustomers = () => { 
   const customers = useAppStore((state) => state.customers);
   const addCustomer = useAppStore((state) => state.addCustomer);
   const updateCustomer = useAppStore((state) => state.updateCustomer);
   const deleteCustomer = useAppStore((state) => state.deleteCustomer);
   const addLoading = useAppStore((state) => state.operationInProgress.addCustomer);
+  const updateLoading = useAppStore((state) => state.operationInProgress.updateCustomer);
+  const deleteLoading = useAppStore((state) => state.operationInProgress.deleteCustomer);
+ 
+  const isLoading = addLoading || updateLoading || deleteLoading;
 
-  return useMemo(() => ({
+  return {
     customers,
     addCustomer,
     updateCustomer,
     deleteCustomer,
-    isLoading: addLoading,
-  }), [customers, addCustomer, updateCustomer, deleteCustomer, addLoading]);
+    isLoading,
+  };
 };
 
 /**
@@ -115,20 +119,12 @@ export const useAppState = () => {
   }), [loading, loadError, lastError, clearError]);
 };
 
-/**
- * Hook to check if a specific operation is in progress
- * Usage: const isDeleting = useIsOperationInProgress('deleteCustomer_123');
- * @param {string} key Operation key
- * @returns {boolean}
- */
+ 
 export const useIsOperationInProgress = (key) => {
   return useAppStore((state) => state.operationInProgress[key] === true);
 };
 
-/**
- * Hook to initialize store on mount (fetch data if user is logged in)
- * Call this once in your root App component
- */
+ 
 export const useInitializeApp = () => {
   const user = useAppStore((state) => state.user);
   const fetchAllData = useAppStore((state) => state.fetchAllData);
@@ -147,16 +143,10 @@ export const useInitializeApp = () => {
     }
   }, [user, fetchAllData]);
 };
-
-/**
- * Hook to access the full store (use sparingly to avoid unnecessary re-renders)
- */
+ 
 export const useAppStoreAll = () => useAppStore();
 
-/**
- * Hook to retry failed data load
- * @returns {{ retry, isRetrying }}
- */
+ 
 export const useRetryDataLoad = () => {
   const fetchAllData = useAppStore((state) => state.fetchAllData);
   const loading = useAppStore((state) => state.loading);
@@ -167,10 +157,7 @@ export const useRetryDataLoad = () => {
   }), [fetchAllData, loading]);
 };
 
-/**
- * Hook to get user role utilities
- * @returns {{ isAdmin, isCustomer, user }}
- */
+ 
 export const useUserRole = () => {
   const user = useAppStore((state) => state.user);
   
@@ -298,5 +285,38 @@ export const useOpsStats = () => {
     
     // Additional stats
     totalValue: stats?.totalValue || 0,
+  };
+};
+
+export const useItemSync = () => {
+  const syncItems = useAppStore((state) => state.syncItems);
+  const refreshItems = useAppStore((state) => state.refreshItems);
+  const getSyncStatus = useAppStore((state) => state.getSyncStatus);
+  const isSyncing = useAppStore((state) => state.operationInProgress?.syncItems === true);
+  
+  return {
+    syncItems,
+    refreshItems,
+    getSyncStatus,
+    isSyncing
+  };
+};
+
+
+export const useItemsWithSync = () => {
+  const items = useAppStore((state) => state.items);
+  const loading = useAppStore((state) => state.loading);
+  const error = useAppStore((state) => state.lastError);
+  const syncItems = useAppStore((state) => state.syncItems);
+  const refreshItems = useAppStore((state) => state.refreshItems);
+  const isSyncing = useAppStore((state) => state.operationInProgress?.syncItems === true);
+  
+  return {
+    items,
+    loading,
+    error,
+    syncItems,
+    refreshItems,
+    isSyncing
   };
 };

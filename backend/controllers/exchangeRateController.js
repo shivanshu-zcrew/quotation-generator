@@ -31,7 +31,7 @@ class ExchangeRateController {
       
       try {
         // Attempt to fetch fresh rates
-        console.log(`[ExchangeRate] Fetching fresh rates for ${base}...`);
+         
         rates = await ExchangeRateService.getRates(base);
         
         // Save to database
@@ -41,9 +41,9 @@ class ExchangeRateController {
           fetchedAt
         });
         
-        console.log(`[ExchangeRate] Fresh rates fetched successfully`);
+         
       } catch (apiError) {
-        console.error(`[ExchangeRate] API fetch failed:`, apiError.message);
+         
         
         // API failed - try to get most recent rates from database
         const cached = await ExchangeRate.findOne({ baseCurrency: base })
@@ -55,12 +55,12 @@ class ExchangeRateController {
           rates = cached.rates;
           fetchedAt = cached.fetchedAt;
           source = 'cache';
-          console.log(`[ExchangeRate] Using cached rates from ${fetchedAt}`);
+           
         } else {
           // No cache available - use fallback static rates
           rates = ExchangeRateService.getFallbackRates();
           source = 'fallback';
-          console.log(`[ExchangeRate] Using fallback static rates`);
+           
         }
       }
 
@@ -83,7 +83,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Fatal error in getRates:', error);
+       
       
       // Ultimate fallback - return static rates
       res.status(503).json({
@@ -160,9 +160,9 @@ class ExchangeRateController {
           timestamp: new Date()
         };
         
-        console.log(`[ExchangeRate] Converted ${amount} ${from} to ${result} ${to} using fresh rates`);
+         
       } catch (apiError) {
-        console.error(`[ExchangeRate] Conversion failed, trying cache:`, apiError.message);
+         
         
         // Try to get cached rates
         const cached = await ExchangeRate.findOne({ baseCurrency: from })
@@ -181,7 +181,7 @@ class ExchangeRateController {
             timestamp: cached.fetchedAt,
             cached: true
           };
-          console.log(`[ExchangeRate] Used cached rate: 1 ${from} = ${rate} ${to}`);
+           
         } else {
           // Try reverse conversion using AED as bridge
           try {
@@ -194,7 +194,7 @@ class ExchangeRateController {
             rate = result / amount;
             source = 'calculated-fallback';
             
-            console.log(`[ExchangeRate] Used calculated fallback rate: 1 ${from} = ${rate} ${to}`);
+             
           } catch (fallbackError) {
             // Ultimate fallback - use hardcoded approximate rates
             const approximateRates = {
@@ -219,7 +219,7 @@ class ExchangeRateController {
             
             result = amount * rate;
             source = 'hardcoded-fallback';
-            console.log(`[ExchangeRate] Used hardcoded fallback rate: 1 ${from} = ${rate} ${to}`);
+             
           }
         }
       }
@@ -237,7 +237,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Fatal error in convert:', error);
+       
       
       // Ultimate fallback - return original amount with warning
       res.status(503).json({
@@ -294,7 +294,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Error in getHistory:', error);
+       
       res.status(500).json({
         success: false,
         message: 'Error fetching rate history',
@@ -333,7 +333,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Error in getSupportedCurrencies:', error);
+       
       
       // Fallback - return just currency list
       const { CURRENCIES } = require('../models/quotation');
@@ -393,7 +393,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Error in refreshRates:', error);
+       
       res.status(500).json({
         success: false,
         message: 'Error refreshing rates',
@@ -450,7 +450,7 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('[ExchangeRate] Error in getStatus:', error);
+       
       res.status(500).json({
         success: false,
         message: 'Error checking status',

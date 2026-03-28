@@ -10,6 +10,7 @@ export const newPoint = () => ({
   id: `pt-${Date.now()}-${Math.random()}`,
   text: "",
 });
+
 export const newSection = () => ({
   id: `sec-${Date.now()}-${Math.random()}`,
   heading: "",
@@ -21,10 +22,18 @@ export const newSection = () => ({
 // sectionsToHTML  — for DB storage + PDF
 // ─────────────────────────────────────────────────────────────
 export const sectionsToHTML = (sections) => {
+  // Ensure sections is an array
+  const safeSections = Array.isArray(sections) ? sections : [];
   let sNum = 0;
-  return (sections || [])
+  
+  return safeSections
     .map((sec) => {
-      const filledPts = sec.points.filter((p) => p.text.trim());
+      // Skip if sec is undefined
+      if (!sec) return "";
+      
+      // Ensure points is an array
+      const points = Array.isArray(sec.points) ? sec.points : [];
+      const filledPts = points.filter((p) => p && p.text && p.text.trim());
       const imgSrc = sec.image || "";
 
       // Skip empty sections
@@ -96,9 +105,6 @@ export const htmlToSections = (html) => {
         const headingDiv = sectionDiv.querySelector(
           'div[style*="display:flex;align-items:baseline;gap:6px;"]'
         );
-        const headingSpan = headingDiv?.querySelector(
-          'span[style*="font-weight:700;color:#6366f1;"]'
-        );
         const headingTextSpan = headingDiv?.querySelector(
           'span[style*="font-weight:700;font-size:11px;color:#0f172a;"]'
         );
@@ -161,25 +167,43 @@ export const htmlToSections = (html) => {
 // TermsEditor  — edit mode
 // Props:  sections, onChange(sections[])
 // ─────────────────────────────────────────────────────────────
-export default function TermsEditor({ sections, onChange }) {
-  const updateSection = (id, patch) =>
-    onChange(sections.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+export default function TermsEditor({ sections = [], onChange }) {
+  // Ensure sections is an array
+  const safeSections = Array.isArray(sections) ? sections : [];
+  
+  const updateSection = (id, patch) => {
+    onChange(safeSections.map((s) => (s && s.id === id ? { ...s, ...patch } : s)));
+  };
 
   const addPoint = (secId) => {
-    const sec = sections.find((s) => s.id === secId);
-    updateSection(secId, { points: [...sec.points, newPoint()] });
+    const sec = safeSections.find((s) => s && s.id === secId);
+    if (sec) {
+      // Ensure points is an array before spreading
+      const currentPoints = Array.isArray(sec.points) ? sec.points : [];
+      updateSection(secId, { points: [...currentPoints, newPoint()] });
+    }
   };
 
   const deletePoint = (secId, ptId) => {
-    const sec = sections.find((s) => s.id === secId);
-    updateSection(secId, { points: sec.points.filter((p) => p.id !== ptId) });
+    const sec = safeSections.find((s) => s && s.id === secId);
+    if (sec) {
+      const currentPoints = Array.isArray(sec.points) ? sec.points : [];
+      updateSection(secId, { 
+        points: currentPoints.filter((p) => p && p.id !== ptId) 
+      });
+    }
   };
 
   const updatePoint = (secId, ptId, text) => {
-    const sec = sections.find((s) => s.id === secId);
-    updateSection(secId, {
-      points: sec.points.map((p) => (p.id === ptId ? { ...p, text } : p)),
-    });
+    const sec = safeSections.find((s) => s && s.id === secId);
+    if (sec) {
+      const currentPoints = Array.isArray(sec.points) ? sec.points : [];
+      updateSection(secId, {
+        points: currentPoints.map((p) => 
+          p && p.id === ptId ? { ...p, text } : p
+        ),
+      });
+    }
   };
 
   const handleSectionImage = (secId, e) => {
@@ -193,265 +217,273 @@ export default function TermsEditor({ sections, onChange }) {
 
   return (
     <div>
-      {sections.map((sec, secIdx) => (
-        <div
-          key={sec.id}
-          style={{
-            background: "#fff",
-            border: "1.5px solid #e2e8f0",
-            borderRadius: "12px",
-            padding: "1rem 1.1rem",
-            marginBottom: "0.75rem",
-            boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
-          }}
-        >
-          {/* Section header */}
+      {safeSections.map((sec, secIdx) => {
+        if (!sec) return null;
+        
+        const points = Array.isArray(sec.points) ? sec.points : [];
+        
+        return (
           <div
+            key={sec.id}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              marginBottom: "0.6rem",
-            }}
-          >
-            <span
-              style={{
-                background: "#eff1ff",
-                color: "#6366f1",
-                borderRadius: "6px",
-                padding: "2px 9px",
-                fontSize: "0.72rem",
-                fontWeight: "700",
-              }}
-            >
-              Section {secIdx + 1}
-            </span>
-            <div style={{ flex: 1 }} />
-            {sections.length > 1 && (
-              <button
-                onClick={() =>
-                  onChange(sections.filter((s) => s.id !== sec.id))
-                }
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "#ef4444",
-                  padding: "3px",
-                  display: "flex",
-                  borderRadius: "5px",
-                }}
-              >
-                <Trash2 size={15} />
-              </button>
-            )}
-          </div>
-
-          {/* Heading */}
-          <input
-            value={sec.heading}
-            onChange={(e) => updateSection(sec.id, { heading: e.target.value })}
-            placeholder="Section heading (e.g. 1. Scope of Work)"
-            onFocus={(e) => (e.target.style.borderBottomColor = "#6366f1")}
-            onBlur={(e) => (e.target.style.borderBottomColor = "#e2e8f0")}
-            style={{
-              width: "100%",
-              border: "none",
-              borderBottom: "2px solid #e2e8f0",
-              padding: "0.3rem 0.1rem",
-              fontSize: "0.9375rem",
-              fontWeight: "700",
-              color: "#0f172a",
-              outline: "none",
-              background: "transparent",
+              background: "#fff",
+              border: "1.5px solid #e2e8f0",
+              borderRadius: "12px",
+              padding: "1rem 1.1rem",
               marginBottom: "0.75rem",
-              fontFamily: "inherit",
-              boxSizing: "border-box",
-            }}
-          />
-
-          {/* Points */}
-          <div style={{ marginBottom: "0.6rem" }}>
-            {sec.points.map((pt, ptIdx) => (
-              <div
-                key={pt.id}
-                style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: "0.4rem",
-                  marginBottom: "0.35rem",
-                }}
-              >
-                <span
-                  style={{
-                    color: "#94a3b8",
-                    fontSize: "0.8rem",
-                    paddingTop: "0.42rem",
-                    width: "18px",
-                    textAlign: "right",
-                    flexShrink: 0,
-                  }}
-                >
-                  {ptIdx + 1}.
-                </span>
-                <textarea
-                  value={pt.text}
-                  rows={1}
-                  placeholder={`Point ${ptIdx + 1}`}
-                  onChange={(e) => {
-                    e.target.style.height = "auto";
-                    e.target.style.height = e.target.scrollHeight + "px";
-                    updatePoint(sec.id, pt.id, e.target.value);
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#6366f1")}
-                  onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
-                  style={{
-                    flex: 1,
-                    border: "1px solid #e2e8f0",
-                    borderRadius: "7px",
-                    padding: "0.38rem 0.6rem",
-                    fontSize: "0.875rem",
-                    color: "#374151",
-                    outline: "none",
-                    fontFamily: "inherit",
-                    resize: "none",
-                    lineHeight: "1.5",
-                    minHeight: "36px",
-                    overflow: "hidden",
-                  }}
-                />
-                {sec.points.length > 1 && (
-                  <button
-                    onClick={() => deletePoint(sec.id, pt.id)}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#ef4444",
-                      padding: "4px",
-                      paddingTop: "0.42rem",
-                      display: "flex",
-                      borderRadius: "5px",
-                    }}
-                  >
-                    <X size={13} />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* Actions */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              flexWrap: "wrap",
+              boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
             }}
           >
-            <button
-              onClick={() => addPoint(sec.id)}
-              style={{
-                background: "#eff1ff",
-                color: "#6366f1",
-                border: "none",
-                borderRadius: "7px",
-                padding: "0.3rem 0.7rem",
-                fontSize: "0.78rem",
-                fontWeight: "600",
-                cursor: "pointer",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                fontFamily: "inherit",
-              }}
-            >
-              <Plus size={12} /> Add Point
-            </button>
-
-            <input
-              type="file"
-              accept="image/*"
-              id={`sec-img-${sec.id}`}
-              style={{ display: "none" }}
-              onChange={(e) => handleSectionImage(sec.id, e)}
-            />
-            <label
-              htmlFor={`sec-img-${sec.id}`}
-              style={{
-                background: sec.image ? "#fef3c7" : "#f0fdf4",
-                color: sec.image ? "#92400e" : "#065f46",
-                border: "none",
-                borderRadius: "7px",
-                padding: "0.3rem 0.7rem",
-                fontSize: "0.78rem",
-                fontWeight: "600",
-                cursor: "pointer",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                fontFamily: "inherit",
-              }}
-            >
-              <Upload size={12} /> {sec.image ? "Replace Image" : "Add Image"}
-            </label>
-          </div>
-
-          {/* Image preview */}
-          {sec.image && (
+            {/* Section header */}
             <div
               style={{
-                marginTop: "0.75rem",
-                position: "relative",
-                display: "inline-block",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "0.6rem",
               }}
             >
-              <img
-                src={
-                  sec.image.startsWith("data:")
-                    ? sec.image
-                    : `${BASE_URL}${sec.image}`
-                }
-                alt={`section-${secIdx}`}
+              <span
                 style={{
-                  maxWidth: "280px",
-                  maxHeight: "180px",
-                  objectFit: "contain",
-                  borderRadius: "8px",
-                  border: "1px solid #e2e8f0",
-                  display: "block",
-                }}
-              />
-              <button
-                onClick={() => updateSection(sec.id, { image: null })}
-                style={{
-                  position: "absolute",
-                  top: "-7px",
-                  right: "-7px",
-                  background: "#ef4444",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: "20px",
-                  height: "20px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  cursor: "pointer",
-                  fontSize: "11px",
+                  background: "#eff1ff",
+                  color: "#6366f1",
+                  borderRadius: "6px",
+                  padding: "2px 9px",
+                  fontSize: "0.72rem",
+                  fontWeight: "700",
                 }}
               >
-                ×
-              </button>
+                Section {secIdx + 1}
+              </span>
+              <div style={{ flex: 1 }} />
+              {safeSections.length > 1 && (
+                <button
+                  onClick={() =>
+                    onChange(safeSections.filter((s) => s && s.id !== sec.id))
+                  }
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "#ef4444",
+                    padding: "3px",
+                    display: "flex",
+                    borderRadius: "5px",
+                  }}
+                >
+                  <Trash2 size={15} />
+                </button>
+              )}
             </div>
-          )}
-        </div>
-      ))}
+
+            {/* Heading */}
+            <input
+              value={sec.heading || ""}
+              onChange={(e) => updateSection(sec.id, { heading: e.target.value })}
+              placeholder="Section heading (e.g. 1. Scope of Work)"
+              onFocus={(e) => (e.target.style.borderBottomColor = "#6366f1")}
+              onBlur={(e) => (e.target.style.borderBottomColor = "#e2e8f0")}
+              style={{
+                width: "100%",
+                border: "none",
+                borderBottom: "2px solid #e2e8f0",
+                padding: "0.3rem 0.1rem",
+                fontSize: "0.9375rem",
+                fontWeight: "700",
+                color: "#0f172a",
+                outline: "none",
+                background: "transparent",
+                marginBottom: "0.75rem",
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+              }}
+            />
+
+            {/* Points */}
+            <div style={{ marginBottom: "0.6rem" }}>
+              {points.map((pt, ptIdx) => (
+                <div
+                  key={pt?.id || ptIdx}
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "0.4rem",
+                    marginBottom: "0.35rem",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "#94a3b8",
+                      fontSize: "0.8rem",
+                      paddingTop: "0.42rem",
+                      width: "18px",
+                      textAlign: "right",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {ptIdx + 1}.
+                  </span>
+                  <textarea
+                    value={pt?.text || ""}
+                    rows={1}
+                    placeholder={`Point ${ptIdx + 1}`}
+                    onChange={(e) => {
+                      e.target.style.height = "auto";
+                      e.target.style.height = e.target.scrollHeight + "px";
+                      if (pt?.id) {
+                        updatePoint(sec.id, pt.id, e.target.value);
+                      }
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "#6366f1")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
+                    style={{
+                      flex: 1,
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "7px",
+                      padding: "0.38rem 0.6rem",
+                      fontSize: "0.875rem",
+                      color: "#374151",
+                      outline: "none",
+                      fontFamily: "inherit",
+                      resize: "none",
+                      lineHeight: "1.5",
+                      minHeight: "36px",
+                      overflow: "hidden",
+                    }}
+                  />
+                  {points.length > 1 && (
+                    <button
+                      onClick={() => pt?.id && deletePoint(sec.id, pt.id)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "#ef4444",
+                        padding: "4px",
+                        paddingTop: "0.42rem",
+                        display: "flex",
+                        borderRadius: "5px",
+                      }}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Actions */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                onClick={() => addPoint(sec.id)}
+                style={{
+                  background: "#eff1ff",
+                  color: "#6366f1",
+                  border: "none",
+                  borderRadius: "7px",
+                  padding: "0.3rem 0.7rem",
+                  fontSize: "0.78rem",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  fontFamily: "inherit",
+                }}
+              >
+                <Plus size={12} /> Add Point
+              </button>
+
+              <input
+                type="file"
+                accept="image/*"
+                id={`sec-img-${sec.id}`}
+                style={{ display: "none" }}
+                onChange={(e) => handleSectionImage(sec.id, e)}
+              />
+              <label
+                htmlFor={`sec-img-${sec.id}`}
+                style={{
+                  background: sec.image ? "#fef3c7" : "#f0fdf4",
+                  color: sec.image ? "#92400e" : "#065f46",
+                  border: "none",
+                  borderRadius: "7px",
+                  padding: "0.3rem 0.7rem",
+                  fontSize: "0.78rem",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  fontFamily: "inherit",
+                }}
+              >
+                <Upload size={12} /> {sec.image ? "Replace Image" : "Add Image"}
+              </label>
+            </div>
+
+            {/* Image preview */}
+            {sec.image && (
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  position: "relative",
+                  display: "inline-block",
+                }}
+              >
+                <img
+                  src={
+                    sec.image.startsWith("data:")
+                      ? sec.image
+                      : `${BASE_URL}${sec.image}`
+                  }
+                  alt={`section-${secIdx}`}
+                  style={{
+                    maxWidth: "280px",
+                    maxHeight: "180px",
+                    objectFit: "contain",
+                    borderRadius: "8px",
+                    border: "1px solid #e2e8f0",
+                    display: "block",
+                  }}
+                />
+                <button
+                  onClick={() => updateSection(sec.id, { image: null })}
+                  style={{
+                    position: "absolute",
+                    top: "-7px",
+                    right: "-7px",
+                    background: "#ef4444",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "50%",
+                    width: "20px",
+                    height: "20px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Add Section */}
       <button
-        onClick={() => onChange([...sections, newSection()])}
+        onClick={() => onChange([...safeSections, newSection()])}
         style={{
           width: "100%",
           padding: "0.7rem",
@@ -475,9 +507,17 @@ export default function TermsEditor({ sections, onChange }) {
   );
 }
 
-export function TermsViewer({ sections }) {
-  const hasContent = (sections || []).some(
-    (s) => s.heading || s.points.some((p) => p.text.trim()) || s.image
+// ─────────────────────────────────────────────────────────────
+// TermsViewer  — view mode
+// ─────────────────────────────────────────────────────────────
+export function TermsViewer({ sections = [] }) {
+  // Ensure sections is an array
+  const safeSections = Array.isArray(sections) ? sections : [];
+  
+  const hasContent = safeSections.some(
+    (s) => s && ((s.heading || "").trim() || 
+           (Array.isArray(s.points) && s.points.some((p) => p && (p.text || "").trim())) || 
+           s.image)
   );
 
   if (!hasContent)
@@ -507,29 +547,34 @@ export function TermsViewer({ sections }) {
         borderRadius: "0.375rem",
       }}
     >
-      {sections.map((sec, i) => {
-        const filledPts = sec.points.filter((p) => p.text.trim());
+      {safeSections.map((sec, i) => {
+        if (!sec) return null;
+        
+        const points = Array.isArray(sec.points) ? sec.points : [];
+        const filledPts = points.filter((p) => p && (p.text || "").trim());
         const imgSrc = sec.image
           ? sec.image.startsWith("data:")
             ? sec.image
             : `${BASE_URL}${sec.image}`
           : null;
-        if (!sec.heading && !filledPts.length && !imgSrc) return null;
+          
+        if (!(sec.heading || "").trim() && !filledPts.length && !imgSrc) return null;
 
         sectionNum += 1;
         const sNum = sectionNum;
 
         return (
           <div
+            key={sec.id || i}
             style={{
               display: "flex",
               gap: "24px",
               justifyContent: "space-between",
-              borderBottom: "1px dotted grey",
-              padding: "1rem"
+              borderBottom: i < safeSections.length - 1 ? "1px dotted #d1d5db" : "none",
+              padding: "1rem 0",
             }}
           >
-            <div key={sec.id || i} style={{ marginBottom: "1.25rem" }}>
+            <div style={{ flex: 1 }}>
               {/* Section heading: "1. Heading text" */}
               <div
                 style={{
@@ -579,7 +624,7 @@ export function TermsViewer({ sections }) {
                 <div style={{ paddingLeft: "2rem" }}>
                   {filledPts.map((pt, j) => (
                     <div
-                      key={pt.id || j}
+                      key={pt?.id || j}
                       style={{
                         display: "flex",
                         alignItems: "flex-start",
@@ -606,22 +651,23 @@ export function TermsViewer({ sections }) {
                           flex: 1,
                         }}
                       >
-                        {pt.text}
+                        {pt?.text || ""}
                       </span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
             {/* Section image */}
             {imgSrc && (
-              <div style={{ paddingLeft: "2rem", marginTop: "0.75rem" }}>
+              <div style={{ flexShrink: 0 }}>
                 <img
                   src={imgSrc}
                   alt={`sec-${i}`}
                   style={{
-                    maxWidth: "100%",
-                    maxHeight: "200px",
+                    maxWidth: "200px",
+                    maxHeight: "150px",
                     borderRadius: "6px",
                     border: "1px solid #e2e8f0",
                     objectFit: "contain",
@@ -629,9 +675,7 @@ export function TermsViewer({ sections }) {
                 />
               </div>
             )}
-            
           </div>
-          
         );
       })}
     </div>

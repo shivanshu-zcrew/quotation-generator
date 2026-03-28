@@ -43,6 +43,23 @@ const getErrorMessage = (error) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// Helper function to extract data from API response
+// ─────────────────────────────────────────────────────────────
+const extractResponseData = (res) => {
+  // API returns: { data: {...}, message: "...", success: true }
+  // Extract the actual data object
+  if (res?.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
+    // Check if it has a 'data' property (nested structure)
+    if (res.data.data && typeof res.data.data === 'object') {
+      return res.data.data;
+    }
+    // Otherwise return the data directly
+    return res.data;
+  }
+  return res;
+};
+
+// ─────────────────────────────────────────────────────────────
 // Store
 // ─────────────────────────────────────────────────────────────
 export const useAppStore = create(
@@ -75,6 +92,12 @@ export const useAppStore = create(
         loadError:           null,
         operationInProgress: {},
         lastError:           null,
+
+        selectedCurrency: localStorage.getItem('selectedCurrency') || 'AED',
+gccCountries: [],        
+taxTreatments: [],       
+currencyOptions: [],    
+customerStats: null, 
 
         // ── Auth ─────────────────────────────────────────────
 
@@ -448,12 +471,18 @@ export const useAppStore = create(
           set({ loading: true, loadError: null });
 
           try {
-            const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes] = await Promise.all([
+            const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes, gccCountriesRes, taxTreatmentsRes, currencyOptionsRes] = await Promise.all([
               customerAPI.getAll().catch((err)       => { console.error('Customers fetch:', err);           return { data: [] }; }),
               itemAPI.getAll().catch((err)            => { console.error('Items fetch:', err);               return { data: [] }; }),
               companyAPI.getAll().catch((err)         => { console.error('Companies fetch:', err);           return { data: { companies: [] } }; }),
               exchangeRateAPI.getRates().catch((err)  => { console.error('Exchange rates fetch:', err);      return { data: null }; }),
               exchangeRateAPI.getSupported().catch((err) => { console.error('Currencies fetch:', err);       return { data: { currencies: null } }; }),
+              
+              customerAPI.getGccCountries().catch((err) => { console.error('GCC countries fetch:', err);   return { data: [] }; }),
+               
+              customerAPI.getTaxTreatments().catch((err) => { console.error('Tax treatments fetch:', err); return { data: [] }; }),
+             
+              customerAPI.getCurrencies().catch((err) => { console.error('Currency options fetch:', err);  return { data: [] }; }),
             ]);
 
             const parseData = (data) => (Array.isArray(data) ? data : data?.data ?? []);
@@ -465,6 +494,9 @@ export const useAppStore = create(
               companies,
               exchangeRates:       ratesRes.data,
               supportedCurrencies: currenciesRes.data?.currencies || null,
+              gccCountries:        gccCountriesRes.data || [],
+              taxTreatments:       taxTreatmentsRes.data || [],
+              currencyOptions:     currencyOptionsRes.data || [],
               loadError:  null,
               lastError:  null,
             });
@@ -496,24 +528,72 @@ export const useAppStore = create(
         addCustomer: async (data) => {
           set((s) => ({ operationInProgress: { ...s.operationInProgress, addCustomer: true } }));
           try {
+            // ✅ Validate tax data before sending
+            const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
+            const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
+            if (!trnValidation.valid) {
+              throw new Error(trnValidation.error);
+            }
+            
             const res = await customerAPI.create(data);
-            set((s) => ({ customers: [...s.customers, res.data], lastError: null }));
-            return { success: true };
+            console.log('📊 API Response:', res);
+            
+            const newCustomer = extractResponseData(res);
+            
+            console.log('✅ Extracted customer:', newCustomer);
+            
+            set((s) => ({ 
+              customers: [...s.customers, newCustomer], 
+              lastError: null 
+            }));
+            
+            // ✅ Refresh customer stats after adding
+            get().fetchCustomerStats();
+            
+            return { success: true, customer: newCustomer };
           } catch (error) {
+            console.error('❌ Add customer error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
             set((s) => ({ operationInProgress: { ...s.operationInProgress, addCustomer: false } }));
           }
         },
-
+        
+        // Update updateCustomer to include tax fields validation
         updateCustomer: async (id, data) => {
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
           try {
+            // ✅ Validate tax data if being updated
+            if (data.taxTreatment || data.taxRegistrationNumber) {
+              const existingCustomer = get().customers.find(c => c._id === id);
+              const taxTreatment = data.taxTreatment || existingCustomer?.taxTreatment;
+              const trn = data.taxRegistrationNumber !== undefined ? data.taxRegistrationNumber : existingCustomer?.taxRegistrationNumber;
+              
+              const trnValidation = get().validateTrn(trn, taxTreatment);
+              if (!trnValidation.valid) {
+                throw new Error(trnValidation.error);
+              }
+            }
+            
             const res = await customerAPI.update(id, data);
-            set((s) => ({ customers: s.customers.map((c) => (c._id === id ? res.data : c)), lastError: null }));
-            return { success: true };
+            console.log('📊 API Response:', res);
+            
+            const updatedCustomer = extractResponseData(res);
+            
+            console.log('✅ Extracted customer:', updatedCustomer);
+            
+            set((s) => ({ 
+              customers: s.customers.map((c) => (c._id === id ? updatedCustomer : c)), 
+              lastError: null 
+            }));
+            
+            // ✅ Refresh customer stats after update
+            get().fetchCustomerStats();
+            
+            return { success: true, customer: updatedCustomer };
           } catch (error) {
+            console.error('❌ Update customer error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
@@ -525,9 +605,13 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: true } }));
           try {
             await customerAPI.delete(id);
-            set((s) => ({ customers: s.customers.filter((c) => c._id !== id), lastError: null }));
+            set((s) => ({ 
+              customers: s.customers.filter((c) => c._id !== id), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
+            console.error('❌ Delete customer error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
@@ -535,15 +619,162 @@ export const useAppStore = create(
           }
         },
 
+        // ── Customer Tax & Currency Actions ─────────────────────────
+
+/**
+ * Fetch GCC countries for place of supply dropdown
+ */
+fetchGccCountries: async () => {
+  try {
+    const res = await customerAPI.getGccCountries();
+    const countries = res.data || [];
+    set({ gccCountries: countries });
+    return { success: true, countries };
+  } catch (error) {
+    console.error('Fetch GCC countries error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Fetch tax treatment options
+ */
+fetchTaxTreatments: async () => {
+  try {
+    const res = await customerAPI.getTaxTreatments();
+    const treatments = res.data || [];
+    set({ taxTreatments: treatments });
+    return { success: true, treatments };
+  } catch (error) {
+    console.error('Fetch tax treatments error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Fetch currency options
+ */
+fetchCurrencyOptions: async () => {
+  try {
+    const res = await customerAPI.getCurrencies();
+    const currencies = res.data || [];
+    set({ currencyOptions: currencies });
+    return { success: true, currencies };
+  } catch (error) {
+    console.error('Fetch currency options error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Fetch customer statistics with tax breakdown
+ */
+fetchCustomerStats: async () => {
+  set((s) => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: true } }));
+  try {
+    const res = await customerAPI.getStats();
+    const stats = res.data?.stats || res.data || null;
+    set({ customerStats: stats, lastError: null });
+    return { success: true, stats };
+  } catch (error) {
+    console.error('Fetch customer stats error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  } finally {
+    set((s) => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: false } }));
+  }
+},
+
+/**
+ * Fetch tax summary report
+ */
+fetchTaxSummary: async () => {
+  try {
+    const res = await customerAPI.getTaxSummary();
+    return { success: true, summary: res.data };
+  } catch (error) {
+    console.error('Fetch tax summary error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Get customers by tax treatment
+ */
+getCustomersByTaxTreatment: async (taxTreatment) => {
+  try {
+    const res = await customerAPI.getByTaxTreatment(taxTreatment);
+    const customers = res.data?.data || res.data || [];
+    return { success: true, customers };
+  } catch (error) {
+    console.error('Get customers by tax treatment error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Get customers by place of supply
+ */
+getCustomersByPlaceOfSupply: async (placeOfSupply) => {
+  try {
+    const res = await customerAPI.getByPlaceOfSupply(placeOfSupply);
+    const customers = res.data?.data || res.data || [];
+    return { success: true, customers };
+  } catch (error) {
+    console.error('Get customers by place of supply error:', error);
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Validate TRN before submission (frontend helper)
+ */
+validateTrn: (trn, taxTreatment) => {
+  if (taxTreatment === 'gcc_vat_registered') {
+    if (!trn || trn.trim().length === 0) {
+      return { valid: false, error: 'Tax Registration Number (TRN) is required for VAT registered customers' };
+    }
+    if (!/^\d{15}$/.test(trn.trim())) {
+      return { valid: false, error: 'TRN must be exactly 15 digits' };
+    }
+  }
+  return { valid: true };
+},
+
+/**
+ * Format TRN for display (groups of 3 digits)
+ */
+formatTrnForDisplay: (trn) => {
+  if (!trn) return '';
+  return trn.replace(/(\d{3})(?=\d)/g, '$1-').replace(/-$/, '');
+},
         // ── Item CRUD ─────────────────────────────────────────
 
         addItem: async (data) => {
           set((s) => ({ operationInProgress: { ...s.operationInProgress, addItem: true } }));
           try {
             const res = await itemAPI.create(data);
-            set((s) => ({ items: [...s.items, res.data], lastError: null }));
-            return { success: true };
+            console.log('📊 API Response:', res);
+            
+            // ✅ FIX: Extract the actual item data from nested response
+            const newItem = extractResponseData(res);
+            
+            console.log('✅ Extracted item:', newItem);
+            
+            set((s) => ({ 
+              items: [...s.items, newItem], 
+              lastError: null 
+            }));
+            
+            return { success: true, item: newItem };
           } catch (error) {
+            console.error('❌ Add item error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
@@ -555,9 +786,21 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`updateItem_${id}`]: true } }));
           try {
             const res = await itemAPI.update(id, data);
-            set((s) => ({ items: s.items.map((i) => (i._id === id ? res.data : i)), lastError: null }));
-            return { success: true };
+            console.log('📊 API Response:', res);
+            
+            // ✅ FIX: Extract the actual item data from nested response
+            const updatedItem = extractResponseData(res);
+            
+            console.log('✅ Extracted item:', updatedItem);
+            
+            set((s) => ({ 
+              items: s.items.map((i) => (i._id === id ? updatedItem : i)), 
+              lastError: null 
+            }));
+            
+            return { success: true, item: updatedItem };
           } catch (error) {
+            console.error('❌ Update item error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
@@ -569,15 +812,148 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`deleteItem_${id}`]: true } }));
           try {
             await itemAPI.delete(id);
-            set((s) => ({ items: s.items.filter((i) => i._id !== id), lastError: null }));
+            set((s) => ({ 
+              items: s.items.filter((i) => i._id !== id), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
+            console.error('❌ Delete item error:', error);
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
             set((s) => ({ operationInProgress: { ...s.operationInProgress, [`deleteItem_${id}`]: false } }));
           }
         },
+ 
+/**
+ * Sync items from Zoho to MongoDB
+ * Triggers a background sync and updates the items list when complete
+ */
+syncItems: async () => {
+  set((s) => ({ 
+    operationInProgress: { ...s.operationInProgress, syncItems: true },
+    lastError: null 
+  }));
+  
+  try {
+    // Start the sync
+    const response = await itemAPI.syncItems();
+    
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to start sync');
+    }
+    
+    // Poll for sync completion
+    const pollInterval = setInterval(async () => {
+      try {
+        const statusRes = await itemAPI.getSyncStatus();
+        
+        if (!statusRes.data.status.isSyncing) {
+          clearInterval(pollInterval);
+          
+          const result = statusRes.data.status.lastSyncResult;
+          
+          if (result?.success) {
+            // Refresh items after successful sync
+            await get().refreshItems();
+            
+            set((s) => ({ 
+              operationInProgress: { ...s.operationInProgress, syncItems: false },
+              lastError: null 
+            }));
+            
+            return { 
+              success: true, 
+              created: result.created, 
+              updated: result.updated,
+              total: result.total 
+            };
+          } else {
+            throw new Error(result?.error || 'Sync failed');
+          }
+        }
+      } catch (error) {
+        clearInterval(pollInterval);
+        set((s) => ({ 
+          operationInProgress: { ...s.operationInProgress, syncItems: false },
+          lastError: AppError.from(error) 
+        }));
+      }
+    }, 2000);
+    
+    // Timeout after 60 seconds
+    setTimeout(() => {
+      clearInterval(pollInterval);
+      if (get().operationInProgress.syncItems) {
+        set((s) => ({ 
+          operationInProgress: { ...s.operationInProgress, syncItems: false },
+          lastError: new AppError('Sync timeout after 60 seconds') 
+        }));
+      }
+    }, 60000);
+    
+    return { success: true, message: 'Sync started' };
+    
+  } catch (error) {
+    console.error('❌ Sync items error:', error);
+    set({ 
+      operationInProgress: { ...get().operationInProgress, syncItems: false },
+      lastError: AppError.from(error) 
+    });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Refresh items list from API
+ * Force refresh with optional cache bypass
+ */
+refreshItems: async (forceRefresh = false) => {
+  set({ loading: true, loadError: null });
+  
+  try {
+    const response = await itemAPI.getAll({ forceRefresh: forceRefresh ? 'true' : 'false' });
+    
+    let itemsData = [];
+    if (response.data.success) {
+      itemsData = response.data.data || [];
+    } else if (Array.isArray(response.data)) {
+      itemsData = response.data;
+    } else {
+      itemsData = response.data?.data || [];
+    }
+    
+    set({ 
+      items: itemsData,
+      loading: false,
+      lastError: null 
+    });
+    
+    return { success: true, items: itemsData, source: response.data.source };
+    
+  } catch (error) {
+    console.error('❌ Refresh items error:', error);
+    set({ 
+      loading: false,
+      lastError: AppError.from(error) 
+    });
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
+
+/**
+ * Get current sync status
+ */
+getSyncStatus: async () => {
+  try {
+    const response = await itemAPI.getSyncStatus();
+    return { success: true, status: response.data.status };
+  } catch (error) {
+    console.error('❌ Get sync status error:', error);
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
 
         // ── Quotation CRUD ────────────────────────────────────
 
@@ -632,7 +1008,10 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`queryDate_${id}`]: true } }));
           try {
             await quotationAPI.updateQueryDate(id, date);
-            set((s) => ({ quotations: s.quotations.map((q) => q._id === id ? { ...q, queryDate: date } : q), lastError: null }));
+            set((s) => ({ 
+              quotations: s.quotations.map((q) => q._id === id ? { ...q, queryDate: date } : q), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -646,7 +1025,10 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`award_${id}`]: true } }));
           try {
             const res = await quotationAPI.awardQuotation(id, awarded, awardNote);
-            set((s) => ({ quotations: s.quotations.map((q) => q._id === id ? res.data.quotation : q), lastError: null }));
+            set((s) => ({ 
+              quotations: s.quotations.map((q) => q._id === id ? res.data.quotation : q), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -662,7 +1044,10 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`approve_${id}`]: true } }));
           try {
             const res = await adminAPI.approveQuotation(id);
-            set((s) => ({ quotations: s.quotations.map((q) => (q._id === id ? res.data.quotation : q)), lastError: null }));
+            set((s) => ({ 
+              quotations: s.quotations.map((q) => (q._id === id ? res.data.quotation : q)), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -676,7 +1061,10 @@ export const useAppStore = create(
           set((s) => ({ operationInProgress: { ...s.operationInProgress, [`reject_${id}`]: true } }));
           try {
             const res = await adminAPI.rejectQuotation(id, { reason });
-            set((s) => ({ quotations: s.quotations.map((q) => (q._id === id ? res.data.quotation : q)), lastError: null }));
+            set((s) => ({ 
+              quotations: s.quotations.map((q) => (q._id === id ? res.data.quotation : q)), 
+              lastError: null 
+            }));
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -809,6 +1197,10 @@ export const useAppStore = create(
           supportedCurrencies: state.supportedCurrencies,
           selectedCompany:     state.selectedCompany,
           selectedCurrency:    state.selectedCurrency,
+          gccCountries:        state.gccCountries,
+  taxTreatments:       state.taxTreatments,
+  currencyOptions:     state.currencyOptions,
+  customerStats:       state.customerStats,
           // Don't persist document state
         }),
       }

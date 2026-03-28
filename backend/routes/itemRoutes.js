@@ -18,4 +18,10 @@ router.put('/:id', upload.single('image'), itemController.updateItem);
 // DELETE item
 router.delete('/:id', itemController.deleteItem);
 
+// GET sync items from Zoho (triggers background sync)
+router.get('/sync/items', itemController.syncItems);
+
+// GET sync status (check if sync is in progress)
+router.get('/sync/status', itemController.getSyncStatus);
+
 module.exports = router;

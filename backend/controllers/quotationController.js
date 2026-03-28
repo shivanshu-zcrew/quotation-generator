@@ -1,10 +1,11 @@
 // controllers/quotationController.js
 const { Quotation, CURRENCIES, ExchangeRateService, Company } = require('../models/quotation');
-const Customer = require('../models/customer');
+const { Customer } = require('../models/customer');
 const Item = require('../models/items');
 const puppeteer = require('puppeteer');
 const mime = require('mime-types')
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
+const zohoBooksService = require('../zoho/customerServices');
 
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
@@ -124,7 +125,7 @@ const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, u
       }
     );
     
-    console.log('Cloudinary upload result:', result);
+     
     
     return {
       fileName: fileInfo.fileName,
@@ -139,7 +140,7 @@ const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, u
     };
     
   } catch (error) {
-    console.error('[uploadInternalDocumentFromBase64] Error:', error);
+     
     throw error;
   }
 };
@@ -160,7 +161,7 @@ const uploadMultipleInternalDocumentsFromBase64 = async (base64Array, quotationN
         description
       );
     } catch (err) {
-      console.error('Failed to upload document:', err);
+       
       return null;
     }
   });
@@ -180,7 +181,7 @@ const deleteInternalDocument = async (document) => {
     await deleteFromCloudinary(document.publicId, resourceType);
     return true;
   } catch (error) {
-    console.error('[deleteInternalDocument] Error:', error);
+     
     return false;
   }
 };
@@ -334,7 +335,7 @@ exports.getCompanies = async (req, res) => {
       count: companies.length
     });
   } catch (err) {
-    console.error('[getCompanies]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error fetching companies', 
@@ -368,7 +369,7 @@ exports.getCompanyByCode = async (req, res) => {
       company
     });
   } catch (err) {
-    console.error('[getCompanyByCode]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error fetching company', 
@@ -479,7 +480,7 @@ exports.getCompanyStats = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[getCompanyStats]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error fetching company stats', 
@@ -547,7 +548,7 @@ exports.getAllQuotations = async (req, res) => {
 
     return paginated(res, data, total, page, limit);
   } catch (err) {
-    console.error('[getAllQuotations]', err);
+     
     res.status(500).json({ message: 'Error fetching quotations', error: err.message });
   }
 };
@@ -590,7 +591,7 @@ exports.getMyQuotations = async (req, res) => {
 
     return paginated(res, data, total, page, limit);
   } catch (err) {
-    console.error('[getMyQuotations]', err);
+     
     res.status(500).json({ message: 'Error fetching your quotations', error: err.message });
   }
 };
@@ -616,7 +617,7 @@ exports.getQuotation = async (req, res) => {
 
     res.status(200).json(quotation);
   } catch (err) {
-    console.error('[getQuotation]', err);
+     
     res.status(500).json({ message: 'Error fetching quotation', error: err.message });
   }
 };
@@ -785,7 +786,7 @@ exports.createQuotation = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[createQuotation]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error creating quotation', 
@@ -963,7 +964,7 @@ exports.updateQuotation = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[updateQuotation]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error updating quotation', 
@@ -998,7 +999,7 @@ exports.updateQueryDate = async (req, res) => {
       queryDate: quotation.queryDate 
     });
   } catch (err) {
-    console.error('[updateQueryDate]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error updating query date', 
@@ -1008,49 +1009,516 @@ exports.updateQueryDate = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// TAX CONFIGURATION
+// ─────────────────────────────────────────────────────────────
+
+// Tax IDs mapping for different tax rates
+const TAX_IDS = {
+  '0%': '4698901000000085047',
+  '5%': '4698901000000085041',
+  '10%': '4698901000026039221',
+  '15%': '4698901000026039213'
+};
+
+// ─────────────────────────────────────────────────────────────
 // AWARD / NOT-AWARD
 // ─────────────────────────────────────────────────────────────
+// ===========================================
+// AWARD QUOTATION - COMPLETELY REWRITTEN
+// ===========================================
+
 exports.awardQuotation = async (req, res) => {
   try {
     const { awarded, awardNote } = req.body;
+    const quotationId = req.params.id;
 
-    if (typeof awarded !== 'boolean')
-      return res.status(400).json({ message: '`awarded` (boolean) is required' });
+     
+     
+     
+     
+     
 
-    const quotation = await Quotation.findById(req.params.id);
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
+    if (typeof awarded !== 'boolean') {
+      return res.status(400).json({ 
+        success: false,
+        message: '`awarded` (boolean) is required' 
+      });
+    }
 
-    if (quotation.createdBy._id.toString() !== req.user.id)
-      return res.status(403).json({ message: 'Only the creator can mark this quotation as awarded' });
+    // STEP 1: Fetch quotation
+    const quotation = await Quotation.findById(quotationId)
+      .populate('companyId')
+      .populate('createdBy', 'name email');
+    
+    if (!quotation) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Quotation not found' 
+      });
+    }
+    
+    // ✅ STEP 2: Fetch customer DIRECTLY (not through populate)
+    const customer = await Customer.findById(quotation.customerId).lean();
+    
+ 
+    
+    if (!customer) {
+       
+    }
+    
+     
+     
+     
+     
 
-    if (quotation.status !== 'approved')
+    // STEP 3: Check permissions
+    if (quotation.createdBy._id.toString() !== req.user.id) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Only the creator can mark this quotation as awarded' 
+      });
+    }
+
+    if (quotation.status !== 'approved') {
       return res.status(400).json({
+        success: false,
         message: `Only admin-approved quotations can be awarded. Current status: ${quotation.status}`,
       });
+    }
 
+    // STEP 4: Get customer tax treatment and place of supply
+    const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
+    const customerPlaceOfSupply = customer?.placeOfSupply || 'Dubai';
+    
+    // Check if place of supply is in UAE (emirate) or GCC country
+    const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
+    const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
+    
+    const isPlaceOfSupplyUAE = UAE_EMIRATES.includes(customerPlaceOfSupply);
+    const isPlaceOfSupplyGCC = GCC_COUNTRIES.includes(customerPlaceOfSupply);
+    
+     
+     
+     
+     
+     
+     
+     
+    
+    // Tax IDs mapping
+    const TAX_IDS = {
+      '0%': '4698901000000085047',
+      '5%': '4698901000000085041',
+      '10%': '4698901000026039221',
+      '15%': '4698901000026039213'
+    };
+    
+    // Determine tax settings based on rules
+    let taxRate = 0;
+    let taxId = TAX_IDS['0%'];
+    let taxTreatment = 'vat_not_registered';
+    let placeOfSupplyCode = 'AE';
+    
+     
+    
+    // ============================================
+    // RULE 1: UAE VAT Registered (vat_registered)
+    // ============================================
+    if (customerTaxTreatment === 'vat_registered') {
+      if (isPlaceOfSupplyUAE) {
+        // Domestic UAE transaction - can use 0% or 5%
+        taxRate = quotation.taxPercent || 5;
+        
+        // Only allow 0% or 5% for domestic UAE
+        if (taxRate === 0) {
+          taxId = TAX_IDS['0%'];
+           
+        } else if (taxRate === 5) {
+          taxId = TAX_IDS['5%'];
+           
+        } else {
+          // Force to 5% if other rates are selected
+           
+          taxId = TAX_IDS['5%'];
+          taxRate = 5;
+        }
+        
+        taxTreatment = 'vat_registered';
+        
+        // Place of supply: emirate code
+        const emirateCodeMap = {
+          'Abu Dhabi': 'AB',
+          'Ajman': 'AJ',
+          'Dubai': 'DU',
+          'Fujairah': 'FU',
+          'Ras al-Khaimah': 'RA',
+          'Sharjah': 'SH',
+          'Umm al-Quwain': 'UM'
+        };
+        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
+         
+        
+      } else if (isPlaceOfSupplyGCC) {
+        // Export to GCC - Zero-rated (0% only)
+        taxRate = 0;
+        taxId = TAX_IDS['0%'];
+        taxTreatment = 'vat_registered';
+        
+        // Place of supply: country code
+        const countryCodeMap = {
+          'Saudi Arabia': 'SA',
+          'Kuwait': 'KW',
+          'Qatar': 'QA',
+          'Bahrain': 'BH',
+          'Oman': 'OM'
+        };
+        placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+         
+         
+      }
+    }
+    
+    // ============================================
+    // RULE 2: GCC VAT Registered (gcc_vat_registered)
+    // ============================================
+    else if (customerTaxTreatment === 'gcc_vat_registered') {
+      if (isPlaceOfSupplyUAE) {
+        // GCC customer importing to UAE - 5% tax
+        taxRate = 5;
+        taxId = TAX_IDS['5%'];
+        taxTreatment = 'gcc_vat_registered';
+        
+        // Place of supply: emirate code for UAE
+        const emirateCodeMap = {
+          'Abu Dhabi': 'AB',
+          'Ajman': 'AJ',
+          'Dubai': 'DU',
+          'Fujairah': 'FU',
+          'Ras al-Khaimah': 'RA',
+          'Sharjah': 'SH',
+          'Umm al-Quwain': 'UM'
+        };
+        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
+         
+         
+        
+      } else if (isPlaceOfSupplyGCC) {
+        // GCC customer within GCC - Zero-rated (0%)
+        taxRate = 0;
+        taxId = TAX_IDS['0%'];
+        taxTreatment = 'gcc_vat_registered';
+        
+        // Place of supply: country code
+        const countryCodeMap = {
+          'Saudi Arabia': 'SA',
+          'Kuwait': 'KW',
+          'Qatar': 'QA',
+          'Bahrain': 'BH',
+          'Oman': 'OM'
+        };
+        placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+         
+         
+      }
+    }
+    
+    // ============================================
+    // RULE 3: Non-VAT Registered
+    // ============================================
+    else if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') {
+      taxRate = 0;
+      taxId = TAX_IDS['0%'];
+      taxTreatment = 'vat_not_registered';
+      
+      // Place of supply: emirate code for UAE or country code for GCC
+      if (isPlaceOfSupplyUAE) {
+        const emirateCodeMap = {
+          'Abu Dhabi': 'AB',
+          'Ajman': 'AJ',
+          'Dubai': 'DU',
+          'Fujairah': 'FU',
+          'Ras al-Khaimah': 'RA',
+          'Sharjah': 'SH',
+          'Umm al-Quwain': 'UM'
+        };
+        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
+      } else {
+        const countryCodeMap = {
+          'Saudi Arabia': 'SA',
+          'Kuwait': 'KW',
+          'Qatar': 'QA',
+          'Bahrain': 'BH',
+          'Oman': 'OM'
+        };
+        placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+      }
+       
+    }
+    
+     
+     
+     
+     
+     
+
+    let zohoEstimate = null;
+    
+    // STEP 5: If awarded, create estimate in Zoho
+    if (awarded) {
+       
+      
+      try {
+        // 5.1: Get customer Zoho ID
+        let customerZohoId = customer?.zohoId;
+        
+        if (!customerZohoId) {
+          // Create new customer in Zoho if no ID exists
+           
+          const customerData = {
+            name: customer?.name || quotation.customerSnapshot.name,
+            email: customer?.email || quotation.customerSnapshot.email,
+            phone: customer?.phone || quotation.customerSnapshot.phone,
+            address: customer?.address || quotation.customerSnapshot.address,
+            placeOfSupply: customerPlaceOfSupply,
+            taxTreatment: customerTaxTreatment,
+            taxRegistrationNumber: customer?.taxRegistrationNumber || '',
+            currencyCode: quotation.currency?.code || 'AED'
+          };
+          
+          // Add uaeEmirate if place is UAE emirate
+          if (isPlaceOfSupplyUAE) {
+            customerData.uaeEmirate = customerPlaceOfSupply;
+            customerData.placeOfSupply = 'United Arab Emirates (UAE)';
+          }
+          
+          const createResult = await zohoBooksService.createContact(customerData);
+          if (createResult.success) {
+            customerZohoId = createResult.zohoId;
+             
+          } else {
+            throw new Error(`Failed to create customer: ${createResult.error}`);
+          }
+        } else {
+           
+        }
+        
+        // 5.2: Calculate totals
+        const subtotal = quotation.subtotal || 0;
+        const discountPercent = quotation.discountPercent || 0;
+        
+        const taxAmount = (subtotal * taxRate) / 100;
+        const discountAmount = (subtotal * discountPercent) / 100;
+        const totalAfterTax = subtotal + taxAmount;
+        const grandTotal = totalAfterTax - discountAmount;
+        
+         
+         
+         
+         
+         
+        
+        // 5.3: Prepare line items with tax
+        const lineItems = [];
+        
+        for (let i = 0; i < quotation.items.length; i++) {
+          const item = quotation.items[i];
+          
+          const itemTotal = item.quantity * item.unitPrice;
+          
+          const lineItem = {
+            item_id: '',
+            name: `Item ${i + 1}`,
+            description: item.description || `Item ${i + 1}`,
+            quantity: item.quantity,
+            rate: item.unitPrice,
+            discount: 0,
+            discount_amount: 0,
+            item_total: itemTotal,
+            item_order: i + 1
+          };
+          
+          // Add tax fields only if tax rate > 0
+          if (taxRate > 0) {
+            lineItem.tax_id = taxId;
+            lineItem.tax_percentage = taxRate;
+            lineItem.tax_name = 'VAT';
+            lineItem.tax_type = 'tax';
+          }
+          
+          lineItems.push(lineItem);
+        }
+        
+        // 5.4: Prepare estimate data
+        const estimateData = {
+          customer_id: customerZohoId,
+          reference_number: quotation.quotationNumber,
+          date: new Date(quotation.date).toISOString().split('T')[0],
+          expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
+          exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
+          discount: discountPercent,
+          is_discount_before_tax: false,
+          discount_type: 'item_level',
+          is_inclusive_tax: false,
+          custom_body: quotation.notes || '',
+          custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
+          salesperson_name: quotation.ourContact || '',
+          notes: quotation.notes || '',
+          terms:  cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
+          line_items: lineItems,
+          tax_treatment: taxTreatment,
+          place_of_supply: placeOfSupplyCode,
+          is_taxable: taxRate > 0,
+          total: grandTotal,
+          total_before_tax: subtotal,
+          tax_total: taxAmount,
+          discount_total: discountAmount
+        };
+        
+        // Add tax_id only if tax rate > 0
+        if (taxRate > 0) {
+          estimateData.tax_id = taxId;
+        }
+        
+         
+         
+        
+        // 5.5: Create estimate in Zoho
+         
+        zohoEstimate = await zohoBooksService.createEstimate(estimateData);
+        
+        if (!zohoEstimate.success) {
+          throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
+        }
+        
+         
+         
+         
+        
+        // 5.6: Update quotation with Zoho details
+        quotation.zohoEstimateId = zohoEstimate.estimateId;
+        quotation.zohoEstimateNumber = zohoEstimate.estimateNumber;
+        quotation.zohoEstimateUrl = zohoEstimate.estimateUrl;
+        quotation.zohoReferenceNumber = quotation.quotationNumber;
+        quotation.zohoSyncedAt = new Date();
+        
+      } catch (zohoError) {
+         
+        
+        return res.status(500).json({
+          success: false,
+          message: `Failed to create estimate in Zoho Books: ${zohoError.message}`,
+          error: zohoError.message
+        });
+      }
+    }
+    
+    // STEP 6: Update quotation status
     quotation.status = awarded ? 'awarded' : 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
     quotation.awardNote = awardNote?.trim() || '';
-
+    
     await quotation.save();
-
-    const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
+     
+    
+     
+     
+     
+    
+    const updated = await Quotation.findById(quotationId)
+      .populate('customerId')
+      .populate('companyId')
+      .lean();
+    
     res.status(200).json({
       success: true,
-      message: awarded ? 'Quotation marked as awarded (PO received)' : 'Quotation marked as not awarded',
+      message: awarded 
+        ? 'Quotation awarded and synced to Zoho Books successfully' 
+        : 'Quotation marked as not awarded',
       quotation: updated,
+      zohoEstimate: zohoEstimate || null
     });
+    
   } catch (err) {
-    console.error('[awardQuotation]', err);
+     
+    
     res.status(500).json({ 
       success: false,
       message: 'Error awarding quotation', 
-      error: err.message 
+      error: err.message
     });
   }
 };
+
+function convertHtmlToPlainText(html) {
+  if (!html) return '';
+
+  let text = html;
+ 
+  text = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+ 
+  text = text.replace(/<li[^>]*>\s*<p[^>]*>/gi, '<li>');
+  text = text.replace(/<\/p>\s*<\/li>/gi, '</li>');
+
+  const stack = [];
+
+  text = text.replace(/<ol[^>]*>/gi, () => {
+    stack.push(0);
+    return '\n';
+  });
+
+  text = text.replace(/<\/ol>/gi, () => {
+    stack.pop();
+    return '\n';
+  });
+
+  text = text.replace(/<li[^>]*>/gi, () => {
+    if (stack.length) {
+      stack[stack.length - 1]++;
+      const numbering = stack.join('.');
+      const indent = '   '.repeat(stack.length - 1);
+      return `\n${indent}${numbering}. `;
+    }
+    return '\n• ';
+  });
+
+  text = text.replace(/<\/li>/gi, '');
+ 
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+
+  
+  text = text.replace(/<[^>]+>/g, '');
+ 
+  text = text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+
+   text = text.replace(/\n\s*\n\s*\n/g, '\n\n');
+  text = text.replace(/[ \t]+/g, ' ');
+  text = text.trim();
+
+  return text;
+}
+ function cleanHtmlForZoho(html) {
+  if (!html) return '';
+  
+   let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
+  
+   cleaned = cleaned.replace(/<img[^>]*>/gi, '');
+  
+   let text = convertHtmlToPlainText(cleaned);
+  
+   if (text.length > 9500) {
+    text = text.substring(0, 9500) + '... (truncated)';
+  }
+  
+  return text;
+}
 
 // ─────────────────────────────────────────────────────────────
 // DELETE QUOTATION  
@@ -1095,7 +1563,7 @@ exports.deleteQuotation = async (req, res) => {
       message: 'Quotation deleted successfully' 
     });
   } catch (err) {
-    console.error('[deleteQuotation]', err);
+    
     res.status(500).json({ 
       success: false,
       message: 'Error deleting quotation', 
@@ -1117,7 +1585,7 @@ exports.generatePDF = async (req, res) => {
 
   let page = null;
   try {
-    console.time(`[PDF] ${safeFilename}`);
+     
 
     const browser = await getBrowser();
     page = await browser.newPage();
@@ -1146,7 +1614,7 @@ exports.generatePDF = async (req, res) => {
     });
 
     await page.close(); page = null;
-    console.timeEnd(`[PDF] ${safeFilename}`);
+     
 
     if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-')
       throw new Error('Puppeteer returned an invalid PDF buffer');
@@ -1158,8 +1626,7 @@ exports.generatePDF = async (req, res) => {
     res.send(Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer));
   } catch (err) {
     if (page) await page.close().catch(() => {});
-    console.error('[generatePDF]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error generating PDF', 
       error: err.message 
@@ -1290,8 +1757,7 @@ exports.getDashboardStats = async (req, res) => {
       monthlyStats,
     });
   } catch (err) {
-    console.error('[getDashboardStats]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error fetching dashboard stats', 
       error: err.message 
@@ -1299,13 +1765,7 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
-// =============================================================
-// INTERNAL DOCUMENT CRUD OPERATIONS (Keep as is)
-// =============================================================
-
-// ... (keep all the existing document CRUD functions below this line)
-// addInternalDocuments, getInternalDocuments, etc.
-
+ 
 // =============================================================
 // INTERNAL DOCUMENT CRUD OPERATIONS
 // =============================================================
@@ -1377,8 +1837,7 @@ exports.addInternalDocuments = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[addInternalDocuments]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error adding internal documents', 
       error: err.message 
@@ -1427,8 +1886,7 @@ exports.getInternalDocuments = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[getInternalDocuments]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error fetching internal documents', 
       error: err.message 
@@ -1485,8 +1943,7 @@ exports.getInternalDocumentById = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[getInternalDocumentById]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error fetching document', 
       error: err.message 
@@ -1541,8 +1998,7 @@ exports.updateInternalDocumentDescription = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[updateInternalDocumentDescription]', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error updating document description', 
       error: err.message 
@@ -1599,7 +2055,7 @@ exports.removeInternalDocument = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[removeInternalDocument]', err);
+     
     res.status(500).json({ 
       success: false,
       message: 'Error removing internal document', 
@@ -1656,7 +2112,6 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[getInternalDocumentDownloadUrl]', err);
     res.status(500).json({ 
       success: false,
       message: 'Error getting document URL', 

@@ -142,6 +142,7 @@ export const FileType = {
   // Parse quotation data
   export const parseQuotationData = (q) => ({
     projectName: q.projectName || "",  
+    currencyCode:q.currency?.code || "",
     customer: q.customer || q.customerId?.name || "",
     contact: q.contact || "",
     date: q.date?.split("T")[0] || new Date().toISOString().split("T")[0],
@@ -153,8 +154,8 @@ export const FileType = {
     deliveryTerms: q.deliveryTerms || "",
     tl: q.tl || "",  
     trn: q.trn || "",   
-    tax: q.tax || 0,
-    discount: q.discount || 0,
+    tax: q.taxPercent || 0,
+    discount: q.discountPercent || 0,
     notes: q.notes || "",
     termsAndConditions: q.termsAndConditions || "",
     termsImage: q.termsImage || null,
@@ -187,4 +188,12 @@ export const FileType = {
       return { valid: false, error: `File "${file.name}" type is not allowed` };
     }
     return { valid: true };
+  };
+
+  export const getTodayDate = () => {
+    return new Date().toISOString().split('T')[0];
+  };
+  
+  export const getDefaultExpiryDate = () => {
+    return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   };
