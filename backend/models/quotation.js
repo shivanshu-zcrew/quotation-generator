@@ -198,7 +198,7 @@ const quotationSchema = new mongoose.Schema(
     // References
     ourRef: { type: String, default: '' },
     ourContact: { type: String, default: '' },
-    salesOffice: { type: String, default: '' },
+    salesManagerEmail: { type: String, default: '' },
     paymentTerms: { type: String, default: '' },
     deliveryTerms: { type: String, default: '' },
     tl: { type: String, default: '' },

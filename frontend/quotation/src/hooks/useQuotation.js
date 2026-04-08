@@ -11,9 +11,7 @@ import {
 import { numberToWords } from '../utils/numberToWords';
 import { newSection, htmlToSections, sectionsToHTML, sectionsToHTMLWithoutImages } from '../components/TermsCondition';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
-import { imageToBase64} from '../utils/imageUtils';
-import { BASE_URL, ITEMS_PER_FIRST_PAGE  } from '../utils/constants';
-import headerImage from '../assets/header.png'; 
+import { downloadQuotationPDF } from '../utils/pdfGenerator';
 
 export function useQuotation() {
   const { id } = useParams();
@@ -71,7 +69,6 @@ export function useQuotation() {
     [grandTotal]
   );
 
-
   useEffect(() => {
     if (!(quotations || []).find((q) => q._id === id) && id) {
       setLoading(true);
@@ -86,39 +83,33 @@ export function useQuotation() {
     }
   }, [id, quotations]);
 
+  useEffect(() => {
+    if (!originalQuotation) return;
+    
+    const parsedData = parseQuotationData(originalQuotation);
+    delete parsedData.termsImage;
+    setQuotationData(parsedData);
+    setQuotationItems(parseQuotationItems(originalQuotation.items));
+    
+    const taxTreatment = originalQuotation.customerId?.taxTreatment || 
+      originalQuotation.customerTaxTreatment || 
+      originalQuotation.taxTreatment ||
+      'non_vat_registered';
 
-// In useQuotation.js - update the useEffect that populates state
-useEffect(() => {
-  if (!originalQuotation) return;
-  
-  const parsedData = parseQuotationData(originalQuotation);
-  delete parsedData.termsImage;
-  setQuotationData(parsedData);
-  setQuotationItems(parseQuotationItems(originalQuotation.items));
-  
-  const taxTreatment = originalQuotation.customerId?.taxTreatment || 
-  originalQuotation.customerTaxTreatment || 
-  originalQuotation.taxTreatment ||
-  'non_vat_registered';
+    const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
+      originalQuotation.customerPlaceOfSupply || 
+      originalQuotation.placeOfSupply ||
+      'Dubai';
 
-const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
-   originalQuotation.customerPlaceOfSupply || 
-   originalQuotation.placeOfSupply ||
-   'Dubai';
+    setCustomerTaxTreatment(taxTreatment);
+    setCustomerPlaceOfSupply(placeOfSupply);
 
-setCustomerTaxTreatment(taxTreatment);
-setCustomerPlaceOfSupply(placeOfSupply);
-
-  // ✅ Get cloudinary images from the response
-  const cloudinaryImages = originalQuotation.termsImages || [];
-  
-  // ✅ Parse HTML and merge cloudinary images
-  const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
-  setTcSections(sections);
-  
-  setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
-}, [originalQuotation]);
-
+    const cloudinaryImages = originalQuotation.termsImages || [];
+    const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
+    setTcSections(sections);
+    
+    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
+  }, [originalQuotation]);
 
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
     try {
@@ -198,7 +189,6 @@ setCustomerPlaceOfSupply(placeOfSupply);
     }
   }, [internalDocuments, newDocuments]);
 
-  // Data change handlers
   const handleDataChange = useCallback((field, value) => {
     if (value === '') {
       if (field === 'tax' || field === 'discount') {
@@ -318,7 +308,6 @@ setCustomerPlaceOfSupply(placeOfSupply);
     }));
   }, [items]);
 
-  // Image handlers
   const handleImageUpload = useCallback((e, itemId) => {
     Array.from(e.target.files || []).forEach((file) => {
       const reader = new FileReader();
@@ -340,82 +329,76 @@ setCustomerPlaceOfSupply(placeOfSupply);
       item.id === itemId ? { ...item, imagePaths: item.imagePaths.filter((_, i) => i !== idx) } : item
     )), []);
 
-    // Terms images handlers
-const handleTermsImagesUpload = useCallback((files) => {
-  const newImagesList = [];
-  const remainingSlots = 10 - termsImages.length;
-  
-  if (remainingSlots <= 0) {
-    setSnackbar({ show: true, message: 'Maximum 10 terms images allowed', type: 'error' });
-    return;
-  }
-  
-  const filesToProcess = files.slice(0, remainingSlots);
-  if (files.length > remainingSlots) {
-    setSnackbar({ show: true, message: `Only ${remainingSlots} more image(s) allowed`, type: 'warning' });
-  }
-  
-  filesToProcess.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      newImagesList.push({
-        id: `terms-img-${Date.now()}-${Math.random()}`,
-        base64: reader.result,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        isTemp: true
-      });
-      
-      if (newImagesList.length === filesToProcess.length) {
-        setTermsImages(prev => [...prev, ...newImagesList]);
-      }
-    };
-    reader.readAsDataURL(file);
-  });
-}, [termsImages.length]);
+  const handleTermsImagesUpload = useCallback((files) => {
+    const newImagesList = [];
+    const remainingSlots = 10 - termsImages.length;
+    
+    if (remainingSlots <= 0) {
+      setSnackbar({ show: true, message: 'Maximum 10 terms images allowed', type: 'error' });
+      return;
+    }
+    
+    const filesToProcess = files.slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      setSnackbar({ show: true, message: `Only ${remainingSlots} more image(s) allowed`, type: 'warning' });
+    }
+    
+    filesToProcess.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        newImagesList.push({
+          id: `terms-img-${Date.now()}-${Math.random()}`,
+          base64: reader.result,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          isTemp: true
+        });
+        
+        if (newImagesList.length === filesToProcess.length) {
+          setTermsImages(prev => [...prev, ...newImagesList]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }, [termsImages.length]);
 
-const removeTermsImage = useCallback((imageId) => {
-  setTermsImages(prev => prev.filter(img => img.id !== imageId));
-}, []);
+  const removeTermsImage = useCallback((imageId) => {
+    setTermsImages(prev => prev.filter(img => img.id !== imageId));
+  }, []);
 
- 
-const cancelEdit = useCallback(() => {
-  if (!originalQuotation) return;
-  
-  // Parse data without termsImage
-  const parsedData = parseQuotationData(originalQuotation);
-  delete parsedData.termsImage;
-  setQuotationData(parsedData);
-  setQuotationItems(parseQuotationItems(originalQuotation.items));
-  
-  // Reconstruct sections with existing Cloudinary images
-  const cloudinaryImages = originalQuotation.termsImages || [];
-  const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
-  setTcSections(sections);
-  
-  setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
-  setNewDocuments([]);
-  setNewImages({});
-  setTermsImages([]); // Clear any pending terms images
-  setEditingImgId(null);
-  setFieldErrors({});
-  setIsEditing(false);
-  
-  // Reset customer tax info
-  const taxTreatment = originalQuotation.customerId?.taxTreatment || 
-                      originalQuotation.customerTaxTreatment || 
-                      originalQuotation.taxTreatment;
+  const cancelEdit = useCallback(() => {
+    if (!originalQuotation) return;
+    
+    const parsedData = parseQuotationData(originalQuotation);
+    delete parsedData.termsImage;
+    setQuotationData(parsedData);
+    setQuotationItems(parseQuotationItems(originalQuotation.items));
+    
+    const cloudinaryImages = originalQuotation.termsImages || [];
+    const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
+    setTcSections(sections);
+    
+    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
+    setNewDocuments([]);
+    setNewImages({});
+    setTermsImages([]);
+    setEditingImgId(null);
+    setFieldErrors({});
+    setIsEditing(false);
+    
+    const taxTreatment = originalQuotation.customerId?.taxTreatment || 
+      originalQuotation.customerTaxTreatment || 
+      originalQuotation.taxTreatment;
 
-  const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
-                       originalQuotation.customerPlaceOfSupply || 
-                       originalQuotation.placeOfSupply ||
-                       'Dubai';
-  setCustomerTaxTreatment(taxTreatment);
-  setCustomerPlaceOfSupply(placeOfSupply);
-}, [originalQuotation]);
+    const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
+      originalQuotation.customerPlaceOfSupply || 
+      originalQuotation.placeOfSupply ||
+      'Dubai';
+    setCustomerTaxTreatment(taxTreatment);
+    setCustomerPlaceOfSupply(placeOfSupply);
+  }, [originalQuotation]);
 
-  // Validation
   const validateBeforeSave = useCallback(() => {
     if (!quotationItems.length) {
       setSnackbar({ show: true, message: "Add at least one item.", type: 'error' });
@@ -466,42 +449,55 @@ const cancelEdit = useCallback(() => {
     return true;
   }, [quotationItems, quotationData]);
 
- // In useQuotation.js - update the extractTermsImagesFromSections function
-const extractTermsImagesFromSections = useCallback((sections) => {
-  const images = [];
-  
-  if (!sections || !Array.isArray(sections)) return images;
-  
-  sections.forEach((section, sectionIndex) => {
-    if (section.images && Array.isArray(section.images) && section.images.length > 0) {
-      section.images.forEach((img, imgIndex) => {
-        // Check if the image is base64 (starts with data:) AND doesn't have a publicId (not uploaded)
-        // Also check if it's a new image that hasn't been uploaded to Cloudinary yet
-        if (img.url && img.url.startsWith('data:') && !img.publicId) {
-          images.push({
-            base64: img.url,
-            fileName: img.fileName || `section_${sectionIndex + 1}_img_${imgIndex + 1}`,
-            sectionIndex: sectionIndex,
-          });
-        }
-        // If the image has a publicId, it's already in Cloudinary, skip it
-      });
-    }
-  });
-  
-  return images;
-}, []);
+  const extractTermsImagesFromSections = useCallback((sections) => {
+    const images = [];
+    
+    if (!sections || !Array.isArray(sections)) return images;
+    
+    sections.forEach((section, sectionIndex) => {
+      if (section.images && Array.isArray(section.images) && section.images.length > 0) {
+        section.images.forEach((img, imgIndex) => {
+          if (img.url && img.url.startsWith('data:') && !img.publicId) {
+            images.push({
+              base64: img.url,
+              fileName: img.fileName || `section_${sectionIndex + 1}_img_${imgIndex + 1}`,
+              sectionIndex: sectionIndex,
+            });
+          }
+        });
+      }
+    });
+    
+    return images;
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!validateBeforeSave()) return;
-  
+
     setIsSaving(true);
     try {
       const quotationImages = {};
+      
       quotationItems.forEach((item, index) => {
-        if (newImages[item.id]?.length) quotationImages[index] = newImages[item.id];
+        const allImages = [];
+        
+        if (item.imagePaths && Array.isArray(item.imagePaths) && item.imagePaths.length > 0) {
+          allImages.push(...item.imagePaths);
+        }
+        
+        if (newImages[item.id] && Array.isArray(newImages[item.id]) && newImages[item.id].length > 0) {
+          allImages.push(...newImages[item.id]);
+        }
+        
+        if (item.newImages && Array.isArray(item.newImages) && item.newImages.length > 0) {
+          allImages.push(...item.newImages);
+        }
+        
+        if (allImages.length > 0) {
+          quotationImages[index] = allImages;
+        }
       });
-  
+
       const documentData = [
         ...internalDocuments.map(doc => ({
           fileName: doc.fileName,
@@ -519,18 +515,19 @@ const extractTermsImagesFromSections = useCallback((sections) => {
           description: doc.description || '',
         }))
       ];
-  
-      const taxValue = parseFloat(quotationData.tax);
-      const discountValue = parseFloat(quotationData.discount);
-  
-      // ✅ Extract ONLY NEW base64 images from tcSections (not already uploaded)
+
+      const taxValue = parseFloat(quotationData.tax) || 0;
+      const discountValue = parseFloat(quotationData.discount) || 0;
       const termsImagesData = extractTermsImagesFromSections(tcSections);
-      
-      console.log('📸 New terms images to upload:', termsImagesData.length);
-      
-      // ✅ Create HTML WITHOUT base64 images for database storage
       const termsHTMLWithoutImages = sectionsToHTMLWithoutImages(tcSections);
-  
+
+      const formattedItems = quotationItems.map((qi) => ({
+        itemId: qi.itemId,
+        quantity: Number(qi.quantity) || 1,
+        unitPrice: Number(qi.unitPrice) || 0,
+        description: qi.description || "",
+      }));
+
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
         customer: quotationData.customer,
@@ -539,23 +536,18 @@ const extractTermsImagesFromSections = useCallback((sections) => {
         expiryDate: quotationData.expiryDate,
         ourRef: quotationData.ourRef,
         ourContact: quotationData.ourContact,
-        salesOffice: quotationData.salesOffice,
+        salesManagerEmail: quotationData.salesManagerEmail,
         paymentTerms: quotationData.paymentTerms,
         deliveryTerms: quotationData.deliveryTerms,
-        taxPercent: isNaN(taxValue) ? 0 : taxValue,
-        discountPercent: isNaN(discountValue) ? 0 : discountValue,
+        tl: quotationData.tl,
+        trn: quotationData.trn,
+        taxPercent: taxValue,
+        discountPercent: discountValue,
         notes: quotationData.notes?.trim() || "",
         termsAndConditions: termsHTMLWithoutImages,
-        termsImages: termsImagesData, // ✅ Send only new base64 images
-        total: grandTotal,
-        quotationImages,
-        items: quotationItems.map((qi) => ({
-          itemId: qi.itemId,
-          quantity: Number(qi.quantity) || 1,
-          unitPrice: Number(qi.unitPrice) || 0,
-          imagePaths: qi.imagePaths || [],
-          description: qi.description || "",
-        })),
+        termsImages: termsImagesData,
+        items: formattedItems,
+        quotationImages: quotationImages,
         internalDocuments: documentData
           .filter(doc => doc.fileData)
           .map(doc => doc.fileData),
@@ -563,11 +555,9 @@ const extractTermsImagesFromSections = useCallback((sections) => {
           .filter(doc => doc.fileData)
           .map(doc => doc.description || '')
       };
-  
-      console.log('📤 Sending payload with termsImages:', termsImagesData.length);
-      
+
       const result = await updateQuotation(originalQuotation._id, payload);
-  
+
       if (result?.success) {
         setSnackbar({ show: true, message: "Quotation updated successfully!", type: 'success' });
         setIsEditing(false);
@@ -575,10 +565,22 @@ const extractTermsImagesFromSections = useCallback((sections) => {
         setNewImages({});
         setNewDocuments([]);
         setFieldErrors({});
-  
-        // Refresh to get updated Cloudinary URLs
+
         const refreshed = await quotationAPI.getById(id);
         setFetchedQ(refreshed.data);
+        
+        if (refreshed.data) {
+          const parsedData = parseQuotationData(refreshed.data);
+          delete parsedData.termsImage;
+          setQuotationData(parsedData);
+          setQuotationItems(parseQuotationItems(refreshed.data.items));
+          
+          const cloudinaryImages = refreshed.data.termsImages || [];
+          const sections = htmlToSections(refreshed.data.termsAndConditions, cloudinaryImages);
+          setTcSections(sections);
+          
+          setInternalDocuments(parseInternalDocuments(refreshed.data.internalDocuments));
+        }
       } else {
         setSnackbar({ show: true, message: result?.error || "Failed to update quotation", type: 'error' });
       }
@@ -589,9 +591,8 @@ const extractTermsImagesFromSections = useCallback((sections) => {
       setIsSaving(false);
     }
   }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, newDocuments,
-      internalDocuments, tcSections, grandTotal, updateQuotation, id, extractTermsImagesFromSections]);
+      internalDocuments, tcSections, updateQuotation, id, extractTermsImagesFromSections]);
 
-  // Delete
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
 
@@ -603,7 +604,6 @@ const extractTermsImagesFromSections = useCallback((sections) => {
     }
   }, [originalQuotation, deleteQuotation, navigate]);
 
-  // Navigation
   const handleBack = useCallback(() => {
     navigate(-1);
   }, [navigate]);
@@ -615,191 +615,64 @@ const extractTermsImagesFromSections = useCallback((sections) => {
     
     if (!doc) return;
     
-    // Only show preview for images
     if (doc.fileType?.startsWith('image/')) {
       setPreviewDoc(doc);
     } else {
-      // For non-images, just download
       handleDocumentDownload(docId);
     }
   }, [internalDocuments, newDocuments, handleDocumentDownload]);
 
-
-
+  // ✅ SIMPLIFIED generatePDF - uses the same buildPDFHTML as HomeScreen
   const generatePDF = useCallback(async () => {
-  if (!validateBeforeSave()) return;
-  
-  setIsExporting(true);
-  try {
-    const headerBase64 = await imageToBase64(headerImage);
-    const firstPage = quotationItems.slice(0, ITEMS_PER_FIRST_PAGE);
-    const remaining = quotationItems.slice(ITEMS_PER_FIRST_PAGE);
-    const multiPage = remaining.length > 0;
-
-    // Convert item images to base64
-    const itemImagesBase64 = {};
-    for (const qi of [...firstPage, ...remaining]) {
-      const urls = [
-        ...(qi.imagePaths || []),
-        ...(newImages[qi.id] || []),
-      ];
-      itemImagesBase64[qi.id] = await Promise.all(urls.map((src) => imageToBase64(src)));
+    if (!validateBeforeSave()) return;
+    
+    setIsExporting(true);
+    try {
+      // Build the quotation object for PDF generation
+      const pdfQuotation = {
+        ...originalQuotation,
+        projectName: quotationData.projectName,
+        customer: quotationData.customer,
+        contact: quotationData.contact,
+        date: quotationData.date,
+        expiryDate: quotationData.expiryDate,
+        ourRef: quotationData.ourRef,
+        ourContact: quotationData.ourContact,
+        salesManagerEmail: quotationData.salesManagerEmail,
+        paymentTerms: quotationData.paymentTerms,
+        deliveryTerms: quotationData.deliveryTerms,
+        tl: quotationData.tl,
+        trn: quotationData.trn,
+        taxPercent: Number(quotationData.tax) || 0,
+        discountPercent: Number(quotationData.discount) || 0,
+        notes: quotationData.notes,
+        termsAndConditions: sectionsToHTML(tcSections), // This includes images
+        items: quotationItems.map(item => ({
+          ...item,
+          imagePaths: [...(item.imagePaths || []), ...(newImages[item.id] || [])]
+        }))
+      };
+      
+      await downloadQuotationPDF(pdfQuotation, { newImages });
+      
+      setSnackbar({
+        show: true,
+        message: "PDF downloaded successfully!",
+        type: 'success'
+      });
+    } catch (err) {
+      console.error("PDF export error:", err);
+      setSnackbar({
+        show: true,
+        message: `Failed to generate PDF: ${err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setIsExporting(false);
     }
-
-    const renderRow = (qi, index) => {
-      const allImgs = (itemImagesBase64[qi.id] || []).filter(Boolean);
-      return `<tr>
-        <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${index + 1}</td>
-        <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
-          <div style="font-weight:600;font-size:11px;">${qi.name || "—"}</div>
-          ${qi.description ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;line-height:1.3;">${qi.description}</div>` : ""}
-          ${allImgs.length ? `<div style="margin-top:6px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
-            ${allImgs.map((src) => `<div style="width:100%;height:120px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;"><img src="${src}" style="width:100%;height:100%;object-fit:cover;" /></div>`).join("")}
-          </div>` : ""}
-        </td>
-        <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${qi.quantity}</td>
-        <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${Number(qi.unitPrice).toFixed(2)}</td>
-        <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${(Number(qi.quantity) * Number(qi.unitPrice)).toFixed(2)}</td>
-      </tr>`;
-    };
-
-    const totalsRows = `
-      <tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Total (AED)</td>
-        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
-      </tr>
-      <tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">Tax (${quotationData.tax}%)</td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmount.toFixed(2)}</td>
-      </tr>
-      ${discountAmount > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${quotationData.discount}%)</td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discountAmount.toFixed(2)}</td>
-      </tr>` : ""}
-      <tr style="background:#000;color:white;font-weight:700;">
-        <td colspan="3" style="border:none;padding:8px;"></td>
-        <td style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (AED)</td>
-        <td style="text-align:right;padding:12px 8px;font-size:12px;">${grandTotal.toFixed(2)}</td>
-      </tr>`;
-
-    const thead = `<thead><tr style="background:#000;">
-      <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:40px;">SR#</th>
-      <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;">Item Description</th>
-      <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:50px;">Qty</th>
-      <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:70px;">Unit Price</th>
-      <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:80px;">Amount</th>
-    </tr></thead>`;
-
-    const termsImgTag = quotationData.termsImage
-      ? `<img src="${quotationData.termsImage.startsWith("data:") ? quotationData.termsImage : `${BASE_URL}${quotationData.termsImage}`}" style="margin-top:8px;max-width:100%;border-radius:4px;" />`
-      : "";
-
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-    <style>
-      *{margin:0;padding:0;box-sizing:border-box;}
-      body{font-family:'Segoe UI',Tahoma,sans-serif;background:white;color:#1f2937;line-height:1.6;}
-      .container{width:874px;margin:0 auto;padding:10px;}
-      @page{size:A4;margin:5mm;}
-      thead{display:table-row-group;}
-      @media print{body{margin:0;padding:0;}.page-break{page-break-before:always;}thead{display:table-row-group;}}
-    </style></head><body><div class="container">
-      <div style="width:100%;height:140px;margin-bottom:24px;display:flex;align-items:center;justify-content:center;border:3px solid #000;border-radius:6px;background:#f8fafc;overflow:hidden;">
-        ${headerBase64 ? `<img src="${headerBase64}" style="width:100%;height:100%;object-fit:contain;padding:10px;" />` : `<div style="font-size:24px;font-weight:bold;">YOUR COMPANY LOGO</div>`}
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #000;padding-bottom:16px;margin-bottom:16px;">
-        <div style="text-align:center;flex:1;">
-          <h1 style="font-size:24px;font-weight:bold;color:#000;letter-spacing:1px;">QUOTATION</h1>
-          <p style="color:#6b7280;margin:8px 0 0;font-size:12px;">${originalQuotation?.quotationNumber || ""}</p>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-size:10px;font-weight:600;color:#6b7280;">VALID UNTIL</div>
-          <div style="font-size:16px;font-weight:700;">${new Date(quotationData.expiryDate).toLocaleDateString("en-IN")}</div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
-        <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
-        <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${quotationData.projectName || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Customer</span><span>:</span><span>${quotationData.customer}</span>
-          <span style="font-weight:600;color:#4b5563;">Contact</span><span>:</span><span>${quotationData.contact || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Date</span><span>:</span><span>${new Date(quotationData.date).toLocaleDateString("en-IN")}</span>
-          <span style="font-weight:600;color:#4b5563;">Expiry Date</span><span>:</span><span>${new Date(quotationData.expiryDate).toLocaleDateString("en-IN")}</span>
-          <span style="font-weight:600;color:#4b5563;">TL</span><span>:</span><span>${quotationData.tl || "N/A"}</span>
-        </div>
-        <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
-          <span style="font-weight:600;color:#4b5563;">Our Ref</span><span>:</span><span>${quotationData.ourRef || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Our Contact</span><span>:</span><span>${quotationData.ourContact || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Sales Office</span><span>:</span><span>${quotationData.salesOffice || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Payment</span><span>:</span><span>${quotationData.paymentTerms || "N/A"}</span>
-          <span style="font-weight:600;color:#4b5563;">Delivery</span><span>:</span><span>${quotationData.deliveryTerms || "N/A"}</span>
-          
-          <span style="font-weight:600;color:#4b5563;">TRN</span><span>:</span><span>${quotationData.trn || "N/A"}</span>
-        </div>
-      </div>
-      <div style="margin-bottom:16px;">
-        <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">Items Detail</h3>
-        <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-          ${thead}<tbody>
-            ${firstPage.map((qi, i) => renderRow(qi, i)).join("")}
-            ${!multiPage ? totalsRows : ""}
-          </tbody>
-        </table>
-      </div>
-      ${multiPage ? `<div class="page-break">
-        <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;border-bottom:2px solid #000;padding-bottom:8px;">Items Detail (Continued)</h3>
-        <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-          <tbody>
-            ${remaining.map((qi, i) => renderRow(qi, i + ITEMS_PER_FIRST_PAGE)).join("")}
-            ${totalsRows}
-          </tbody>
-        </table>
-      </div>` : ""}
-      <div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:16px;font-size:11px;font-weight:600;">
-        <strong>Amount in words:</strong> ${amountInWords}
-      </div>
-      ${quotationData.notes ? `<div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Notes & Terms</h3>
-        <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;">${quotationData.notes}</div>
-      </div>` : ""}
-      ${tcSections && tcSections.length ? `<div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Terms & Conditions</h3>
-        ${sectionsToHTML(tcSections)}
-        ${termsImgTag}
-      </div>` : ""}
-      <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;font-size:11px;color:#6b7280;">
-        <p style="margin:0;font-weight:600;color:#1f2937;">Sincerely,</p>
-        <p style="margin:20px 0 0;font-weight:600;color:#1f2937;">Mega Repairing Machinery Equipment LLC</p>
-      </div>
-    </div></body></html>`;
-
-    const filename = `Quotation_${
-      originalQuotation?.quotationNumber || "view"
-    }_${new Date().toISOString().split("T")[0]}`;
-    
-    await quotationAPI.generatePDF(html, filename);
-    
-    setSnackbar({
-      show: true,
-      message: "PDF downloaded successfully!",
-      type: 'success'
-    });
-  } catch (err) {
-    console.error("PDF export error:", err);
-    setSnackbar({
-      show: true,
-      message: `Failed to generate PDF: ${err.message}`,
-      type: 'error'
-    });
-  } finally {
-    setIsExporting(false);
-  }
-}, [validateBeforeSave, quotationItems, quotationData, newImages, subtotal, taxAmount, 
-    discountAmount, grandTotal, tcSections, originalQuotation, amountInWords]);
+  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, tcSections]);
 
   return {
-    // State
     isEditing,
     setIsEditing,
     isSaving,
@@ -827,13 +700,12 @@ const extractTermsImagesFromSections = useCallback((sections) => {
     amountInWords,
     items,
     previewDoc,
-  setPreviewDoc,
-  handleDocumentPreview,
-  generatePDF,
-  customerTaxTreatment,
-  customerPlaceOfSupply,
-  termsImages,
-    // Handlers
+    setPreviewDoc,
+    handleDocumentPreview,
+    generatePDF,
+    customerTaxTreatment,
+    customerPlaceOfSupply,
+    termsImages,
     handleDataChange,
     addItem,
     removeItem,
@@ -848,5 +720,7 @@ const extractTermsImagesFromSections = useCallback((sections) => {
     handleSave,
     handleDelete,
     handleBack,
+    handleTermsImagesUpload,
+    removeTermsImage,
   };
 }

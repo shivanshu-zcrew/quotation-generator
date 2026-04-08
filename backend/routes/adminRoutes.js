@@ -14,7 +14,9 @@ const {
   rejectQuotation,
   // Dashboard
   getAdminDashboardStats,
-  getOpsDashboardStats
+  getOpsDashboardStats,
+  getUserQuotationStats,
+  getQuotationsByUser
 } = require('../controllers/adminController');
 const { protect, adminOnly, opsManagerOrAdmin } = require('../middleware/auth');
 
@@ -36,5 +38,7 @@ router.get('/quotations/pending',     adminOnly, getPendingQuotations);
 router.get('/quotations',             adminOnly, getAllQuotationsAdmin);
 router.put('/quotations/:id/approve', adminOnly, approveQuotation);
 router.put('/quotations/:id/reject',  adminOnly, rejectQuotation);
+router.get('/user-stats', adminOnly, getUserQuotationStats);
+router.get('/user-quotations/:userId', adminOnly,getQuotationsByUser);
 
 module.exports = router;

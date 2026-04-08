@@ -1,29 +1,34 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+// hooks/customHooks.js
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useAppStore } from '../services/store';
 import { itemAPI } from '../services/api';
+import useItemStore from '../services/itemStore';
+import useCustomerStore from '../services/customerStore';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// useItems
-// Returns ALL items from the Zustand store for the selected company.
-// Filtering (sellable / non-sellable) is done at the call-site (ItemsScreen).
-//
-// FIXES:
-//   - Removed showNonSellable state — hooks no longer filter; ItemsScreen controls it
-//   - Exposed allItems, sellableItems, nonSellableItems as separate derived values
-//     so stat cards have accurate counts independent of the selected filter
-// ─────────────────────────────────────────────────────────────────────────────
+// ============================================================================
+// ITEMS HOOKS - Now using useItemStore
+// ============================================================================
+
+// useItems - Returns ALL items from useItemStore for the selected company
 export const useItems = () => {
-  const items               = useAppStore(s => s.items);
-  const loading             = useAppStore(s => s.loading);
+  const { 
+    items, 
+    isLoading, 
+    error, 
+    totalCount, 
+    isLoaded,
+    loadAllItems,
+    resetItems,
+    refreshItems
+  } = useItemStore();
+  
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+  const addItem = useAppStore(s => s.addItem);
+  const updateItem = useAppStore(s => s.updateItem);
+  const deleteItem = useAppStore(s => s.deleteItem);
   const operationInProgress = useAppStore(s => s.operationInProgress);
-  const lastError           = useAppStore(s => s.lastError);
-  const addItem             = useAppStore(s => s.addItem);
-  const updateItem          = useAppStore(s => s.updateItem);
-  const deleteItem          = useAppStore(s => s.deleteItem);
-  const clearError          = useAppStore(s => s.clearError);
-  const selectedCompany     = useAppStore(s => s.selectedCompany);
 
-  // All items for the selected company (no sellable filter)
+  // Filter items by company (items from store should already be filtered)
   const companyItems = useMemo(() => {
     if (!selectedCompany) return items;
     return items.filter(item =>
@@ -43,33 +48,27 @@ export const useItems = () => {
   );
 
   return {
-    items: companyItems,          // ALL items for the company
+    items: companyItems,
     allItems: companyItems,
     sellableItems,
     nonSellableItems,
-    loading: loading === true,
-    error: lastError?.message || null,
+    loading: isLoading,
+    error: error,
+    totalCount: totalCount,
+    isLoaded: isLoaded,
     isAddingItem: operationInProgress.addItem === true,
     operationInProgress,
     addItem,
     updateItem,
     deleteItem,
-    clearError,
+    loadAllItems,
+    resetItems,
+    refreshItems,
+    clearError: () => useItemStore.getState().setError(null),
   };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// usePaginatedItems
-// Fetches paginated items from the server.
-// Returns the raw server page — NO client-side sellable filtering.
-// Filtering is applied in ItemsScreen after receiving data.
-//
-// FIXES:
-//   - Removed showNonSellable state and filtering from inside hook
-//   - pagination.totalItems now always reflects the real server total, not the
-//     filtered subset (fixes wrong page counts when switching filter tabs)
-//   - Debounce on search to avoid hammering the server
-// ─────────────────────────────────────────────────────────────────────────────
+// usePaginatedItems - Now using useItemStore with pagination
 export const usePaginatedItems = (initialPage = 1) => {
   const [itemsData, setItemsData] = useState({
     items: [],
@@ -99,7 +98,6 @@ export const usePaginatedItems = (initialPage = 1) => {
       });
 
       if (response.data.success) {
-        // Return ALL items from server — no client-side can_be_sold filter here
         const serverItems = response.data.data || [];
         setItemsData({
           items:      serverItems,
@@ -122,17 +120,17 @@ export const usePaginatedItems = (initialPage = 1) => {
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
-  const setPage     = useCallback((p)   => setFilters(prev => ({ ...prev, page: p })),                           []);
+  const setPage     = useCallback((p)   => setFilters(prev => ({ ...prev, page: p })), []);
   const setLimit    = useCallback((l)   => setFilters(prev => ({ ...prev, page: 1, limit: Math.min(l, 500) })), []);
-  const setSearch   = useCallback((s)   => setFilters(prev => ({ ...prev, search: s, page: 1 })),                []);
+  const setSearch   = useCallback((s)   => setFilters(prev => ({ ...prev, search: s, page: 1 })), []);
   const setSorting  = useCallback((by, order = 'asc') => setFilters(prev => ({ ...prev, sortBy: by, sortOrder: order, page: 1 })), []);
 
-  const goToPage    = useCallback((n)   => {
+  const goToPage    = useCallback((n) => {
     const max = itemsData.pagination.totalPages;
     if (n >= 1 && n <= max) setPage(n);
   }, [itemsData.pagination.totalPages, setPage]);
 
-  const nextPage     = useCallback(() => { if (itemsData.pagination.hasNextPage)     setPage(itemsData.pagination.page + 1); }, [itemsData.pagination, setPage]);
+  const nextPage     = useCallback(() => { if (itemsData.pagination.hasNextPage) setPage(itemsData.pagination.page + 1); }, [itemsData.pagination, setPage]);
   const previousPage = useCallback(() => { if (itemsData.pagination.hasPreviousPage) setPage(itemsData.pagination.page - 1); }, [itemsData.pagination, setPage]);
   const resetFilters = useCallback(() => setFilters({ page: 1, limit: 50, search: '', sortBy: 'name', sortOrder: 'asc' }), []);
 
@@ -157,17 +155,7 @@ export const usePaginatedItems = (initialPage = 1) => {
   };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// useItemSearch
-// Searches items from the server. Returns ALL matching items without client
-// filtering so ItemsScreen can apply its own filterType.
-//
-// FIXES:
-//   - Removed showNonSellable from hook state
-//   - `search` useCallback no longer depends on showNonSellable, fixing stale
-//     closure bug on `loadMore`
-//   - Returns server totalItems accurately for display
-// ─────────────────────────────────────────────────────────────────────────────
+// useItemSearch - Now using useItemStore
 export const useItemSearch = () => {
   const [searchResults, setSearchResults] = useState({
     items: [], total: 0, loading: false, error: null, hasMore: false,
@@ -201,7 +189,7 @@ export const useItemSearch = () => {
     } catch (error) {
       setSearchResults(prev => ({ ...prev, loading: false, error: error.message }));
     }
-  }, []); // no external dependencies — stable reference
+  }, []);
 
   const handleSearch = useCallback((q) => { setQuery(q); search(q, 20, 0); }, [search]);
   const clearSearch  = useCallback(() => {
@@ -213,18 +201,9 @@ export const useItemSearch = () => {
   return { ...searchResults, query, search: handleSearch, loadMore, clearSearch };
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// useItemStats
-// Computes stat card values from the Zustand store items for the selected
-// company. Counts ALL items (sellable + non-sellable) and provides breakdowns.
-//
-// FIXES:
-//   - Counts ALL company items, not just sellable+active, so stat cards are
-//     accurate regardless of the selected filter tab
-//   - isMounted guard prevents state update after unmount
-// ─────────────────────────────────────────────────────────────────────────────
+// useItemStats - Now using useItemStore
 export const useItemStats = () => {
-  const items           = useAppStore(s => s.items);
+  const { items, isLoading } = useItemStore();
   const selectedCompany = useAppStore(s => s.selectedCompany);
 
   const stats = useMemo(() => {
@@ -255,5 +234,119 @@ export const useItemStats = () => {
     };
   }, [items, selectedCompany]);
 
-  return { data: stats, loading: false, error: null };
+  return { data: stats, loading: isLoading, error: null };
+};
+
+// ============================================================================
+// CUSTOMER HOOKS - Using useCustomerStore
+// ============================================================================
+
+// useCustomers - Now using useCustomerStore
+export const useCustomers = () => {
+  const {
+    customers,
+    isLoading,
+    error,
+    totalCount,
+    isLoaded,
+    loadAllCustomers,
+    refreshCustomers,
+    getCustomerById,
+    syncCustomers,
+    isSyncing,
+    addCustomer,
+    updateCustomer,
+    deleteCustomer,
+    clearError,
+    resetCustomers
+  } = useCustomerStore();
+
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+
+  return {
+    customers,
+    loading: isLoading,
+    error,
+    totalCount,
+    isLoaded,
+    isSyncing,
+    loadAllCustomers: () => loadAllCustomers(selectedCompany),
+    refreshCustomers: () => refreshCustomers(selectedCompany),
+    getCustomerById,
+    syncCustomers: () => syncCustomers(selectedCompany),
+    addCustomer,
+    updateCustomer,
+    deleteCustomer,
+    clearError,
+    resetCustomers,
+  };
+};
+
+// ============================================================================
+// ITEMS LIST HOOK - For QuotationScreen
+// ============================================================================
+
+export const useItemsList = () => {
+  const { items, isLoading, isLoaded, loadAllItems, resetItems } = useItemStore();
+  const { selectedCompany } = useAppStore(s => ({ selectedCompany: s.selectedCompany }));
+  const [companyItems, setCompanyItems] = useState([]);
+  
+  // Reset and reload when company changes
+  useEffect(() => {
+    if (selectedCompany) {
+      console.log('🔄 useItemsList: Company changed to:', selectedCompany);
+      
+      // Reset store to clear old items
+      resetItems();
+      
+      // Clear local state
+      setCompanyItems([]);
+      
+      // Load new company items
+      loadAllItems(selectedCompany, true); // Force refresh
+    }
+  }, [selectedCompany, resetItems, loadAllItems]);
+  
+  // Update local items when store items change
+  useEffect(() => {
+    if (items && items.length > 0) {
+      // Filter items by current company to be safe
+      const filtered = items.filter(item =>
+        item.companyId === selectedCompany ||
+        item.companyId?._id === selectedCompany
+      );
+      console.log(`📦 useItemsList: ${filtered.length} items for company ${selectedCompany}`);
+      setCompanyItems(filtered);
+    } else if (!isLoading && selectedCompany) {
+      setCompanyItems([]);
+    }
+  }, [items, selectedCompany, isLoading]);
+  
+  // Initial load if needed
+  useEffect(() => {
+    if (selectedCompany && !isLoaded && !isLoading) {
+      console.log('📚 useItemsList: Initial load for company:', selectedCompany);
+      loadAllItems(selectedCompany);
+    }
+  }, [selectedCompany, isLoaded, isLoading, loadAllItems]);
+  
+  return companyItems;
+};
+
+// ============================================================================
+// QUOTATIONS HOOK
+// ============================================================================
+
+export const useQuotations = () => {
+  const store = useAppStore();
+  
+  return {
+    quotations: store.quotations || [],
+    addQuotation: store.addQuotation,
+    updateQuotation: store.updateQuotation,
+    deleteQuotation: store.deleteQuotation,
+    getQuotation: store.getQuotation,
+    isLoading: store.loading,
+    error: store.error
+  };
 };

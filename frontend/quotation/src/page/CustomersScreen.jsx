@@ -1,10 +1,16 @@
+// screens/CustomersScreen.jsx (Updated to use useCustomerStore)
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Plus, Edit2, Trash2, ArrowLeft, Search, RefreshCw, AlertCircle,ChevronDown , CheckCircle, Users, Building2, Tag, User, X, Save, Globe, DollarSign, Mail, Phone, MapPin, Shield, ChevronLeft, ChevronRight, Download, Upload, Clock } from 'lucide-react';
-import { usePaginatedCustomers, useCustomerSearch, useCustomerStats, useCustomers } from '../hooks/customerHooks';
+import { 
+  Plus, Edit2, Trash2, ArrowLeft, Search, RefreshCw, AlertCircle, ChevronDown, 
+  CheckCircle, Users, Building2, Tag, User, X, Save, Globe, DollarSign, 
+  Mail, Phone, MapPin, Shield, ChevronLeft, ChevronRight, Download, Upload, Clock 
+} from 'lucide-react';
+import { useCustomers, usePaginatedCustomers, useCustomerSearch, useCustomerStats, useZohoSync } from '../hooks/customerHooks';
 import { customerAPI } from '../services/api';
 
 const PRIMARY_COLOR = '#0f172a';
 
+// Toast Component (keep as is)
 const Toast = ({ message, type = 'success', onClose }) => {
   useEffect(() => { const timer = setTimeout(onClose, 4000); return () => clearTimeout(timer); }, [onClose]);
   return (
@@ -18,8 +24,11 @@ const Toast = ({ message, type = 'success', onClose }) => {
   );
 };
 
+// StatCard Component (keep as is)
 const StatCard = ({ label, value, icon: Icon, color, subtitle }) => (
-  <div style={{ background: 'white', borderRadius: '20px', padding: '1.25rem', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.2s, box-shadow 0.2s' }} onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.1)'; }} onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'; }}>
+  <div style={{ background: 'white', borderRadius: '20px', padding: '1.25rem', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.2s, box-shadow 0.2s' }} 
+       onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.1)'; }} 
+       onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'; }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
       <div style={{ width: '44px', height: '44px', borderRadius: '14px', background: `${color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Icon size={22} color={color} />
@@ -31,6 +40,7 @@ const StatCard = ({ label, value, icon: Icon, color, subtitle }) => (
   </div>
 );
 
+// PaginationControls Component (keep as is)
 const PaginationControls = ({ pagination, onPageChange, loading }) => {
   if (!pagination || pagination.totalPages <= 1) return null;
   const { page, totalPages } = pagination;
@@ -39,14 +49,34 @@ const PaginationControls = ({ pagination, onPageChange, loading }) => {
   let endPage = Math.min(totalPages, startPage + maxButtons - 1);
   if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
   const pageButtons = [];
-  pageButtons.push(<button key="prev" onClick={() => onPageChange(page - 1)} disabled={page === 1 || loading} style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', cursor: page === 1 || loading ? 'not-allowed' : 'pointer', opacity: page === 1 || loading ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronLeft size={16} /></button>);
+  
+  pageButtons.push(
+    <button key="prev" onClick={() => onPageChange(page - 1)} disabled={page === 1 || loading} 
+            style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', cursor: page === 1 || loading ? 'not-allowed' : 'pointer', opacity: page === 1 || loading ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <ChevronLeft size={16} />
+    </button>
+  );
+  
   for (let i = startPage; i <= endPage; i++) {
-    pageButtons.push(<button key={i} onClick={() => onPageChange(i)} disabled={loading} style={{ minWidth: '36px', height: '36px', borderRadius: '10px', border: i === page ? 'none' : '1px solid #e2e8f0', background: i === page ? PRIMARY_COLOR : 'white', color: i === page ? 'white' : '#475569', fontWeight: i === page ? '600' : '500', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1 }}>{i}</button>);
+    pageButtons.push(
+      <button key={i} onClick={() => onPageChange(i)} disabled={loading} 
+              style={{ minWidth: '36px', height: '36px', borderRadius: '10px', border: i === page ? 'none' : '1px solid #e2e8f0', background: i === page ? PRIMARY_COLOR : 'white', color: i === page ? 'white' : '#475569', fontWeight: i === page ? '600' : '500', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1 }}>
+        {i}
+      </button>
+    );
   }
-  pageButtons.push(<button key="next" onClick={() => onPageChange(page + 1)} disabled={page === totalPages || loading} style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', cursor: page === totalPages || loading ? 'not-allowed' : 'pointer', opacity: page === totalPages || loading ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ChevronRight size={16} /></button>);
+  
+  pageButtons.push(
+    <button key="next" onClick={() => onPageChange(page + 1)} disabled={page === totalPages || loading} 
+            style={{ width: '36px', height: '36px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', cursor: page === totalPages || loading ? 'not-allowed' : 'pointer', opacity: page === totalPages || loading ? 0.5 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <ChevronRight size={16} />
+    </button>
+  );
+  
   return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem' }}>{pageButtons}</div>;
 };
 
+// CustomerCard Component (keep as is, but ensure tax badge works)
 const CustomerCard = ({ customer, onEdit, onDelete, deletingId }) => {
   const getTaxBadge = (treatment) => {
     const isVatRegistered = treatment === 'vat_registered' || treatment === 'gcc_vat_registered';
@@ -58,35 +88,57 @@ const CustomerCard = ({ customer, onEdit, onDelete, deletingId }) => {
   const taxBadge = getTaxBadge(customer.taxTreatment);
   
   return (
-    <div style={{ border: '1px solid #f1f5f9', borderRadius: '20px', overflow: 'hidden', transition: 'all 0.3s ease', background: 'white' }} onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 20px 25px -12px rgba(0,0,0,0.15)'; }} onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
+    <div style={{ border: '1px solid #f1f5f9', borderRadius: '20px', overflow: 'hidden', transition: 'all 0.3s ease', background: 'white' }} 
+         onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 20px 25px -12px rgba(0,0,0,0.15)'; }} 
+         onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}>
       <div style={{ padding: '1.25rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: `${PRIMARY_COLOR}10`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Users size={20} color={PRIMARY_COLOR} />
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button onClick={() => onEdit(customer)} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Edit2 size={12} /> Edit</button>
-            <button onClick={() => onDelete(customer)} disabled={deletingId === customer._id} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Trash2 size={12} /> Delete</button>
+            <button onClick={() => onEdit(customer)} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Edit2 size={12} /> Edit
+            </button>
+            <button onClick={() => onDelete(customer)} disabled={deletingId === customer._id} 
+                    style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Trash2 size={12} /> Delete
+            </button>
           </div>
         </div>
         <h3 style={{ margin: '0.75rem 0 0.25rem', fontSize: '1rem', fontWeight: '700', color: PRIMARY_COLOR }}>{customer.name}</h3>
-        <p style={{ margin: '0 0 0.25rem', color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Mail size={10} /> {customer.email}</p>
-        {customer.phone && <p style={{ margin: '0 0 0.5rem', color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={10} /> {customer.phone}</p>}
+        <p style={{ margin: '0 0 0.25rem', color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <Mail size={10} /> {customer.email}
+        </p>
+        {customer.phone && (
+          <p style={{ margin: '0 0 0.5rem', color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Phone size={10} /> {customer.phone}
+          </p>
+        )}
         {customer.zohoId && (
           <p style={{ margin: '0 0 0.5rem', color: '#8b5cf6', fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <Shield size={10} /> Zoho ID: {customer.zohoId}
           </p>
         )}
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-          <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '600', background: taxBadge.background, color: taxBadge.color }}>{taxBadge.label}</span>
-          {customer.placeOfSupply && <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '500', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}><MapPin size={10} /> {customer.placeOfSupply}</span>}
-          <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '500', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}><DollarSign size={10} /> {customer.defaultCurrency?.code || customer.defaultCurrency || 'AED'}</span>
+          <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '600', background: taxBadge.background, color: taxBadge.color }}>
+            {taxBadge.label}
+          </span>
+          {customer.placeOfSupply && (
+            <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '500', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <MapPin size={10} /> {customer.placeOfSupply}
+            </span>
+          )}
+          <span style={{ padding: '2px 8px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: '500', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <DollarSign size={10} /> {customer.defaultCurrency?.code || customer.defaultCurrency || 'AED'}
+          </span>
         </div>
       </div>
     </div>
   );
 };
 
+// CustomerModal Component (keep as is)
 const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmitting }) => {
   const [formData, setFormData] = useState({
     name: '', email: '', phone: '', address: '', companyName: '', website: '', notes: '',
@@ -155,7 +207,8 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
   const placeOfSupplyOptions = showUaeEmirates ? UAE_EMIRATES : GCC_COUNTRIES;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem', overflowY: 'auto' }} onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) onClose(); }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem', overflowY: 'auto' }} 
+         onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) onClose(); }}>
       <div style={{ background: 'white', borderRadius: '28px', width: '100%', maxWidth: '720px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
         <div style={{ position: 'sticky', top: 0, padding: '1.5rem 2rem', borderBottom: '1px solid #f1f5f9', background: 'white' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -163,20 +216,25 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
               <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '800', color: PRIMARY_COLOR }}>{initialData ? 'Edit Customer' : 'Add New Customer'}</h2>
               <p style={{ margin: '0.25rem 0 0', color: '#64748b', fontSize: '0.8rem' }}>{initialData ? 'Update customer information' : 'Enter customer details'}</p>
             </div>
-            <button onClick={onClose} disabled={isSubmitting} style={{ width: '40px', height: '40px', borderRadius: '12px', background: '#f1f5f9', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={18} color="#64748b" /></button>
+            <button onClick={onClose} disabled={isSubmitting} style={{ width: '40px', height: '40px', borderRadius: '12px', background: '#f1f5f9', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <X size={18} color="#64748b" />
+            </button>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} style={{ padding: '2rem' }}>
+          {/* Form fields - same as before */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Customer Name <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="text" name="name" placeholder="Enter customer name" value={formData.name} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.name ? '#ef4444' : '#e2e8f0'}`, borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="text" name="name" placeholder="Enter customer name" value={formData.name} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.name ? '#ef4444' : '#e2e8f0'}`, borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
               {errors.name && <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>{errors.name}</p>}
             </div>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Email Address <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="email" name="email" placeholder="customer@example.com" value={formData.email} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.email ? '#ef4444' : '#e2e8f0'}`, borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="email" name="email" placeholder="customer@example.com" value={formData.email} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.email ? '#ef4444' : '#e2e8f0'}`, borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
               {errors.email && <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>{errors.email}</p>}
             </div>
           </div>
@@ -184,11 +242,13 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Phone Number</label>
-              <input type="text" name="phone" placeholder="+971 50 123 4567" value={formData.phone} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="text" name="phone" placeholder="+971 50 123 4567" value={formData.phone} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
             </div>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Address</label>
-              <input type="text" name="address" placeholder="Dubai, UAE" value={formData.address} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="text" name="address" placeholder="Dubai, UAE" value={formData.address} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
             </div>
           </div>
 
@@ -201,7 +261,8 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                 { value: 'gcc_vat_registered', label: 'GCC VAT Registered', desc: 'GCC country VAT registered' },
                 { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT', desc: 'GCC country non-VAT' }
               ].map(treatment => (
-                <div key={treatment.value} onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '' }))} style={{ padding: '0.75rem', borderRadius: '14px', border: `2px solid ${formData.taxTreatment === treatment.value ? PRIMARY_COLOR : '#e2e8f0'}`, background: formData.taxTreatment === treatment.value ? `${PRIMARY_COLOR}10` : 'white', cursor: 'pointer', textAlign: 'center' }}>
+                <div key={treatment.value} onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '' }))} 
+                     style={{ padding: '0.75rem', borderRadius: '14px', border: `2px solid ${formData.taxTreatment === treatment.value ? PRIMARY_COLOR : '#e2e8f0'}`, background: formData.taxTreatment === treatment.value ? `${PRIMARY_COLOR}10` : 'white', cursor: 'pointer', textAlign: 'center' }}>
                   <div style={{ fontWeight: '600', fontSize: '0.75rem', color: formData.taxTreatment === treatment.value ? PRIMARY_COLOR : '#0f172a' }}>{treatment.label}</div>
                   <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.25rem' }}>{treatment.desc}</div>
                 </div>
@@ -212,7 +273,8 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           {isVatRegistered && (
             <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f0f9ff', borderRadius: '16px', border: '1px solid #bae6fd' }}>
               <label style={{ display: 'block', fontWeight: '600', color: '#0c4a6e', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Tax Registration Number (TRN) <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="text" name="taxRegistrationNumber" placeholder="123456789012345" value={formData.taxRegistrationNumber} onChange={handleChange} disabled={isSubmitting} maxLength={15} style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.taxRegistrationNumber ? '#ef4444' : '#bae6fd'}`, borderRadius: '14px', fontSize: '0.875rem', fontFamily: 'monospace', outline: 'none' }} />
+              <input type="text" name="taxRegistrationNumber" placeholder="123456789012345" value={formData.taxRegistrationNumber} onChange={handleChange} disabled={isSubmitting} maxLength={15} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.taxRegistrationNumber ? '#ef4444' : '#bae6fd'}`, borderRadius: '14px', fontSize: '0.875rem', fontFamily: 'monospace', outline: 'none' }} />
               {errors.taxRegistrationNumber && <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>{errors.taxRegistrationNumber}</p>}
             </div>
           )}
@@ -220,14 +282,16 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>{showUaeEmirates ? 'UAE Emirate' : 'GCC Country'} <span style={{ color: '#ef4444' }}>*</span></label>
-              <select name="placeOfSupply" value={formData.placeOfSupply} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
+              <select name="placeOfSupply" value={formData.placeOfSupply} onChange={handleChange} disabled={isSubmitting} 
+                      style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
                 <option value="">Select</option>
                 {placeOfSupplyOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             </div>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Default Currency <span style={{ color: '#ef4444' }}>*</span></label>
-              <select name="defaultCurrency" value={formData.defaultCurrency} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
+              <select name="defaultCurrency" value={formData.defaultCurrency} onChange={handleChange} disabled={isSubmitting} 
+                      style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
                 <option value="AED">AED - UAE Dirham</option>
                 <option value="SAR">SAR - Saudi Riyal</option>
                 <option value="KWD">KWD - Kuwaiti Dinar</option>
@@ -242,22 +306,31 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Company Name</label>
-              <input type="text" name="companyName" placeholder="Company name (optional)" value={formData.companyName} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="text" name="companyName" placeholder="Company name (optional)" value={formData.companyName} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
             </div>
             <div>
               <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Website</label>
-              <input type="text" name="website" placeholder="https://example.com" value={formData.website} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
+              <input type="text" name="website" placeholder="https://example.com" value={formData.website} onChange={handleChange} disabled={isSubmitting} 
+                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
             </div>
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Notes</label>
-            <textarea rows={3} name="notes" placeholder="Additional notes..." value={formData.notes} onChange={handleChange} disabled={isSubmitting} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', fontFamily: 'inherit', resize: 'vertical', outline: 'none' }} />
+            <textarea rows={3} name="notes" placeholder="Additional notes..." value={formData.notes} onChange={handleChange} disabled={isSubmitting} 
+                      style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', fontFamily: 'inherit', resize: 'vertical', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
-            <button type="button" onClick={onClose} disabled={isSubmitting} style={{ padding: '0.75rem 1.5rem', borderRadius: '14px', background: '#f1f5f9', color: '#64748b', border: 'none', fontWeight: '600', fontSize: '0.875rem', cursor: 'pointer' }}>Cancel</button>
-            <button type="submit" disabled={isSubmitting} style={{ padding: '0.75rem 1.5rem', borderRadius: '14px', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', fontWeight: '600', fontSize: '0.875rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Save size={16} /> {isSubmitting ? 'Saving...' : initialData ? 'Update' : 'Add Customer'}</button>
+            <button type="button" onClick={onClose} disabled={isSubmitting} 
+                    style={{ padding: '0.75rem 1.5rem', borderRadius: '14px', background: '#f1f5f9', color: '#64748b', border: 'none', fontWeight: '600', fontSize: '0.875rem', cursor: 'pointer' }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={isSubmitting} 
+                    style={{ padding: '0.75rem 1.5rem', borderRadius: '14px', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', fontWeight: '600', fontSize: '0.875rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Save size={16} /> {isSubmitting ? 'Saving...' : initialData ? 'Update' : 'Add Customer'}
+            </button>
           </div>
         </form>
       </div>
@@ -265,17 +338,20 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
   );
 };
 
+// Main CustomersScreen Component
 export default function CustomersScreen({ onBack }) {
+  // Use the updated hooks from customHooks.js
   const pagination = usePaginatedCustomers(1);
   const search = useCustomerSearch();
   const stats = useCustomerStats();
+  const { syncCustomers, syncing: isSyncing, error: syncError, getSyncStatus } = useZohoSync();
+  
   const [mode, setMode] = useState('browse');
   const [toast, setToast] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [syncType, setSyncType] = useState(null);
   const [viewMode, setViewMode] = useState('card');
   const [showSyncOptions, setShowSyncOptions] = useState(false);
@@ -358,7 +434,6 @@ export default function CustomersScreen({ onBack }) {
   }, [pagination, stats]);
 
   const handleSync = useCallback(async (fullSync = false) => {
-    setIsSyncing(true);
     setSyncType(fullSync ? 'full' : 'incremental');
     setToast({ 
       message: fullSync ? '🔄 Performing full sync from Zoho...' : '🔄 Performing incremental sync from Zoho...', 
@@ -366,92 +441,72 @@ export default function CustomersScreen({ onBack }) {
     });
     
     try {
-      console.log(`Starting ${fullSync ? 'FULL' : 'INCREMENTAL'} sync...`);
-      const response = await customerAPI.syncFromZoho(fullSync);
+      const result = await syncCustomers(fullSync);
       
-      console.log('Sync response:', response);
-      
-      if (response.data && response.data.success) {
-        const stats = response.data.stats || {};
-        const message = `✅ Sync complete! ${stats.created || 0} new, ${stats.updated || 0} updated, ${stats.unchanged || 0} unchanged`;
+      if (result.success) {
+        const statsData = result.stats || {};
+        setToast({ 
+          message: `✅ Sync complete! ${statsData.created || 0} new, ${statsData.updated || 0} updated`, 
+          type: 'success' 
+        });
         
-        console.log('Sync success:', message);
-        setToast({ message, type: 'success' });
-        
-        // Refresh data - check if refetch exists before calling
+        // Refresh pagination data
         if (pagination && typeof pagination.refetch === 'function') {
           await pagination.refetch();
-        } else {
-          console.warn('pagination.refetch is not a function');
-          // Fallback: reload page or fetch manually
-          window.location.reload();
         }
         
-        // Refresh stats - check if refetch exists
-        if (stats && typeof stats.refetch === 'function') {
-          await stats.refetch();
-        } else if (stats && typeof stats.fetchStats === 'function') {
-          await stats.fetchStats();
-        } else {
-          console.warn('stats.refetch is not available');
-          // Manual fetch
-          try {
-            const statsResponse = await customerAPI.getStats();
-            if (statsResponse.data.success) {
-              // Update stats state if you have a setter
-              // You might need to pass a setStats function from the hook
+        // Refresh stats - try multiple approaches
+        if (stats) {
+          if (typeof stats.refetch === 'function') {
+            await stats.refetch();
+          } else if (typeof stats.fetchStats === 'function') {
+            await stats.fetchStats();
+          } else {
+            // Manual refresh
+            const response = await customerAPI.getStats();
+            if (response.data.success && typeof stats.setData === 'function') {
+              stats.setData(response.data.stats);
             }
-          } catch (error) {
-            console.error('Failed to refresh stats:', error);
           }
         }
         
       } else {
-        const errorMsg = response.data?.message || response.data?.error || 'Sync failed';
-        console.error('Sync failed:', errorMsg);
-        setToast({ message: `❌ ${errorMsg}`, type: 'error' });
+        setToast({ message: `❌ ${result.error || 'Sync failed'}`, type: 'error' });
       }
       
     } catch (error) { 
-      console.error('Sync error caught:', error);
-      
-      let errorMessage = 'Error syncing customers';
-      
-      if (error.response) {
-        errorMessage = error.response.data?.message || error.response.data?.error || `Server error: ${error.response.status}`;
-      } else if (error.request) {
-        errorMessage = 'No response from server. Please check your connection.';
-      } else {
-        errorMessage = error.message || 'Unknown error occurred';
-      }
-      
-      setToast({ message: `❌ ${errorMessage}`, type: 'error' });
-      
+      console.error('Sync error:', error);
+      setToast({ message: `❌ ${error.message || 'Error syncing customers'}`, type: 'error' });
     } finally { 
-      setIsSyncing(false);
       setSyncType(null);
       setShowSyncOptions(false);
     }
-  }, [pagination, stats]);
+  }, [syncCustomers, pagination, stats]);
 
   const handleGetSyncStatus = useCallback(async () => {
     try {
-      const response = await customerAPI.getSyncStatus();
-      if (response.data.success) {
-        const status = response.data.data;
+      const result = await getSyncStatus();
+      if (result.success) {
+        const status = result.data;
         setToast({ 
-          message: `Sync Status: Total: ${status.total}, Synced: ${status.synced}, Pending: ${status.pendingSync}, Last sync: ${status.lastSyncDate ? new Date(status.lastSyncDate).toLocaleString() : 'Never'}`,
+          message: `Sync Status - Total: ${status?.total || 0}, Synced: ${status?.synced || 0}, Pending: ${status?.pendingSync || 0}`,
           type: 'info' 
         });
+      } else {
+        setToast({ message: 'Failed to get sync status', type: 'error' });
       }
     } catch (error) {
       setToast({ message: 'Failed to get sync status', type: 'error' });
     }
-  }, []);
+  }, [getSyncStatus]);
 
+  // Add animation styles
   useEffect(() => {
     const style = document.createElement('style');
-    style.textContent = `@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
+    style.textContent = `
+      @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } 
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    `;
     document.head.appendChild(style);
     return () => document.head.removeChild(style);
   }, []);
@@ -459,6 +514,7 @@ export default function CustomersScreen({ onBack }) {
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4ff 0%, #e8edf5 100%)', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem 1.5rem' }}>
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: '800', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Customers</h1>
@@ -471,16 +527,9 @@ export default function CustomersScreen({ onBack }) {
                 disabled={isSyncing} 
                 style={{ 
                   background: isSyncing ? '#9ca3af' : `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, 
-                  border: 'none', 
-                  borderRadius: '14px', 
-                  padding: '.7rem 1.4rem', 
-                  cursor: isSyncing ? 'not-allowed' : 'pointer', 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '.5rem', 
-                  color: 'white', 
-                  fontWeight: '600', 
-                  fontSize: '0.8rem', 
+                  border: 'none', borderRadius: '14px', padding: '.7rem 1.4rem', 
+                  cursor: isSyncing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '.5rem', 
+                  color: 'white', fontWeight: '600', fontSize: '0.8rem', 
                   boxShadow: isSyncing ? 'none' : `0 4px 12px ${PRIMARY_COLOR}30` 
                 }}
               >
@@ -491,65 +540,29 @@ export default function CustomersScreen({ onBack }) {
               
               {showSyncOptions && !isSyncing && (
                 <div style={{
-                  position: 'absolute',
-                  top: '100%',
-                  right: 0,
-                  marginTop: '0.5rem',
-                  background: 'white',
-                  borderRadius: '12px',
-                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
-                  border: '1px solid #e2e8f0',
-                  zIndex: 10,
-                  minWidth: '200px',
-                  overflow: 'hidden'
+                  position: 'absolute', top: '100%', right: 0, marginTop: '0.5rem',
+                  background: 'white', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
+                  border: '1px solid #e2e8f0', zIndex: 10, minWidth: '200px', overflow: 'hidden'
                 }}>
-                  
-                  <button
-                    onClick={() => handleSync(true)}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem 1rem',
-                      background: 'white',
-                      border: 'none',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      transition: 'background 0.2s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-                  >
+                  <button onClick={() => handleSync(true)} style={{ width: '100%', padding: '0.75rem 1rem', background: 'white', border: 'none', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={(e) => e.currentTarget.style.background = 'white'}>
                     <RefreshCw size={14} /> Full Sync (All Customers)
                   </button>
                   <div style={{ height: '1px', background: '#e2e8f0', margin: '0.25rem 0' }} />
-                  <button
-                    onClick={handleGetSyncStatus}
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem 1rem',
-                      background: 'white',
-                      border: 'none',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      transition: 'background 0.2s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-                  >
+                  <button onClick={handleGetSyncStatus} style={{ width: '100%', padding: '0.75rem 1rem', background: 'white', border: 'none', textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={(e) => e.currentTarget.style.background = 'white'}>
                     <Clock size={14} /> Check Sync Status
                   </button>
                 </div>
               )}
             </div>
-            <button onClick={onBack} style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '.7rem 1.4rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '.5rem', fontWeight: '500', fontSize: '0.8rem' }}><ArrowLeft size={16} /> Back</button>
+            <button onClick={onBack} style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '.7rem 1.4rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '.5rem', fontWeight: '500', fontSize: '0.8rem' }}>
+              <ArrowLeft size={16} /> Back
+            </button>
           </div>
         </div>
 
+        {/* Stats Cards */}
         {!stats.loading && stats.data && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
             <StatCard label="Total Customers" value={stats.data.totalCustomers || 0} icon={Users} color="#6366f1" />
@@ -559,20 +572,31 @@ export default function CustomersScreen({ onBack }) {
           </div>
         )}
 
+        {/* Main Content Card */}
         <div style={{ background: 'white', borderRadius: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+          {/* Toolbar */}
           <div style={{ padding: '1.5rem', borderBottom: '1px solid #f1f5f9' }}>
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ position: 'relative', flex: 1, minWidth: '250px' }}>
                 <Search size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                <input type="text" placeholder="Search customers by name, email, or phone..." onChange={(e) => handleSearch(e.target.value)} style={{ width: '100%', padding: '0.75rem 1rem 0.75rem 2.5rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} onFocus={(e) => e.currentTarget.style.borderColor = PRIMARY_COLOR} onBlur={(e) => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                <input type="text" placeholder="Search customers by name, email, or phone..." 
+                       onChange={(e) => handleSearch(e.target.value)} 
+                       style={{ width: '100%', padding: '0.75rem 1rem 0.75rem 2.5rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} 
+                       onFocus={(e) => e.currentTarget.style.borderColor = PRIMARY_COLOR} 
+                       onBlur={(e) => e.currentTarget.style.borderColor = '#e2e8f0'} />
               </div>
               {mode === 'browse' && (
                 <>
                   <div style={{ display: 'flex', gap: '0.5rem', background: '#f1f5f9', padding: '0.25rem', borderRadius: '12px' }}>
-                    <button onClick={() => setViewMode('card')} style={{ padding: '0.5rem 1rem', borderRadius: '10px', background: viewMode === 'card' ? 'white' : 'transparent', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>Cards</button>
-                    <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1rem', borderRadius: '10px', background: viewMode === 'table' ? 'white' : 'transparent', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>Table</button>
+                    <button onClick={() => setViewMode('card')} style={{ padding: '0.5rem 1rem', borderRadius: '10px', background: viewMode === 'card' ? 'white' : 'transparent', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                      Cards
+                    </button>
+                    <button onClick={() => setViewMode('table')} style={{ padding: '0.5rem 1rem', borderRadius: '10px', background: viewMode === 'table' ? 'white' : 'transparent', border: 'none', cursor: 'pointer', fontWeight: '500', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                      Table
+                    </button>
                   </div>
-                  <select value={pagination.filters.limit} onChange={(e) => handleLimitChange(e.target.value)} style={{ padding: '0.65rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.8rem', background: 'white', cursor: 'pointer' }}>
+                  <select value={pagination.filters.limit} onChange={(e) => handleLimitChange(e.target.value)} 
+                          style={{ padding: '0.65rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.8rem', background: 'white', cursor: 'pointer' }}>
                     <option value="10">10/page</option>
                     <option value="25">25/page</option>
                     <option value="50">50/page</option>
@@ -580,14 +604,23 @@ export default function CustomersScreen({ onBack }) {
                   </select>
                 </>
               )}
-              <button onClick={() => handleOpenModal()} style={{ background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '14px', padding: '0.7rem 1.4rem', fontSize: '0.8rem', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Plus size={16} /> Add Customer</button>
+              <button onClick={() => handleOpenModal()} style={{ background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '14px', padding: '0.7rem 1.4rem', fontSize: '0.8rem', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={16} /> Add Customer
+              </button>
             </div>
           </div>
 
+          {/* Content Area */}
           {currentLoading ? (
-            <div style={{ textAlign: 'center', padding: '4rem' }}><div style={{ width: '48px', height: '48px', border: `3px solid #e2e8f0`, borderTopColor: PRIMARY_COLOR, borderRadius: '50%', margin: '0 auto 1rem', animation: 'spin 1s linear infinite' }} /><p style={{ color: '#64748b' }}>Loading customers...</p></div>
+            <div style={{ textAlign: 'center', padding: '4rem' }}>
+              <div style={{ width: '48px', height: '48px', border: `3px solid #e2e8f0`, borderTopColor: PRIMARY_COLOR, borderRadius: '50%', margin: '0 auto 1rem', animation: 'spin 1s linear infinite' }} />
+              <p style={{ color: '#64748b' }}>Loading customers...</p>
+            </div>
           ) : currentError ? (
-            <div style={{ textAlign: 'center', padding: '4rem' }}><AlertCircle size={48} style={{ color: '#ef4444', margin: '0 auto 1rem' }} /><p style={{ color: '#dc2626' }}>Error: {currentError}</p></div>
+            <div style={{ textAlign: 'center', padding: '4rem' }}>
+              <AlertCircle size={48} style={{ color: '#ef4444', margin: '0 auto 1rem' }} />
+              <p style={{ color: '#dc2626' }}>Error: {currentError}</p>
+            </div>
           ) : !currentCustomers?.length ? (
             <div style={{ textAlign: 'center', padding: '4rem' }}>
               <Users size={64} style={{ color: '#cbd5e1', margin: '0 auto 1rem' }} />
@@ -627,17 +660,32 @@ export default function CustomersScreen({ onBack }) {
                   {currentCustomers.map((customer) => {
                     const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
                     return (
-                      <tr key={customer._id} style={{ borderBottom: '1px solid #f1f5f9' }} onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-                        <td style={{ padding: '1rem' }}><div style={{ fontWeight: '600', color: PRIMARY_COLOR }}>{customer.name}</div>{customer.companyName && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{customer.companyName}</div>}</td>
+                      <tr key={customer._id} style={{ borderBottom: '1px solid #f1f5f9' }} 
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'} 
+                          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                        <td style={{ padding: '1rem' }}>
+                          <div style={{ fontWeight: '600', color: PRIMARY_COLOR }}>{customer.name}</div>
+                          {customer.companyName && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{customer.companyName}</div>}
+                        </td>
                         <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.email}</td>
                         <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.phone || '—'}</td>
-                        <td style={{ padding: '1rem' }}><span style={{ padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.7rem', fontWeight: '600', background: isVatRegistered ? '#d1fae5' : '#f1f5f9', color: isVatRegistered ? '#065f46' : '#475569' }}>{isVatRegistered ? 'VAT Registered' : 'Non-VAT'}</span></td>
+                        <td style={{ padding: '1rem' }}>
+                          <span style={{ padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.7rem', fontWeight: '600', 
+                                        background: isVatRegistered ? '#d1fae5' : '#f1f5f9', color: isVatRegistered ? '#065f46' : '#475569' }}>
+                            {isVatRegistered ? 'VAT Registered' : 'Non-VAT'}
+                          </span>
+                        </td>
                         <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.placeOfSupply || '—'}</td>
                         <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.defaultCurrency?.code || customer.defaultCurrency || 'AED'}</td>
                         <td style={{ padding: '1rem' }}>
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button onClick={() => handleOpenModal(customer)} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem' }}><Edit2 size={12} /></button>
-                            <button onClick={() => handleDelete(customer)} disabled={deletingId === customer._id} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}><Trash2 size={12} /></button>
+                            <button onClick={() => handleOpenModal(customer)} style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem' }}>
+                              <Edit2 size={12} />
+                            </button>
+                            <button onClick={() => handleDelete(customer)} disabled={deletingId === customer._id} 
+                                    style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}>
+                              <Trash2 size={12} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -648,6 +696,7 @@ export default function CustomersScreen({ onBack }) {
             </div>
           )}
 
+          {/* Pagination */}
           {mode === 'browse' && currentPagination && currentPagination.totalPages > 1 && (
             <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid #f1f5f9', background: '#fafbff' }}>
               <PaginationControls pagination={safePageInfo} onPageChange={handlePageChange} loading={currentLoading} />
@@ -655,6 +704,7 @@ export default function CustomersScreen({ onBack }) {
           )}
         </div>
       </div>
+      
       <CustomerModal isOpen={showModal} onClose={handleCloseModal} onSubmit={handleSubmit} initialData={editingCustomer} isSubmitting={isSubmitting} />
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

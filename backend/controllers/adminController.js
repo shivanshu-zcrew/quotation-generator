@@ -550,3 +550,159 @@ exports.getOpsDashboardStats = async (req, res) => {
     });
   }
 };
+
+exports.getUserQuotationStats = async (req, res) => {
+  try {
+    const companyId = req.companyId || req.headers['x-company-id'];
+    
+    if (!companyId) {
+      return res.status(400).json({ message: 'Company ID is required' });
+    }
+
+    // Check if user is admin (only admins can see user stats)
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized to view user statistics' });
+    }
+
+    // Use 'new' keyword with ObjectId
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+
+    // Aggregate quotations by createdBy user - MongoDB compatible version
+    const userStats = await Quotation.aggregate([
+      { $match: { companyId: companyObjectId } },
+      {
+        $group: {
+          _id: '$createdBy',
+          totalQuotations: { $sum: 1 },
+          totalValue: { $sum: '$totalInBaseCurrency' },
+          quotationsByStatus: {
+            $push: {
+              status: '$status',
+              total: '$totalInBaseCurrency'
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'userInfo'
+        }
+      },
+      // FIX: Remove preserveNullAndEmptyValues - use $unwind with { path: '$userInfo' }
+      { $unwind: { path: '$userInfo' } },
+      {
+        $project: {
+          userId: '$_id',
+          userName: { $ifNull: ['$userInfo.name', 'Unknown User'] },
+          userEmail: { $ifNull: ['$userInfo.email', 'N/A'] },
+          totalQuotations: 1,
+          totalValue: 1,
+          pending: {
+            $size: {
+              $filter: {
+                input: '$quotationsByStatus',
+                as: 'q',
+                cond: { $eq: ['$$q.status', 'pending'] }
+              }
+            }
+          },
+          approved: {
+            $size: {
+              $filter: {
+                input: '$quotationsByStatus',
+                as: 'q',
+                cond: { $eq: ['$$q.status', 'approved'] }
+              }
+            }
+          },
+          awarded: {
+            $size: {
+              $filter: {
+                input: '$quotationsByStatus',
+                as: 'q',
+                cond: { $eq: ['$$q.status', 'awarded'] }
+              }
+            }
+          },
+          rejected: {
+            $size: {
+              $filter: {
+                input: '$quotationsByStatus',
+                as: 'q',
+                cond: { 
+                  $or: [
+                    { $eq: ['$$q.status', 'rejected'] }, 
+                    { $eq: ['$$q.status', 'ops_rejected'] }
+                  ] 
+                }
+              }
+            }
+          }
+        }
+      },
+      { $sort: { totalQuotations: -1 } }
+    ]);
+
+    // Get total counts
+    const totalQuotations = await Quotation.countDocuments({ companyId: companyObjectId });
+    const totalUsers = userStats.length;
+
+    res.json({
+      success: true,
+      stats: userStats,
+      summary: {
+        totalQuotations,
+        totalUsers,
+        averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting user quotation stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching user statistics', 
+      error: error.message 
+    });
+  }
+};
+
+exports.getQuotationsByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const companyId = req.companyId || req.headers['x-company-id'];
+    
+    if (!companyId) {
+      return res.status(400).json({ message: 'Company ID is required' });
+    }
+
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ message: 'Unauthorized to view user quotations' });
+    }
+
+    const quotations = await Quotation.find({ 
+      companyId: new mongoose.Types.ObjectId(companyId),
+      createdBy: new mongoose.Types.ObjectId(userId)
+    })
+      .sort({ createdAt: -1 })
+      .populate('customerId', 'name')
+      .lean();
+
+    res.json({
+      success: true,
+      quotations,
+      count: quotations.length
+    });
+
+  } catch (error) {
+    console.error('Error fetching user quotations:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching user quotations', 
+      error: error.message 
+    });
+  }
+};

@@ -2,19 +2,185 @@ import axios from "axios";
 
 const API_BASE = import.meta.env?.VITE_API_URL || "http://localhost:4000/api";
 
+// Request Deduplication
+class RequestDeduplicator {
+  constructor() {
+    this.pendingRequests = new Map();
+  }
+  
+  dedupe(key, requestFn) {
+    if (this.pendingRequests.has(key)) {
+      return this.pendingRequests.get(key);
+    }
+    
+    const promise = requestFn().finally(() => {
+      this.pendingRequests.delete(key);
+    });
+    
+    this.pendingRequests.set(key, promise);
+    return promise;
+  }
+  
+  clear() {
+    this.pendingRequests.clear();
+  }
+}
+
+// Smart Retry
+const withRetry = async (requestFn, options = {}) => {
+  const {
+    maxRetries = 2,
+    baseDelay = 1000,
+    retryableStatuses = [408, 429, 500, 502, 503, 504]
+  } = options;
+  
+  let lastError;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      lastError = error;
+      
+      const shouldNotRetry = 
+        !error.response ||
+        [401, 403, 404, 400].includes(error.response?.status);
+      
+      if (shouldNotRetry || attempt === maxRetries) {
+        throw error;
+      }
+      
+      const isRetryable = retryableStatuses.includes(error.response?.status);
+      if (!isRetryable && error.response) {
+        throw error;
+      }
+      
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError;
+};
+
+// Response Cache
+class ApiCache {
+  constructor(defaultTtl = 5 * 60 * 1000) {
+    this.cache = new Map();
+    this.defaultTtl = defaultTtl;
+  }
+  
+  set(key, data, ttl = null) {
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + (ttl || this.defaultTtl)
+    });
+    
+    setTimeout(() => this.cleanup(), 3600000);
+  }
+  
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    
+    return entry.data;
+  }
+  
+  clear(key) {
+    if (key) {
+      this.cache.delete(key);
+    } else {
+      this.cache.clear();
+    }
+  }
+  
+  cleanup() {
+    for (const [key, entry] of this.cache.entries()) {
+      if (Date.now() > entry.expiresAt) {
+        this.cache.delete(key);
+      }
+    }
+  }
+}
+
+// Request Queue for Sync Operations
+class RequestQueue {
+  constructor() {
+    this.queue = [];
+    this.processing = false;
+  }
+  
+  async add(requestFn, priority = 0) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ requestFn, resolve, reject, priority });
+      this.queue.sort((a, b) => b.priority - a.priority);
+      this.process();
+    });
+  }
+  
+  async process() {
+    if (this.processing || this.queue.length === 0) return;
+    
+    this.processing = true;
+    const { requestFn, resolve, reject } = this.queue.shift();
+    
+    try {
+      const result = await requestFn();
+      resolve(result);
+    } catch (error) {
+      reject(error);
+    } finally {
+      this.processing = false;
+      this.process();
+    }
+  }
+  
+  clear() {
+    this.queue = [];
+  }
+}
+
+const deduplicator = new RequestDeduplicator();
+const apiCache = new ApiCache();
+const syncQueue = new RequestQueue();
+
+const withCache = async (key, requestFn, options = {}) => {
+  const { forceRefresh = false, ttl } = options;
+  
+  if (!forceRefresh) {
+    const cached = apiCache.get(key);
+    if (cached) {
+      return { data: cached, fromCache: true };
+    }
+  }
+  
+  const response = await requestFn();
+  
+  if (response?.data?.success !== false) {
+    apiCache.set(key, response.data, ttl);
+  }
+  
+  return { data: response.data, fromCache: false };
+};
+
+// Axios Instance
 const api = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
   timeout: 60000,
 });
 
-// Request interceptor - Add company ID to headers
+// Request interceptor
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("token");
     if (token) config.headers.Authorization = `Bearer ${token}`;
     
-    // Add company ID header if selected
     const selectedCompanyId = localStorage.getItem("selectedCompany");
     if (selectedCompanyId) {
       config.headers["x-company-id"] = selectedCompanyId;
@@ -67,6 +233,8 @@ export const adminAPI = {
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/reject`, data),
   getAdminStats: (params) => api.get("/admin/dashboard", { params }),
+  getUserQuotationStats: () => api.get("/admin/user-stats"),
+  getQuotationsByUser: (userId) => api.get(`/admin/user-quotations/${userId}`),
 };
 
 // ==================== OPS MANAGER ====================
@@ -80,51 +248,112 @@ export const opsAPI = {
 
 // ==================== CUSTOMERS ====================
 export const customerAPI = {
-  getAll: (params) => api.get("/customers", { params }),
+  getAll: (params) => {
+    const key = `/customers?${JSON.stringify(params)}`;
+    return withCache(key, () => withRetry(() => api.get("/customers", { params })), {
+      ttl: 2 * 60 * 1000
+    });
+  },
   create: (data) => api.post("/customers", data),
-  getById: (id) => api.get(`/customers/${id}`),
+  getById: (id) => {
+    const key = `/customers/${id}`;
+    return deduplicator.dedupe(key, () => api.get(`/customers/${id}`));
+  },
   update: (id, data) => api.put(`/customers/${id}`, data),
   delete: (id) => api.delete(`/customers/${id}`),
-  search: (query, limit = 20, offset = 0) => api.get("/customers/search", { params: { query, limit, offset } }),
+  search: (query, limit = 20, offset = 0) => {
+    const key = `/customers/search?${query}|${limit}|${offset}`;
+    return deduplicator.dedupe(key, () => api.get("/customers/search", { params: { query, limit, offset } }));
+  },
   
-  // Sync methods
-  syncFromZoho: (fullSync = false) => api.post(`/customers/sync-from-zoho${fullSync ? '?fullSync=true' : ''}`),
+  syncFromZoho: (fullSync = false) => syncQueue.add(() => 
+    api.post(`/customers/sync-from-zoho${fullSync ? '?fullSync=true' : ''}`)
+  ),
   getSyncStatus: () => api.get("/customers/sync/status"),
   getPendingSync: () => api.get("/customers/sync/pending"),
-  forceSyncCustomer: (id) => api.post(`/customers/sync/force/${id}`),
-  syncWithZoho: (id) => api.post(`/customers/${id}/sync`),
+  forceSyncCustomer: (id) => syncQueue.add(() => api.post(`/customers/sync/force/${id}`)),
+  syncWithZoho: (id) => syncQueue.add(() => api.post(`/customers/${id}/sync`)),
   
-  // Other methods
   getStats: () => api.get("/customers/stats"),
-  getGccCountries: () => api.get("/customers/gcc-countries"),
-  getCurrencies: () => api.get("/customers/currencies"),
-  getTaxTreatments: () => api.get("/customers/tax-treatments"),
+  getGccCountries: () => {
+    const key = "/customers/gcc-countries";
+    return withCache(key, () => api.get("/customers/gcc-countries"), { ttl: 24 * 60 * 60 * 1000 });
+  },
+  getCurrencies: () => {
+    const key = "/customers/currencies";
+    return withCache(key, () => api.get("/customers/currencies"), { ttl: 24 * 60 * 60 * 1000 });
+  },
+  getTaxTreatments: () => {
+    const key = "/customers/tax-treatments";
+    return withCache(key, () => api.get("/customers/tax-treatments"), { ttl: 24 * 60 * 60 * 1000 });
+  },
   getTaxSummary: () => api.get("/customers/tax-summary"),
   getByTaxTreatment: (taxTreatment, params = {}) => api.get("/customers", { params: { ...params, taxTreatment } }),
   getByPlaceOfSupply: (placeOfSupply, params = {}) => api.get("/customers", { params: { ...params, placeOfSupply } }),
-  bulkImport: (customers) => api.post("/customers/bulk", { customers }),
+  bulkImport: (customers) => {
+    apiCache.clear();
+    return api.post("/customers/bulk", { customers });
+  },
   export: (params, format = 'csv') => api.get("/customers/export", { params: { ...params, format }, responseType: 'blob' }),
 };
 
 // ==================== ITEMS ====================
 export const itemAPI = {
-  getAll: (params) => api.get("/items", { params }),
-  create: (formData) => api.post("/items", formData, { headers: { "Content-Type": "multipart/form-data" } }),
-  getById: (id) => api.get(`/items/${id}`),
-  update: (id, formData) => api.put(`/items/${id}`, formData, { headers: { "Content-Type": "multipart/form-data" } }),
-  delete: (id) => api.delete(`/items/${id}`),
-  syncItems: () => api.post("/items/sync"), // Changed from GET to POST
+  getAll: (params) => {
+    const key = `/items?${JSON.stringify(params)}`;
+    return withCache(key, () => withRetry(() => api.get("/items", { params })), {
+      ttl: 2 * 60 * 1000
+    });
+  },
+  create: async (formData) => {
+    const response = await api.post("/items", formData, { headers: { "Content-Type": "multipart/form-data" } });
+    apiCache.clear();
+    return response;
+  },
+  getById: (id) => {
+    const key = `/items/${id}`;
+    return deduplicator.dedupe(key, () => api.get(`/items/${id}`));
+  },
+  update: async (id, formData) => {
+    const response = await api.put(`/items/${id}`, formData, { headers: { "Content-Type": "multipart/form-data" } });
+    apiCache.clear();
+    return response;
+  },
+  delete: async (id) => {
+    const response = await api.delete(`/items/${id}`);
+    apiCache.clear();
+    return response;
+  },
+  syncItems: () => syncQueue.add(() => api.post("/items/sync")),
   getSyncStatus: () => api.get("/items/sync/status"),
-  getAllWithRefresh: (params, forceRefresh = false) => api.get("/items", { params: { ...params, forceRefresh: forceRefresh ? 'true' : 'false' } }),
+  getAllWithRefresh: (params, forceRefresh = false) => {
+    const key = `/items?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/items", { params: { ...params, forceRefresh: forceRefresh ? 'true' : 'false' } }), {
+      forceRefresh,
+      ttl: 2 * 60 * 1000
+    });
+  },
 };
 
 // ==================== COMPANIES ====================
 export const companyAPI = {
-  getAll: (params) => api.get("/companies", { params }),
-  getById: (id) => api.get(`/companies/${id}`),
-  getByCode: (code) => api.get(`/companies/code/${code}`),
+  getAll: (params) => {
+    const key = `/companies?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/companies", { params }), { ttl: 5 * 60 * 1000 });
+  },
+  getById: (id) => {
+    const key = `/companies/${id}`;
+    return deduplicator.dedupe(key, () => api.get(`/companies/${id}`));
+  },
+  getByCode: (code) => {
+    const key = `/companies/code/${code}`;
+    return deduplicator.dedupe(key, () => api.get(`/companies/code/${code}`));
+  },
   getStats: (id, params) => api.get(`/companies/${id}/stats`, { params }),
-  getCurrencies: (id) => api.get(`/companies/${id}/currencies`),
+  getCurrencies: (id) => {
+    const key = `/companies/${id}/currencies`;
+    return withCache(key, () => api.get(`/companies/${id}/currencies`), { ttl: 24 * 60 * 60 * 1000 });
+  },
   create: (data) => api.post("/companies", data),
   update: (id, data) => api.put(`/companies/${id}`, data),
   delete: (id) => api.delete(`/companies/${id}`),
@@ -134,11 +363,20 @@ export const companyAPI = {
 
 // ==================== EXCHANGE RATES ====================
 export const exchangeRateAPI = {
-  getRates: (params) => api.get("/exchange-rates/rates", { params }),
+  getRates: (params) => {
+    const key = `/exchange-rates/rates?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/exchange-rates/rates", { params }), { ttl: 60 * 60 * 1000 });
+  },
   convert: (data) => api.post("/exchange-rates/convert", data),
   getHistory: (params) => api.get("/exchange-rates/history", { params }),
-  getSupported: () => api.get("/exchange-rates/supported"),
-  refreshRates: () => api.post("/exchange-rates/refresh"),
+  getSupported: () => {
+    const key = "/exchange-rates/supported";
+    return withCache(key, () => api.get("/exchange-rates/supported"), { ttl: 24 * 60 * 60 * 1000 });
+  },
+  refreshRates: () => {
+    apiCache.clear("/exchange-rates");
+    return api.post("/exchange-rates/refresh");
+  },
   getStatus: () => api.get("/exchange-rates/status"),
 };
 
@@ -182,7 +420,7 @@ export const documentAPI = {
     return '📎';
   },
   validateFile: (file, options = {}) => {
-    const { maxSize = 10 * 1024 * 1024, allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/plain'] } = options;
+    const { maxSize = 30 * 1024 * 1024, allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/plain'] } = options;
     if (file.size > maxSize) return { valid: false, error: `File size exceeds ${maxSize / 1024 / 1024}MB` };
     if (!allowedTypes.includes(file.type)) return { valid: false, error: 'File type not allowed' };
     return { valid: true };
@@ -194,10 +432,19 @@ export const quotationAPI = {
   getCompanies: (params) => api.get("/quotations/companies", { params }),
   getCompanyByCode: (code) => api.get(`/quotations/companies/${code}`),
   getCompanyStats: (code, params) => api.get(`/quotations/companies/${code}/stats`, { params }),
-  getMyQuotations: (params) => api.get("/quotations/my-quotations", { params }),
-  getAll: (params) => api.get("/quotations", { params }),
+  getMyQuotations: (params) => {
+    const key = `/quotations/my-quotations?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/quotations/my-quotations", { params }), { ttl: 1 * 60 * 1000 });
+  },
+  getAll: (params) => {
+    const key = `/quotations?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/quotations", { params }), { ttl: 1 * 60 * 1000 });
+  },
   create: (data) => api.post("/quotations", data),
-  getById: (id) => api.get(`/quotations/${id}`),
+  getById: (id) => {
+    const key = `/quotations/${id}`;
+    return deduplicator.dedupe(key, () => api.get(`/quotations/${id}`));
+  },
   update: (id, data) => api.put(`/quotations/${id}`, data),
   delete: (id) => api.delete(`/quotations/${id}`),
   updateQueryDate: (id, date) => api.patch(`/quotations/${id}/query-date`, { queryDate: date }),
@@ -290,7 +537,7 @@ export const companyFilterUtils = {
   }
 };
 
-// ==================== COMPANY CONTEXT HELPER ====================
+// ==================== HELPERS ====================
 export const setSelectedCompany = (companyId) => {
   if (companyId) {
     localStorage.setItem("selectedCompany", companyId);
@@ -308,7 +555,6 @@ export const clearCompanyContext = () => {
   localStorage.removeItem("selectedCurrency");
 };
 
-// ==================== AUTH HELPERS ====================
 export const setAuthData = (data) => {
   localStorage.setItem("token", data.token);
   localStorage.setItem("user", JSON.stringify(data));
@@ -320,6 +566,9 @@ export const clearAuthData = () => {
   localStorage.removeItem("app-store");
   localStorage.removeItem("selectedCompany");
   localStorage.removeItem("selectedCurrency");
+  apiCache.clear();
+  deduplicator.clear();
+  syncQueue.clear();
 };
 
 export const getCurrentUser = () => {
@@ -355,5 +604,12 @@ export const triggerBlobDownload = (blob, filename = "download") => {
 };
 
 export const downloadPDF = (response, filename = "quotation") => triggerBlobDownload(response.data, `${filename}.pdf`);
+
+// Export cache management for debugging
+export const clearAllCaches = () => {
+  apiCache.clear();
+  deduplicator.clear();
+  syncQueue.clear();
+};
 
 export default api;

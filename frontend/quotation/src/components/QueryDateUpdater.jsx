@@ -1,16 +1,91 @@
-// components/QueryDateUpdater.jsx
-import React, { useState, useMemo, useEffect } from 'react';
+// QueryDateUpdater.jsx (OPTIMIZED)
+import React, { useState, useMemo, useEffect, useCallback, memo } from 'react';
 import { Calendar, Search, X, Check, Clock, FileText } from 'lucide-react';
 import { useAppStore } from '../services/store';
 
+// Debounce hook
+const useDebounce = (value, delay) => {
+  const [debouncedValue, setDebouncedValue] = useState(value);
 
-const QueryDateUpdater = ({ 
-  open, 
-  onClose, 
-  onUpdate,
-  quotations = [],
-  loading = false 
-}) => {
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
+// Memoized quotation item component
+const QuotationItem = memo(({ quotation, isSelected, onSelect }) => {
+  const handleClick = useCallback(() => onSelect(quotation), [quotation, onSelect]);
+  
+  return (
+    <div
+      onClick={handleClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '1rem',
+        padding: '0.75rem 1rem',
+        margin: '0.25rem 0',
+        borderRadius: '0.5rem',
+        backgroundColor: isSelected ? '#eff6ff' : 'transparent',
+        border: isSelected ? '1px solid #bfdbfe' : '1px solid transparent',
+        cursor: 'pointer',
+        transition: 'all 0.15s'
+      }}
+      onMouseEnter={(e) => {
+        if (!isSelected) e.currentTarget.style.backgroundColor = '#f8fafc';
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+      }}
+    >
+      <div style={{
+        width: 32,
+        height: 32,
+        borderRadius: '8px',
+        background: quotation.queryDate ? '#fef3c7' : '#f1f5f9',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        {quotation.queryDate ? <Calendar size={16} color="#92400e" /> : <FileText size={16} color="#64748b" />}
+      </div>
+      
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.875rem' }}>
+            {quotation.quotationNumber || '—'}
+          </span>
+          {quotation.queryDate && (
+            <span style={{
+              fontSize: '0.7rem',
+              background: '#fef3c7',
+              color: '#92400e',
+              padding: '2px 8px',
+              borderRadius: '999px',
+              fontWeight: 600
+            }}>
+              Follow-up: {new Date(quotation.queryDate).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
+          {quotation.customerSnapshot?.name || quotation.customer || 'N/A'}
+        </div>
+        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+          {quotation.items?.length || 0} items · Total: {fmtCurrency(quotation.total)}
+        </div>
+      </div>
+
+      {isSelected && <Check size={18} color="#059669" />}
+    </div>
+  );
+});
+QuotationItem.displayName = 'QuotationItem';
+
+const QueryDateUpdater = memo(({ open, onClose, onUpdate, quotations = [], loading = false }) => {
   const [selectedQuotation, setSelectedQuotation] = useState(null);
   const [queryDate, setQueryDate] = useState('');
   const [searchInput, setSearchInput] = useState('');
@@ -42,21 +117,21 @@ const QueryDateUpdater = ({
       setQueryDate('');
       setSearchInput('');
       setSearch('');
+      setUpdating(false);
     }
   }, [open]);
 
-  const handleSelectQuotation = (quotation) => {
+  const handleSelectQuotation = useCallback((quotation) => {
     setSelectedQuotation(quotation);
-    // Set default date to tomorrow if not set
     if (!queryDate) {
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       setQueryDate(tomorrow.toISOString().split('T')[0]);
     }
-  };
+  }, [queryDate]);
 
-  const handleUpdate = async () => {
-    if (!selectedQuotation || !queryDate) return;
+  const handleUpdate = useCallback(async () => {
+    if (!selectedQuotation || !queryDate || updating) return;
     
     setUpdating(true);
     try {
@@ -67,22 +142,32 @@ const QueryDateUpdater = ({
     } finally {
       setUpdating(false);
     }
-  };
+  }, [selectedQuotation, queryDate, updating, onUpdate, onClose]);
+
+  const handleClose = useCallback(() => {
+    if (!updating) onClose();
+  }, [updating, onClose]);
+
+  const handleOverlayClick = useCallback((e) => {
+    if (e.target === e.currentTarget && !updating) onClose();
+  }, [updating, onClose]);
 
   if (!open) return null;
 
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(15,23,42,0.45)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      backdropFilter: 'blur(2px)'
-    }} onClick={(e) => e.target === e.currentTarget && !updating && onClose()}>
-      
+    <div
+      onClick={handleOverlayClick}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(15,23,42,0.45)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        backdropFilter: 'blur(2px)'
+      }}
+    >
       <div style={{
         backgroundColor: '#fff',
         borderRadius: '1rem',
@@ -125,7 +210,7 @@ const QueryDateUpdater = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={updating}
             style={{
               background: 'none',
@@ -189,74 +274,12 @@ const QueryDateUpdater = ({
             </div>
           ) : (
             filteredQuotations.map((q) => (
-              <div
+              <QuotationItem
                 key={q._id}
-                onClick={() => handleSelectQuotation(q)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  padding: '0.75rem 1rem',
-                  margin: '0.25rem 0',
-                  borderRadius: '0.5rem',
-                  backgroundColor: selectedQuotation?._id === q._id ? '#eff6ff' : 'transparent',
-                  border: selectedQuotation?._id === q._id ? '1px solid #bfdbfe' : '1px solid transparent',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s'
-                }}
-                onMouseEnter={(e) => {
-                  if (selectedQuotation?._id !== q._id) {
-                    e.currentTarget.style.backgroundColor = '#f8fafc';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (selectedQuotation?._id !== q._id) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }
-                }}
-              >
-                <div style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '8px',
-                  background: q.queryDate ? '#fef3c7' : '#f1f5f9',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  {q.queryDate ? <Calendar size={16} color="#92400e" /> : <FileText size={16} color="#64748b" />}
-                </div>
-                
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.875rem' }}>
-                      {q.quotationNumber || '—'}
-                    </span>
-                    {q.queryDate && (
-                      <span style={{
-                        fontSize: '0.7rem',
-                        background: '#fef3c7',
-                        color: '#92400e',
-                        padding: '2px 8px',
-                        borderRadius: '999px',
-                        fontWeight: 600
-                      }}>
-                        Follow-up: {new Date(q.queryDate).toLocaleDateString()}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                    {q.customerSnapshot?.name || q.customer || 'N/A'}
-                  </div>
-                  <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
-                    {q.items?.length || 0} items · Total: {fmtCurrency(q.total)}
-                  </div>
-                </div>
-
-                {selectedQuotation?._id === q._id && (
-                  <Check size={18} color="#059669" />
-                )}
-              </div>
+                quotation={q}
+                isSelected={selectedQuotation?._id === q._id}
+                onSelect={handleSelectQuotation}
+              />
             ))
           )}
         </div>
@@ -307,7 +330,7 @@ const QueryDateUpdater = ({
           background: '#f8fafc'
         }}>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={updating}
             style={{
               padding: '0.6rem 1.25rem',
@@ -357,14 +380,8 @@ const QueryDateUpdater = ({
 
       <style>{`
         @keyframes modalPop {
-          from {
-            opacity: 0;
-            transform: scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
         }
         @keyframes spin {
           from { transform: rotate(0deg); }
@@ -373,9 +390,10 @@ const QueryDateUpdater = ({
       `}</style>
     </div>
   );
-};
+});
+QueryDateUpdater.displayName = 'QueryDateUpdater';
 
-// Helper function for currency formatting
+// Helper function for currency formatting (memoized)
 const fmtCurrency = (n, currency = 'AED') => {
   const symbols = {
     AED: 'د.إ', SAR: '﷼', QAR: '﷼', KWD: 'د.ك',
@@ -383,23 +401,6 @@ const fmtCurrency = (n, currency = 'AED') => {
   };
   const symbol = symbols[currency] || currency;
   return `${symbol} ${(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-};
-
-// Debounce hook
-const useDebounce = (value, delay) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(handler);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
 };
 
 export default QueryDateUpdater;

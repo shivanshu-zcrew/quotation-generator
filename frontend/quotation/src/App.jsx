@@ -13,6 +13,7 @@ import RegisterScreen from './page/RegisterScreen';
 import AdminDashboard from './page/AdminDashboard';
 import OpsDashboard from './page/OperManagerDashboard';
 import UserManagementScreen from './page/UserManagementScreen';
+import UserQuotationStatsPage from './page/UserQuotationStatsPage';
 
 const getUser = () => useAppStore.getState().user;
 
@@ -191,6 +192,7 @@ function AppContent() {
           <Route path="/ops" element={<RequireOpsManager><OpsDashboardRoute /></RequireOpsManager>} />
           <Route path="/admin" element={<RequireAdmin><AdminDashboardRoute /></RequireAdmin>} />
           <Route path="/admin/users" element={<RequireAdmin><UserManagementScreenWithBack /></RequireAdmin>} />
+          <Route path="/admin/user-stats" element={<RequireAdmin><UserQuotationStatsPage /></RequireAdmin>} />
           <Route path="/" element={<RootRedirect />} />
           <Route path="*" element={<RootRedirect />} />
         </Routes>

@@ -1,11 +1,11 @@
-// screens/OpsDashboard.jsx
+// screens/OpsDashboard.jsx (OPTIMIZED + RESPONSIVE)
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Eye, Download, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp
+  Shield, Award, Ban, Users, TrendingUp, Menu
 } from 'lucide-react';
 
 import { useOpsStats } from '../hooks/customHooks';
@@ -26,6 +26,12 @@ import {
   ConfirmModal
 } from '../components/SharedComponents';
 
+// Import new components
+import CompactStatsCard from '../components/HomePageComponent/CompactStatsCard';
+import DesktopStatsGrid from '../components/HomePageComponent/DesktopStatsGrid';
+import QuotationCard from '../components/HomePageComponent/QuotationCard';
+import ViewToggle from '../components/HomePageComponent/ViewToggle';
+
 // Import utils
 import {
   PAGE_SIZE_OPTIONS,
@@ -35,6 +41,28 @@ import {
   VALIDATION_MESSAGES
 } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
+
+// Custom hook for responsive detection
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.matchMedia(query).matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const mediaQuery = window.matchMedia(query);
+    const handler = (e) => setMatches(e.matches);
+    
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, [query]);
+
+  return matches;
+};
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -48,19 +76,6 @@ const TAB_KEYS = {
 // ─────────────────────────────────────────────────────────────
 // Sub-components
 // ─────────────────────────────────────────────────────────────
-const NavBtn = React.memo(({ onClick, label, primary }) => (
-  <button onClick={onClick} className="ops-nav-btn"
-    style={{
-      backgroundColor: primary ? 'white' : 'rgba(255,255,255,0.08)',
-      color: primary ? '#0f172a' : '#94a3b8',
-      border: primary ? 'none' : '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8, padding: '0.45rem 0.875rem', fontSize: '0.8rem',
-      fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s'
-    }}>
-    {label}
-  </button>
-));
-
 const ExpiryBadge = React.memo(({ type }) => {
   const config = {
     expired: { bg: '#fef2f2', color: '#dc2626', border: '#fecaca', label: 'Expired' },
@@ -87,6 +102,102 @@ const ItemsBadge = React.memo(({ count }) => (
     {count}
   </span>
 ));
+
+// Mobile Quotation Card for Ops
+const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, isDownloading, isApproving, isRejecting }) => {
+  const expired = isExpired(quotation.expiryDate);
+  const expiring = !expired && isExpiringSoon(quotation.expiryDate);
+  const canAct = quotation.status === 'pending';
+
+  return (
+    <div style={{
+      background: 'white',
+      borderRadius: '12px',
+      padding: '1rem',
+      marginBottom: '0.75rem',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+      border: '1px solid #f1f5f9'
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, color: '#0f172a', fontFamily: 'monospace', fontSize: '0.85rem' }}>
+              {quotation.quotationNumber || '—'}
+            </span>
+            <StatusBadge status={quotation.status} />
+            {expired && <ExpiryBadge type="expired" />}
+            {expiring && <ExpiryBadge type="expiring" />}
+          </div>
+        </div>
+        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0f172a' }}>
+          {fmtCurrency(quotation.total, selectedCurrency)}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '0.5rem' }}>
+        <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>
+          {quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}
+        </div>
+        {quotation.contact && (
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 2 }}>{quotation.contact}</div>
+        )}
+        <RejectionNote quotation={quotation} />
+      </div>
+
+      {quotation.projectName && (
+        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem' }}>
+          📋 {quotation.projectName}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.7rem', color: '#64748b', flexWrap: 'wrap' }}>
+        <div>📅 Submitted: {fmtDate(quotation.date)}</div>
+        <div>⏰ Expiry: {fmtDate(quotation.expiryDate)}</div>
+        <div>📦 Items: {quotation.items?.length ?? 0}</div>
+      </div>
+
+      <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+        Created by: {quotation.createdBy?.name || '—'}
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
+        <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
+        <ActionBtn 
+          bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
+          color={isDownloading ? '#94a3b8' : '#166534'} 
+          onClick={() => !isDownloading && onDownload(quotation)} 
+          disabled={isDownloading}
+          icon={isDownloading ? RefreshCw : Download} 
+          label={isDownloading ? '…' : 'PDF'} 
+          size="small" 
+        />
+        {canAct && (
+          <>
+            <ActionBtn 
+              bg="#dcfce7" 
+              color="#166534" 
+              onClick={() => onApprove(quotation._id)} 
+              icon={Check} 
+              label="Approve" 
+              size="small"
+              disabled={isApproving}
+            />
+            <ActionBtn 
+              bg="#fee2e2" 
+              color="#991b1b" 
+              onClick={() => onReject(quotation)} 
+              icon={X} 
+              label="Reject" 
+              size="small"
+              disabled={isRejecting}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+OpsQuotationCard.displayName = 'OpsQuotationCard';
 
 // ─────────────────────────────────────────────────────────────
 // Custom Hooks
@@ -144,6 +255,12 @@ const useTableData = (quotations, activeTab, search, sort) => {
 export default function OpsDashboard({ onViewQuotation }) {
   const navigate = useNavigate();
   
+  // Responsive hooks
+  const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTablet = useMediaQuery('(min-width: 769px) and (max-width: 1024px)');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [viewMode, setViewMode] = useState('table');
+  
   // ── Store subscriptions ───────────────────────────────────
   const { quotations: companyQuotations, refresh: refreshCompanyQuotations } = useCompanyQuotations();
   
@@ -186,7 +303,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   // ── Table state ───────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('pending');
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(isMobile ? 10 : 20);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
@@ -194,6 +311,18 @@ export default function OpsDashboard({ onViewQuotation }) {
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
+
+  // Update limit on screen resize
+  useEffect(() => {
+    setLimit(isMobile ? 10 : 20);
+  }, [isMobile]);
+
+  // Reset view mode on mobile
+  useEffect(() => {
+    if (isMobile) {
+      setViewMode('card');
+    }
+  }, [isMobile]);
 
   // ── Derived state ─────────────────────────────────────────
   const hasFetched = !loading || storeQuotations.length > 0;
@@ -261,6 +390,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     setSearchInput('');
     setSearch('');
     setSort({ field: 'createdAt', dir: 'desc' });
+    setMobileMenuOpen(false);
   }, []);
 
   const handleSort = useCallback((field) => {
@@ -370,51 +500,90 @@ export default function OpsDashboard({ onViewQuotation }) {
     { key: 'ops_rejected', label: 'Returned by Me',      Icon: Ban,    count: tabCounts.ops_rejected },
   ], [tabCounts]);
 
+  const NavBtn = React.memo(({ onClick, label, primary }) => (
+    <button onClick={onClick} className="ops-nav-btn" style={{
+      backgroundColor: primary ? 'white' : 'rgba(255,255,255,0.08)',
+      color: primary ? '#0f172a' : '#94a3b8',
+      border: primary ? 'none' : '1px solid rgba(255,255,255,0.12)',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      transition: 'all 0.15s',
+      whiteSpace: 'nowrap'
+    }}>
+      {label}
+    </button>
+  ));
+
   // ── Render helpers ────────────────────────────────────────
-  const renderStatCards = () => (
-    <div style={styles.statsGrid}>
-      <StatCard 
-        label="Total Quotations" 
-        value={totalQuotations} 
-        accent="#6366f1" 
-        iconBg="#eff1ff" 
-        iconColor="#6366f1" 
-        Icon={FileText} 
-        loading={statsLoading} 
-        sub="All quotations in system"
-      />
-      <StatCard 
-        label="Pending Review" 
-        value={pendingReview} 
-        accent="#f59e0b" 
-        iconBg="#fef3c7" 
-        iconColor="#f59e0b" 
-        Icon={Clock} 
-        loading={statsLoading} 
-        sub="Awaiting your review"
-      />
-      <StatCard 
-        label="Awaiting Admin" 
-        value={awaitingAdmin} 
-        accent="#3b82f6" 
-        iconBg="#dbeafe" 
-        iconColor="#3b82f6" 
-        Icon={Shield} 
-        loading={statsLoading} 
-        sub="Forwarded to admin"
-      />
-      <StatCard 
-        label="Returned by You" 
-        value={returnedByMe} 
-        accent="#ef4444" 
-        iconBg="#fee2e2" 
-        iconColor="#ef4444" 
-        Icon={Ban} 
-        loading={statsLoading} 
-        sub="Rejected quotations"
-      />
-    </div>
-  );
+  const renderStatCards = () => {
+    if (isMobile) {
+      const statusCounts = {
+        pending: pendingReview,
+        in_review: awaitingAdmin,
+        approved: 0,
+        awarded: 0,
+        returned: returnedByMe
+      };
+      return (
+        <CompactStatsCard 
+          totalRevenue={totalValue}
+          quotationsCount={totalQuotations}
+          customersCount={0}
+          selectedCurrency={selectedCurrency}
+          statusCounts={statusCounts}
+          loading={statsLoading}
+        />
+      );
+    }
+    
+    return (
+      <div style={styles.statsGrid}>
+        <StatCard 
+          label="Total Quotations" 
+          value={totalQuotations} 
+          accent="#6366f1" 
+          iconBg="#eff1ff" 
+          iconColor="#6366f1" 
+          Icon={FileText} 
+          loading={statsLoading} 
+          sub="All quotations in system"
+        />
+        <StatCard 
+          label="Pending Review" 
+          value={pendingReview} 
+          accent="#f59e0b" 
+          iconBg="#fef3c7" 
+          iconColor="#f59e0b" 
+          Icon={Clock} 
+          loading={statsLoading} 
+          sub="Awaiting your review"
+        />
+        <StatCard 
+          label="Awaiting Admin" 
+          value={awaitingAdmin} 
+          accent="#3b82f6" 
+          iconBg="#dbeafe" 
+          iconColor="#3b82f6" 
+          Icon={Shield} 
+          loading={statsLoading} 
+          sub="Forwarded to admin"
+        />
+        <StatCard 
+          label="Returned by You" 
+          value={returnedByMe} 
+          accent="#ef4444" 
+          iconBg="#fee2e2" 
+          iconColor="#ef4444" 
+          Icon={Ban} 
+          loading={statsLoading} 
+          sub="Rejected quotations"
+        />
+      </div>
+    );
+  };
 
   const renderTableHeader = () => (
     <div style={styles.tableHeader}>
@@ -430,13 +599,17 @@ export default function OpsDashboard({ onViewQuotation }) {
               backgroundColor: active ? '#fff' : 'transparent',
               color: active ? '#0f172a' : '#64748b',
               boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+              padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
+              fontSize: isMobile ? '0.7rem' : '0.8rem'
             }}>
-              <I size={13}/>
-              {label}
+              <I size={isMobile ? 11 : 13}/>
+              {!isMobile && label}
               <span style={{
                 backgroundColor: active ? (hasAlert ? alertColor : '#0f172a') : (hasAlert ? alertColor : '#e2e8f0'),
                 color: (active || hasAlert) ? '#fff' : '#64748b',
-                ...styles.tabCount
+                ...styles.tabCount,
+                padding: isMobile ? '1px 5px' : '1px 7px',
+                fontSize: isMobile ? '0.6rem' : '0.68rem'
               }}>
                 {isInitialLoading ? '…' : count}
               </span>
@@ -447,13 +620,13 @@ export default function OpsDashboard({ onViewQuotation }) {
 
       <div style={styles.headerActions}>
         <button onClick={handleRefresh} disabled={loading} style={styles.refreshBtn}>
-          <RefreshCw size={14} color="#64748b" style={loading ? styles.spin : {}}/>
+          <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={loading ? styles.spin : {}}/>
         </button>
         <div style={styles.searchBox}>
-          <Search size={14} color="#94a3b8"/>
+          <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
           <input
             ref={searchRef}
-            style={styles.searchInput}
+            style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
             placeholder="Search… (press /)"
             value={searchInput}
             onChange={handleSearchChange}
@@ -464,6 +637,7 @@ export default function OpsDashboard({ onViewQuotation }) {
             </button>
           )}
         </div>
+        {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
       </div>
     </div>
   );
@@ -483,7 +657,6 @@ export default function OpsDashboard({ onViewQuotation }) {
             {expiring && <ExpiryBadge type="expiring" />}
           </div>
         </td>
-        
         <td style={styles.cell}>
           <div style={styles.customerCell}>
             <div style={styles.customerName}>
@@ -492,9 +665,7 @@ export default function OpsDashboard({ onViewQuotation }) {
             {q.contact && <div style={styles.contactText}>{q.contact}</div>}
           </div>
         </td>
-        
         <td style={styles.dateCell}>{fmtDate(q.date)}</td>
-        
         <td style={styles.dateCell}>
           <span style={{ 
             color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
@@ -502,27 +673,22 @@ export default function OpsDashboard({ onViewQuotation }) {
           }}>
             {fmtDate(q.expiryDate)}
           </span>
-        </td>
-        
+         </td>
         <td style={styles.cell}>
           <StatusBadge status={q.status}/>
           <RejectionNote quotation={q}/>
-        </td>
-        
+         </td>
         <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
-        
         <td style={{ ...styles.cell, textAlign: 'center' }}>
           <ItemsBadge count={q.items?.length ?? 0} />
-        </td>
-        
+         </td>
         <td style={styles.totalCell}>
           {fmtCurrency(q.total, selectedCurrency)}
-        </td>
-        
+         </td>
         <td style={styles.actionsCell}>
           <div style={styles.actionsContainer}>
             <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
-              icon={Eye} label="View" title="View quotation"/>
+              icon={Eye} label="View" title="View quotation" size="small"/>
             
             <ActionBtn
               bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
@@ -532,6 +698,7 @@ export default function OpsDashboard({ onViewQuotation }) {
               icon={isDownloading ? RefreshCw : Download} 
               label={isDownloading ? '…' : 'PDF'} 
               title="Download PDF"
+              size="small"
             />
             
             {canAct && (
@@ -544,6 +711,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                   label="Approve" 
                   title="Approve quotation"
                   disabled={isOp(q._id, 'approve')}
+                  size="small"
                 />
                 <ActionBtn 
                   bg="#fee2e2" 
@@ -553,18 +721,19 @@ export default function OpsDashboard({ onViewQuotation }) {
                   label="Reject" 
                   title="Reject quotation"
                   disabled={isOp(q._id, 'reject')}
+                  size="small"
                 />
               </>
             )}
           </div>
-        </td>
-      </tr>
+         </td>
+       </tr>
     );
   };
 
   const renderEmptyState = () => (
     <div style={styles.emptyState}>
-      <FileText size={48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
+      <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
       <p style={styles.emptyStateTitle}>
         {search ? `No results for "${search}"` : 'No quotations found'}
       </p>
@@ -579,7 +748,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const renderRefreshOverlay = () => (
     <div style={styles.refreshOverlay}>
       <div style={styles.refreshCard}>
-        <RefreshCw size={24} color="#6366f1" style={styles.spin}/>
+        <RefreshCw size={isMobile ? 20 : 24} color="#6366f1" style={styles.spin}/>
         <span style={styles.refreshText}>Refreshing…</span>
       </div>
     </div>
@@ -594,22 +763,42 @@ export default function OpsDashboard({ onViewQuotation }) {
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Topbar */}
-      <div style={styles.topbar}>
-        <div>
-          <div style={styles.dashboardTitle}>⚙ Operational Manager Dashboard</div>
-          <CompanyCurrencyDisplay />
+      {/* Topbar - Responsive */}
+      <div style={{ ...styles.topbar, padding: isMobile ? '0.75rem 1rem' : '0 2rem', flexDirection: isMobile ? 'column' : 'row', height: isMobile ? 'auto' : 60, gap: isMobile ? '0.75rem' : 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: isMobile ? '100%' : 'auto' }}>
+          <div>
+            <div style={{ ...styles.dashboardTitle, fontSize: isMobile ? '1rem' : '1.0625rem' }}>
+              ⚙ Ops Dashboard
+            </div>
+            {!isMobile && <CompanyCurrencyDisplay />}
+          </div>
+          {isMobile && (
+            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8, padding: '0.4rem 0.7rem', color: 'white', cursor: 'pointer' }}>
+              <Menu size={20} />
+            </button>
+          )}
         </div>
-        <div style={styles.topbarActions}>
-          <CompanyCurrencySelector variant="compact" />
-          <NavBtn onClick={() => navigate('/home')} label="Back to Home" />
-          <button onClick={handleLogout} className="ops-nav-btn" style={styles.logoutBtn}>
-            <LogOut size={15}/> Logout
+        
+        {isMobile && <CompanyCurrencyDisplay isMobile={true} />}
+        
+        <div style={{ 
+          display: 'flex', 
+          gap: '0.5rem', 
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          ...(isMobile && !mobileMenuOpen ? { display: 'none' } : { display: 'flex' }),
+          width: isMobile ? '100%' : 'auto',
+          justifyContent: isMobile ? 'center' : 'flex-end'
+        }}>
+          <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
+          <NavBtn onClick={() => navigate('/home')} label="Home" />
+          <button onClick={handleLogout} className="ops-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
+            <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
         </div>
       </div>
 
-      <div style={styles.mainContent}>
+      <div style={{ ...styles.mainContent, padding: isMobile ? '0.75rem' : '2rem' }}>
         {/* Error banner */}
         {loadError && (
           <div style={styles.errorBanner}>
@@ -636,53 +825,117 @@ export default function OpsDashboard({ onViewQuotation }) {
           {renderTableHeader()}
 
           {/* Skeleton Loading */}
-          {isInitialLoading && <LoadingSkeleton />}
+          {isInitialLoading && <LoadingSkeleton isMobile={isMobile} />}
 
           {/* Refresh Overlay */}
           {isRefreshing && paginated.length > 0 && renderRefreshOverlay()}
 
-          {/* Data Table */}
+          {/* Data Table/Cards */}
           {hasFetched && !isInitialLoading && (
             <>
               {safeQ.length === 0 ? (
                 renderEmptyState()
               ) : (
                 <>
-                  <div style={styles.tableWrapper}>
-                    <table style={styles.table}>
-                      <thead>
-                        <tr>
-                          <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
-                          <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
-                          <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
-                          <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
-                          <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
-                          <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
-                          <th style={styles.itemsHeaderCell}>Items</th>
-                          <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
-                          <th style={styles.actionsHeaderCell}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {paginated.length === 0 ? (
+                  {(isMobile || viewMode === 'card') ? (
+                    // Card View - 2 columns on desktop, 1 on mobile
+                    <div style={{ 
+                      padding: isMobile ? '1rem' : '1.5rem',
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
+                      gap: isMobile ? '0.75rem' : '1rem'
+                    }}>
+                      {paginated.length === 0 ? (
+                        <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
+                          No results for "<strong>{search}</strong>"
+                          <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
+                        </div>
+                      ) : (
+                        paginated.map((q) => (
+                          <OpsQuotationCard
+                            key={q._id}
+                            quotation={q}
+                            selectedCurrency={selectedCurrency}
+                            onView={handleView}
+                            onApprove={handleApprove}
+                            onReject={handleReject.open}
+                            onDownload={handleDownload}
+                            isDownloading={downloadLoadingId === q._id}
+                            isApproving={isOp(q._id, 'approve')}
+                            isRejecting={isOp(q._id, 'reject')}
+                          />
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    // Desktop Table View
+                    <div style={styles.tableWrapper}>
+                      <table style={styles.table}>
+                        <thead>
                           <tr>
-                            <td colSpan={9} style={styles.noResults}>
-                              No results for "<strong>{search}</strong>"
-                              <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
-                            </td>
+                            <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
+                            <th style={styles.itemsHeaderCell}>Items</th>
+                            <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
+                            <th style={styles.actionsHeaderCell}>Actions</th>
                           </tr>
-                        ) : paginated.map(renderTableRow)}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <PaginationBar
-                    total={totalFiltered}
-                    page={safePage}
-                    limit={limit}
-                    onPage={setPage}
-                    onLimit={(l) => { setLimit(l); setPage(1); }}
-                  />
+                        </thead>
+                        <tbody>
+                          {paginated.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} style={styles.noResults}>
+                                No results for "<strong>{search}</strong>"
+                                <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
+                              </td>
+                            </tr>
+                          ) : paginated.map(renderTableRow)}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  
+                  {/* Pagination */}
+                  {!isMobile && (
+                    <PaginationBar
+                      total={totalFiltered}
+                      page={safePage}
+                      limit={limit}
+                      onPage={setPage}
+                      onLimit={(l) => { setLimit(l); setPage(1); }}
+                    />
+                  )}
+                  
+                  {/* Mobile Pagination */}
+                  {isMobile && totalFiltered > 0 && (
+                    <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                        {((safePage - 1) * limit) + 1}–{Math.min(safePage * limit, totalFiltered)} of {totalFiltered}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <button 
+                          onClick={() => setPage(p => Math.max(1, p - 1))} 
+                          disabled={safePage === 1}
+                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
+                        >
+                          Previous
+                        </button>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>
+                          {safePage} / {totalPages}
+                        </span>
+                        <button 
+                          onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
+                          disabled={safePage === totalPages}
+                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -720,7 +973,7 @@ export default function OpsDashboard({ onViewQuotation }) {
 // ─────────────────────────────────────────────────────────────
 // Sub-components (extracted)
 // ─────────────────────────────────────────────────────────────
-const LoadingSkeleton = React.memo(() => (
+const LoadingSkeleton = React.memo(({ isMobile }) => (
   <div style={{ overflowX: 'auto' }}>
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
       <thead>
@@ -760,11 +1013,9 @@ const styles = {
 
   topbar: {
     backgroundColor: '#0f172a',
-    padding: '0 2rem',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: 60,
     position: 'sticky',
     top: 0,
     zIndex: 50,
@@ -772,7 +1023,6 @@ const styles = {
   },
 
   dashboardTitle: {
-    fontSize: '1.0625rem',
     fontWeight: 800,
     color: 'white',
     letterSpacing: '-0.01em'
@@ -789,8 +1039,6 @@ const styles = {
     color: '#94a3b8',
     border: '1px solid rgba(255,255,255,0.12)',
     borderRadius: 8,
-    padding: '0.45rem 0.85rem',
-    fontSize: '0.8rem',
     fontWeight: 600,
     cursor: 'pointer',
     display: 'flex',
@@ -800,8 +1048,7 @@ const styles = {
 
   mainContent: {
     maxWidth: 1400,
-    margin: '0 auto',
-    padding: '2rem'
+    margin: '0 auto'
   },
 
   errorBanner: {
@@ -814,7 +1061,9 @@ const styles = {
     padding: '0.875rem 1rem',
     marginBottom: '1.25rem',
     fontSize: '0.875rem',
-    color: '#991b1b'
+    color: '#991b1b',
+    flexWrap: 'wrap',
+    gap: '0.5rem'
   },
 
   errorMessage: {
@@ -880,33 +1129,32 @@ const styles = {
     padding: '0.35rem',
     backgroundColor: '#f1f5f9',
     borderRadius: 10,
-    flexWrap: 'wrap'
+    overflowX: 'auto',
+    width: '100%'
   },
 
   tabButton: {
-    padding: '0.4rem 0.875rem',
     borderRadius: 8,
     border: 'none',
     cursor: 'pointer',
-    fontSize: '0.8rem',
     fontWeight: 600,
     display: 'flex',
     alignItems: 'center',
     gap: '0.35rem',
-    transition: 'all 0.15s'
+    transition: 'all 0.15s',
+    whiteSpace: 'nowrap'
   },
 
   tabCount: {
     borderRadius: 999,
-    padding: '1px 7px',
-    fontSize: '0.68rem',
     fontWeight: 700
   },
 
   headerActions: {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.75rem'
+    gap: '0.75rem',
+    flexWrap: 'wrap'
   },
 
   refreshBtn: {
@@ -928,7 +1176,8 @@ const styles = {
     backgroundColor: '#f8fafc',
     border: '1px solid #e2e8f0',
     borderRadius: 8,
-    padding: '0.4rem 0.75rem'
+    padding: '0.4rem 0.75rem',
+    flex: 1
   },
 
   searchInput: {
@@ -936,8 +1185,7 @@ const styles = {
     background: 'transparent',
     outline: 'none',
     fontSize: '0.875rem',
-    color: '#0f172a',
-    width: 210
+    color: '#0f172a'
   },
 
   clearSearchBtn: {

@@ -33,6 +33,7 @@ const getBrowser = async () => {
   return _browser;
 };
 
+
 // ─────────────────────────────────────────────────────────────
 // Cloudinary helpers
 // ─────────────────────────────────────────────────────────────
@@ -190,50 +191,238 @@ const deleteInternalDocument = async (document) => {
 // ─────────────────────────────────────────────────────────────
 // Item-image processor with currency conversion
 // ─────────────────────────────────────────────────────────────
-async function processItems(items, quotationImages, exchangeRate) {
+ 
+
+const processItemImages = async (item, itemIndex) => {
+  let imagePaths = [];
+  
+  if (item.imagePaths && Array.isArray(item.imagePaths)) {
+    const validUrls = item.imagePaths.filter(img => 
+      img && typeof img === 'string' && img.includes('cloudinary.com')
+    );
+    imagePaths.push(...validUrls);
+  }
+  
+  if (item.newImages && Array.isArray(item.newImages)) {
+    for (let imgIdx = 0; imgIdx < item.newImages.length; imgIdx++) {
+      const imageData = item.newImages[imgIdx];
+      if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+        try {
+          const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${itemIndex + 1}`);
+          if (uploaded && uploaded.url) {
+            imagePaths.push(uploaded.url);
+          }
+        } catch (uploadError) {
+          console.error(`Failed to upload image for item ${itemIndex + 1}:`, uploadError.message);
+        }
+      }
+    }
+  }
+  
+  return imagePaths;
+};
+
+// Updated processItems function
+async function processItemsWithImages(items, exchangeRate) {
   const processedItems = [];
   
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const itemDoc = item.itemDoc; // Contains the full item document
-    console.log(">>>>>>>>.",item);
-    // Calculate prices with exchange rate
+    
+    // Find the item document
+    let itemDoc = await Item.findOne({ 
+      _id: item.itemId, 
+      companyId: req.companyId 
+    }).lean();
+    
+    if (!itemDoc && item.zohoId) {
+      itemDoc = await Item.findOne({ zohoId: item.zohoId }).lean();
+    }
+    
+    if (!itemDoc) {
+      throw new Error(`Item not found: ${item.itemId}`);
+    }
+    
+    // Process images - upload each base64 to Cloudinary
+    const uploadedImages = [];
+    
+    if (item.images && Array.isArray(item.images)) {
+      for (let imgIdx = 0; imgIdx < item.images.length; imgIdx++) {
+        const imageData = item.images[imgIdx];
+        
+        // If it's a base64 string, upload to Cloudinary
+        if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+          const uploaded = await uploadImageToCloudinary(imageData, `quotations/items/item_${i + 1}`);
+          if (uploaded && uploaded.url) {
+            uploadedImages.push({
+              url: uploaded.url,
+              publicId: uploaded.publicId,
+              fileName: `item_${i + 1}_image_${imgIdx + 1}.png`,
+              uploadedAt: new Date()
+            });
+          }
+        }
+        // If it's already a Cloudinary URL object
+        else if (imageData && typeof imageData === 'object' && imageData.url) {
+          uploadedImages.push(imageData);
+        }
+        // If it's a string Cloudinary URL
+        else if (imageData && typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+          uploadedImages.push({
+            url: imageData,
+            publicId: imageData.split('/').pop().split('.')[0],
+            fileName: `existing_image.png`,
+            uploadedAt: new Date()
+          });
+        }
+      }
+    }
+    
     const unitPriceInBaseCurrency = item.unitPrice * exchangeRate;
     const totalPrice = item.quantity * item.unitPrice;
     const totalPriceInBaseCurrency = totalPrice * exchangeRate;
     
     processedItems.push({
       itemId: itemDoc._id,
-      zohoItemId: itemDoc.zohoId, 
+      zohoItemId: itemDoc.zohoId,
+      name: itemDoc.name,
       description: item.description || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       unitPriceInBaseCurrency,
       totalPrice,
       totalPriceInBaseCurrency,
-      imagePaths: quotationImages?.[i] || [],
-      imagePublicIds: []
+      images: uploadedImages,  // Store as array of objects
+      imageUrls: uploadedImages.map(img => img.url)  // Also store just URLs for easy access
     });
   }
   
   return processedItems;
 }
 
+// Add this helper function to process and upload item images during update
+const processAndUploadItemImages = async (items, existingQuotation, exchangeRate, companyId) => {
+  const processedItems = [];
+  
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx];
+    if (!item) continue;
+    
+    let itemDoc = null;
+    
+    // Try to find item by ID
+    if (item.itemId) {
+      if (mongoose.Types.ObjectId.isValid(item.itemId)) {
+        itemDoc = await Item.findOne({ 
+          _id: item.itemId, 
+          companyId: companyId 
+        }).lean();
+      }
+      
+      // If not found, try by zohoId
+      if (!itemDoc) {
+        itemDoc = await Item.findOne({ 
+          zohoId: item.itemId, 
+          companyId: companyId 
+        }).lean();
+      }
+    }
+    
+    // If still not found and we have existing item, use that
+    if (!itemDoc && existingQuotation.items && existingQuotation.items[idx]) {
+      itemDoc = existingQuotation.items[idx].itemId;
+    }
+    
+    const quantity = Number(item.quantity) || 1;
+    const unitPrice = Number(item.unitPrice) || 0;
+    const totalPrice = quantity * unitPrice;
+    const totalPriceInBaseCurrency = totalPrice * exchangeRate;
+    const unitPriceInBaseCurrency = unitPrice * exchangeRate;
+    
+    // Process images for this item
+    let imagePaths = item.imagePaths || [];
+    let newImageUrls = [];
+    
+    // Check if there are new base64 images to upload
+    if (item.newImages && Array.isArray(item.newImages) && item.newImages.length > 0) {
+      console.log(`📸 Uploading ${item.newImages.length} new images for item ${idx + 1}`);
+      
+      for (let imgIdx = 0; imgIdx < item.newImages.length; imgIdx++) {
+        const imageData = item.newImages[imgIdx];
+        
+        // Check if it's base64 (needs upload)
+        if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+          try {
+            const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
+            if (uploaded && uploaded.url) {
+              newImageUrls.push(uploaded.url);
+              console.log(`✅ Uploaded new image ${imgIdx + 1} for item ${idx + 1}: ${uploaded.url}`);
+            }
+          } catch (uploadError) {
+            console.error(`❌ Failed to upload image for item ${idx + 1}:`, uploadError.message);
+          }
+        } else if (imageData && typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+          // Already a Cloudinary URL, keep it
+          newImageUrls.push(imageData);
+        }
+      }
+    }
+    
+    // Combine existing images (that weren't deleted) with new uploaded images
+    const existingImages = imagePaths.filter(path => 
+      path && typeof path === 'string' && path.includes('cloudinary.com')
+    );
+    
+    const finalImagePaths = [...existingImages, ...newImageUrls];
+    
+    processedItems.push({
+      itemId: itemDoc?._id || item.itemId,
+      zohoItemId: itemDoc?.zohoId || item.zohoId || null,
+      name: itemDoc?.name || item.name || '',
+      description: item.description || itemDoc?.description || '',
+      quantity: quantity,
+      unitPrice: unitPrice,
+      unitPriceInBaseCurrency: unitPriceInBaseCurrency,
+      totalPrice: totalPrice,
+      totalPriceInBaseCurrency: totalPriceInBaseCurrency,
+      imagePaths: finalImagePaths,
+      imagePublicIds: item.imagePublicIds || []
+    });
+  }
+  
+  return processedItems;
+};
+
 // ─────────────────────────────────────────────────────────────
 // Calculate totals with currency conversion
 // ─────────────────────────────────────────────────────────────
 const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
+  // Calculate subtotal (sum of all items)
   const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
-  const taxAmount = (subtotal * (taxPercent || 0)) / 100;
-  const discountAmount = (subtotal * (discountPercent || 0)) / 100;
-  const total = subtotal + taxAmount - discountAmount;
- 
   const subtotalInBaseCurrency = subtotal * exchangeRate;
-  const taxAmountInBaseCurrency = taxAmount * exchangeRate;
+  
+  // STEP 1: Calculate discount amount (based on subtotal)
+  const discountAmount = (subtotal * (discountPercent || 0)) / 100;
   const discountAmountInBaseCurrency = discountAmount * exchangeRate;
+  
+  // STEP 2: Calculate subtotal AFTER discount
+  const subtotalAfterDiscount = subtotal - discountAmount;
+  const subtotalAfterDiscountInBaseCurrency = subtotalAfterDiscount * exchangeRate;
+  
+  // STEP 3: Calculate tax on the DISCOUNTED amount (NOT on original subtotal)
+  const taxAmount = (subtotalAfterDiscount * (taxPercent || 0)) / 100;
+  const taxAmountInBaseCurrency = taxAmount * exchangeRate;
+  
+  // STEP 4: Calculate grand total (discounted amount + tax)
+  const total = subtotalAfterDiscount + taxAmount;
   const totalInBaseCurrency = total * exchangeRate;
+  
+  // Optional: Keep for debugging/display
+  const subtotalOriginal = subtotal;
+  const subtotalOriginalInBaseCurrency = subtotalInBaseCurrency;
 
   return {
+    // Main fields (keep original names for backward compatibility)
     subtotal,
     taxAmount,
     discountAmount,
@@ -241,7 +430,13 @@ const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
     subtotalInBaseCurrency,      
     taxAmountInBaseCurrency,     
     discountAmountInBaseCurrency, 
-    totalInBaseCurrency         
+    totalInBaseCurrency,
+    
+    // Additional fields for clarity (optional)
+    subtotalOriginal,
+    subtotalOriginalInBaseCurrency,
+    subtotalAfterDiscount,
+    subtotalAfterDiscountInBaseCurrency
   };
 };
 
@@ -627,20 +822,19 @@ exports.getQuotation = async (req, res) => {
 exports.createQuotation = async (req, res) => {
   const {
     projectName,
-    companyId,  
+    companyId,
     currencyCode,
     customerId, customer, contact, customerCountry,
-    date, expiryDate, queryDate,tl,trn,
-    ourRef, ourContact, salesOffice, paymentTerms, deliveryTerms,
+    date, expiryDate, queryDate, tl, trn,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
     items, taxPercent, discountPercent, notes,
     quotationImages, termsAndConditions, termsImages,
-    internalDocuments, 
-    internalDocDescriptions  
+    internalDocuments,
+    internalDocDescriptions
   } = req.body;
 
-  console.log("📦 Received items:", JSON.stringify(items, null, 2));
-  
-  // Validation
+  console.log("📸 Received quotationImages:", Object.keys(quotationImages || {}).length, "items with images");
+
   if (!projectName) {
     return res.status(400).json({ message: 'Project Name is required' });
   }
@@ -652,355 +846,284 @@ exports.createQuotation = async (req, res) => {
   if (!company) {
     return res.status(400).json({ message: 'Invalid company selected' });
   }
-  const customerDoc = await Customer.findOne({ 
-    _id: customerId, 
-    companyId: company._id 
-  }).lean();
-  
+
+  const customerDoc = await Customer.findOne({ _id: customerId, companyId: company._id }).lean();
   if (!customerDoc) {
-    return res.status(404).json({ 
-      message: 'Customer not found for this company' 
-    });
+    return res.status(404).json({ message: 'Customer not found for this company' });
   }
 
-  // Validate items belong to this company
-for (const item of items) {
-  let itemDoc = null;
-  
-  // Try to find by MongoDB _id
-  if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-    itemDoc = await Item.findOne({ 
-      _id: item.itemId, 
-      companyId: company._id 
-    }).lean();
-  }
-  
-  // If not found, try by zohoId
-  if (!itemDoc && item.zohoId) {
-    itemDoc = await Item.findOne({ 
-      zohoId: item.zohoId, 
-      companyId: company._id 
-    }).lean();
-  }
-  
-  // If still not found, try by itemId as string
-  if (!itemDoc && item.itemId) {
-    itemDoc = await Item.findOne({ 
-      zohoId: item.itemId, 
-      companyId: company._id 
-    }).lean();
-  }
-  
-  if (!itemDoc) {
-    return res.status(404).json({ 
-      message: `Item not found for this company: ${item.name || item.itemId || item.zohoId}`
-    });
-  }
-}
-
-  if (!customerId || !customer?.trim()) {
-    return res.status(400).json({ message: 'Customer ID and customer name are required' });
-  }
-  if (!items?.length) {
-    return res.status(400).json({ message: 'At least one item is required' });
+  const validatedItems = [];
+  for (const item of items) {
+    let itemDoc = null;
+    
+    if (mongoose.Types.ObjectId.isValid(item.itemId)) {
+      itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc && item.zohoId) {
+      itemDoc = await Item.findOne({ zohoId: item.zohoId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc && item.itemId) {
+      itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc) {
+      return res.status(404).json({ 
+        message: `Item not found: ${item.name || item.itemId || item.zohoId}`
+      });
+    }
+    
+    validatedItems.push({ ...item, itemDoc });
   }
 
-  const dateErr = validateDates(date, expiryDate);
-  if (dateErr) return res.status(400).json({ message: dateErr });
-
+  let exchangeRate = 1;
+  const targetCurrency = currencyCode || company.baseCurrency;
+  
   try {
-    // Validate customer exists
-    const customerDoc = await Customer.findById(customerId).lean();
-    if (!customerDoc) {
-      return res.status(404).json({ message: 'Customer not found' });
-    }
+    const rates = await ExchangeRateService.getRates(company.baseCurrency);
+    exchangeRate = rates[targetCurrency] || 1;
+  } catch (rateError) {
+    console.error('Error getting exchange rates:', rateError.message);
+  }
 
-    // ========== VALIDATE ITEMS WITH BOTH ID TYPES ==========
-    console.log('\n========== ITEM VALIDATION DEBUG ==========');
-    const validatedItems = [];
+  // NEW: Process items and UPLOAD images to Cloudinary
+  const processedItems = [];
+  
+  for (let i = 0; i < validatedItems.length; i++) {
+    const item = validatedItems[i];
+    const itemDoc = item.itemDoc;
     
-    for (const item of items) {
-      console.log(`\n🔍 Validating item:`, {
-        itemId: item.itemId,
-        zohoId: item.zohoId,
-        name: item.name,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice
-      });
+    let imageUrls = [];
+    
+    // Check if there are images for this item from quotationImages
+    if (quotationImages && quotationImages[i] && Array.isArray(quotationImages[i])) {
+      console.log(`📸 Item ${i + 1}: Processing ${quotationImages[i].length} images`);
       
-      let itemDoc = null;
-      
-      // Try to find by MongoDB _id first (if it's a valid ObjectId)
-      const isValidObjectId = mongoose.Types.ObjectId.isValid(item.itemId);
-      if (isValidObjectId) {
-        itemDoc = await Item.findById(item.itemId).lean();
-        if (itemDoc) {
-          console.log(`✅ Found item by MongoDB _id: ${itemDoc.name}`);
-        }
-      }
-      
-      // If not found by _id, try by zohoId
-      if (!itemDoc && item.zohoId) {
-        itemDoc = await Item.findOne({ zohoId: item.zohoId }).lean();
-        if (itemDoc) {
-          console.log(`✅ Found item by zohoId: ${itemDoc.name}`);
-        }
-      }
-      
-      // If still not found, try by itemId as string (could be zohoId)
-      if (!itemDoc && item.itemId) {
-        itemDoc = await Item.findOne({ zohoId: item.itemId }).lean();
-        if (itemDoc) {
-          console.log(`✅ Found item by itemId as zohoId: ${itemDoc.name}`);
-        }
-      }
-      
-      // If still not found, try by name (fallback)
-      if (!itemDoc && item.name) {
-        itemDoc = await Item.findOne({ name: item.name }).lean();
-        if (itemDoc) {
-          console.log(`✅ Found item by name: ${itemDoc.name}`);
-        }
-      }
-      
-      if (!itemDoc) {
-        console.error(`❌ Item not found:`, {
-          itemId: item.itemId,
-          zohoId: item.zohoId,
-          name: item.name
-        });
-        return res.status(404).json({ 
-          message: `Item not found: ${item.name || item.itemId || item.zohoId}`,
-          details: {
-            searchedId: item.itemId,
-            searchedZohoId: item.zohoId,
-            searchedName: item.name
+      for (let imgIdx = 0; imgIdx < quotationImages[i].length; imgIdx++) {
+        const imageData = quotationImages[i][imgIdx];
+        
+        if (imageData && typeof imageData === 'string') {
+          // If it's base64, upload to Cloudinary
+          if (imageData.startsWith('data:image')) {
+            try {
+              console.log(`📤 Uploading image ${imgIdx + 1} for item ${i + 1}...`);
+              const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
+              if (uploaded && uploaded.url) {
+                imageUrls.push(uploaded.url);
+                console.log(`✅ Uploaded: ${uploaded.url.substring(0, 60)}...`);
+              }
+            } catch (err) {
+              console.error(`❌ Upload failed:`, err.message);
+            }
           }
-        });
+          // If it's already a Cloudinary URL, keep it
+          else if (imageData.includes('cloudinary.com')) {
+            imageUrls.push(imageData);
+            console.log(`📎 Keeping existing Cloudinary URL`);
+          }
+        }
       }
-      
-      // Store validated item with MongoDB _id
-      validatedItems.push({
-        ...item,
-        itemDoc,
-        actualItemId: itemDoc._id,
-        zohoId: itemDoc.zohoId
-      });
     }
     
-    console.log(`\n✅ Validated ${validatedItems.length} items successfully`);
-    console.log('=====================================\n');
-
-    // ========== EXCHANGE RATE SECTION ==========
-    console.log('\n========== EXCHANGE RATE DEBUG START ==========');
-    console.log('Company baseCurrency:', company.baseCurrency);
-    console.log('currencyCode from request:', currencyCode);
-    
-    const targetCurrency = currencyCode || company.baseCurrency;
-    console.log('Target currency:', targetCurrency);
-    console.log('Base currency for rates:', company.baseCurrency);
-    
-    // Get exchange rate with debug
-    let exchangeRate = 1;
-    let rates = null;
-    
-    try {
-      console.log('\n📊 Calling ExchangeRateService.getRates()...');
-      rates = await ExchangeRateService.getRates(company.baseCurrency);
-      
-      console.log('✅ Rates received:', rates ? 'Yes' : 'No');
-      console.log('Rates type:', typeof rates);
-      
-      if (rates && typeof rates === 'object') {
-        console.log(`Looking for rate: rates["${targetCurrency}"] =`, rates[targetCurrency]);
-        
-        exchangeRate = rates[targetCurrency];
-        
-        if (exchangeRate === undefined || exchangeRate === null) {
-          console.warn(`⚠️ Rate for ${targetCurrency} not found, using fallback`);
-          const fallbackRates = ExchangeRateService.getFallbackRates(company.baseCurrency);
-          exchangeRate = fallbackRates[targetCurrency] || 1;
-          console.log(`Using fallback rate: ${exchangeRate}`);
-        } else {
-          console.log(`✅ Using exchange rate: ${exchangeRate}`);
-        }
-      } else {
-        console.error('❌ rates is not a valid object, using fallback');
-        const fallbackRates = ExchangeRateService.getFallbackRates(company.baseCurrency);
-        exchangeRate = fallbackRates[targetCurrency] || 1;
-        console.log(`Using fallback rate: ${exchangeRate}`);
-      }
-      
-    } catch (rateError) {
-      console.error('❌ Error getting exchange rates:', rateError.message);
-      exchangeRate = 1;
-      console.log(`Using emergency fallback rate: ${exchangeRate}`);
-    }
-    
-    console.log(`\n🎯 Final exchange rate: ${exchangeRate}`);
-    console.log('========== EXCHANGE RATE DEBUG END ==========\n');
-
-    // Process items with currency conversion using validated items
-    const processedItems = await processItems(validatedItems, quotationImages, exchangeRate);
-    // Calculate totals
-    const tax = parseFloat(taxPercent) || 0;
-    const discount = parseFloat(discountPercent) || 0;
-    const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
-
-    // Process terms image
-    // ========== PROCESS TERMS IMAGES (MULTIPLE) ==========
-    let processedTermsImages = [];
-    
-    if (termsImages && termsImages.length > 0) {
-      console.log(`\n📸 Processing ${termsImages.length} terms images...`);
-      
-      for (let i = 0; i < termsImages.length; i++) {
-        const imageData = termsImages[i];
-        
-        // Handle both base64 string and object formats
-        let imageBase64 = imageData;
-        let fileName = `terms_image_${i + 1}`;
-        
-        if (typeof imageData === 'object') {
-          imageBase64 = imageData.base64 || imageData.url;
-          fileName = imageData.fileName || `terms_image_${i + 1}`;
-        }
-        
-        if (imageBase64 && imageBase64.startsWith('data:image')) {
+    // Also check item.images array (alternative format)
+    if (item.images && Array.isArray(item.images)) {
+      for (const img of item.images) {
+        if (img && typeof img === 'string' && img.startsWith('data:image')) {
           try {
-            const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+            const uploaded = await uploadBase64ToCloudinary(img, `quotations/items/item_${i + 1}`);
+            if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) {
+              imageUrls.push(uploaded.url);
+            }
+          } catch (err) {
+            console.error(`Upload failed:`, err.message);
+          }
+        } else if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imageUrls.includes(img)) {
+          imageUrls.push(img);
+        }
+      }
+    }
+    
+    // Remove duplicates
+    imageUrls = [...new Set(imageUrls)];
+    
+    console.log(`📸 Item ${i + 1}: Final ${imageUrls.length} images stored`);
+    
+    const unitPriceInBaseCurrency = item.unitPrice * exchangeRate;
+    const totalPrice = item.quantity * item.unitPrice;
+    const totalPriceInBaseCurrency = totalPrice * exchangeRate;
+    
+    processedItems.push({
+      itemId: itemDoc._id,
+      zohoItemId: itemDoc.zohoId,
+      name: itemDoc.name,
+      description: item.description || '',
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      unitPriceInBaseCurrency,
+      totalPrice,
+      totalPriceInBaseCurrency,
+      imagePaths: imageUrls,  // Now stores Cloudinary URLs, not base64
+      imagePublicIds: []
+    });
+  }
+  
+  const tax = parseFloat(taxPercent) || 0;
+  const discount = parseFloat(discountPercent) || 0;
+  const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
+
+  // Process terms images (upload to Cloudinary)
+  let processedTermsImages = [];
+  if (termsImages && termsImages.length > 0) {
+    console.log(`📸 Processing ${termsImages.length} terms images`);
+    
+    for (let i = 0; i < termsImages.length; i++) {
+      const imageData = termsImages[i];
+      let imageBase64 = imageData;
+      let fileName = `terms_image_${i + 1}`;
+      
+      if (typeof imageData === 'object') {
+        imageBase64 = imageData.base64 || imageData.url;
+        fileName = imageData.fileName || `terms_image_${i + 1}`;
+      }
+      
+      // Only upload if it's base64 (new image)
+      if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
+        try {
+          console.log(`📤 Uploading terms image ${i + 1}...`);
+          const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+          if (uploaded && uploaded.url) {
             processedTermsImages.push({
               url: uploaded.url,
               publicId: uploaded.publicId,
               fileName: fileName,
               uploadedAt: new Date()
             });
-            console.log(`✅ Uploaded terms image ${i + 1}: ${uploaded.url}`);
-          } catch (uploadError) {
-            console.error(`❌ Failed to upload terms image ${i + 1}:`, uploadError.message);
-            // Continue with other images, don't fail the whole request
+            console.log(`✅ Terms image ${i + 1} uploaded`);
           }
+        } catch (uploadError) {
+          console.error('Failed to upload terms image:', uploadError.message);
         }
       }
-      
-      console.log(`✅ Successfully uploaded ${processedTermsImages.length} terms images`);
+      // If it's already a Cloudinary URL object
+      else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+        processedTermsImages.push(imageData);
+      }
+      // If it's a string Cloudinary URL
+      else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+        processedTermsImages.push({
+          url: imageData,
+          publicId: imageData.split('/').pop().split('.')[0],
+          fileName: fileName,
+          uploadedAt: new Date()
+        });
+      }
     }
-
-    // Generate quotation number
-    const quotationNumber = generateQuotationNumber(company.code);
-
-    // Process internal documents from base64
-    let processedInternalDocs = [];
-    if (internalDocuments && internalDocuments.length > 0) {
-      processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
-        internalDocuments,
-        quotationNumber,
-        req.user.id,
-        internalDocDescriptions || []
-      );
-    }
-
-    
-    // Create quotation
-    const quotation = new Quotation({
-      quotationNumber,
-      projectName: projectName?.trim() || '',
-      companyId: company._id,
-      companySnapshot: {
-        code: company.code,
-        name: company.name,
-        address: typeof company.address === 'string' 
-          ? company.address 
-          : `${company.address?.street || ''}, ${company.address?.city || ''}, ${company.address?.country || 'UAE'}`,
-        phone: company.phone,
-        email: company.email,
-        vatNumber: company.vatNumber,
-        crNumber: company.crNumber,
-        logo: company.logo,
-        zohoOrganizationId: company.zohoOrganizationId,
-        bankDetails: company.bankDetails
-      },
-      currency: {
-        code: targetCurrency,
-        symbol: CURRENCY_OPTIONS[targetCurrency]?.symbol || targetCurrency,
-        name: CURRENCY_OPTIONS[targetCurrency]?.name || targetCurrency,
-        decimalPlaces: CURRENCY_OPTIONS[targetCurrency]?.decimalPlaces || 2,
-        exchangeRate: {
-          rate: exchangeRate,
-          baseCurrency: company.baseCurrency,
-          fetchedAt: new Date()
-        }
-      },
-      customerId,
-      customerSnapshot: {
-        name: customer.trim(),
-        email: customerDoc.email,
-        phone: customerDoc.phone,
-        address: customerDoc.address,
-        country: customerCountry || 'UAE',
-        vatNumber: customerDoc.vatNumber,
-        taxTreatment: customerDoc.taxTreatment || 'non_vat_registered',  
-        placeOfSupply: customerDoc.placeOfSupply || 'Dubai'   
-      },
-      customerTaxTreatment: customerDoc.taxTreatment || 'non_vat_registered',  // ← ADD THIS
-      customerPlaceOfSupply: customerDoc.placeOfSupply || 'Dubai',  // ← ADD THIS
-      contact: contact?.trim() || '',
-      date: date ? new Date(date) : new Date(),
-      expiryDate: new Date(expiryDate),
-      queryDate: queryDate ? new Date(queryDate) : null,
-      ourRef: ourRef?.trim() || '',
-      ourContact: ourContact?.trim() || '',
-      salesOffice: salesOffice?.trim() || '',
-      paymentTerms: paymentTerms?.trim() || '',
-      deliveryTerms: deliveryTerms?.trim() || '',
-      tl: tl?.trim() || '',
-      trn: trn?.trim() || '',
-      items: processedItems,
-      taxPercent: tax,
-      discountPercent: discount,
-      ...totals,
-      notes: notes?.trim() || '',
-      termsAndConditions: termsAndConditions?.trim() || '',
-      termsImages: processedTermsImages, 
-      internalDocuments: processedInternalDocs,
-      createdBy: req.user.id,
-      createdBySnapshot: {
-        name: req.user.name,
-        email: req.user.email
-      },
-      status: 'pending',
-    });
-
-    await quotation.save();
-
-    const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
-    
-    res.status(201).json({
-      success: true,
-      message: 'Quotation created successfully',
-      quotation: populated,
-      internalDocCount: processedInternalDocs.length,
-      termsImagesCount: processedTermsImages.length 
-    });
-
-  } catch (err) {
-    console.error('\n========== QUOTATION ERROR ==========');
-    console.error('Error message:', err.message);
-    console.error('Error stack:', err.stack);
-    console.error('=====================================\n');
-    
-    res.status(500).json({ 
-      success: false,
-      message: 'Error creating quotation', 
-      error: err.message 
-    });
   }
+
+  const quotationNumber = generateQuotationNumber(company.code);
+
+  let processedInternalDocs = [];
+  if (internalDocuments && internalDocuments.length > 0) {
+    processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
+      internalDocuments,
+      quotationNumber,
+      req.user.id,
+      internalDocDescriptions || []
+    );
+  }
+
+  const quotation = new Quotation({
+    quotationNumber,
+    projectName: projectName?.trim() || '',
+    companyId: company._id,
+    companySnapshot: {
+      code: company.code,
+      name: company.name,
+      address: typeof company.address === 'string' 
+        ? company.address 
+        : `${company.address?.street || ''}, ${company.address?.city || ''}, ${company.address?.country || 'UAE'}`,
+      phone: company.phone,
+      email: company.email,
+      vatNumber: company.vatNumber,
+      crNumber: company.crNumber,
+      logo: company.logo,
+      zohoOrganizationId: company.zohoOrganizationId,
+      bankDetails: company.bankDetails
+    },
+    currency: {
+      code: targetCurrency,
+      symbol: CURRENCY_OPTIONS[targetCurrency]?.symbol || targetCurrency,
+      name: CURRENCY_OPTIONS[targetCurrency]?.name || targetCurrency,
+      decimalPlaces: CURRENCY_OPTIONS[targetCurrency]?.decimalPlaces || 2,
+      exchangeRate: {
+        rate: exchangeRate,
+        baseCurrency: company.baseCurrency,
+        fetchedAt: new Date()
+      }
+    },
+    customerId,
+    customerSnapshot: {
+      name: customer.trim(),
+      email: customerDoc.email,
+      phone: customerDoc.phone,
+      address: customerDoc.address,
+      country: customerCountry || 'UAE',
+      vatNumber: customerDoc.vatNumber,
+      taxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
+      placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
+    },
+    customerTaxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
+    customerPlaceOfSupply: customerDoc.placeOfSupply || 'Dubai',
+    contact: contact?.trim() || '',
+    date: date ? new Date(date) : new Date(),
+    expiryDate: new Date(expiryDate),
+    queryDate: queryDate ? new Date(queryDate) : null,
+    ourRef: ourRef?.trim() || '',
+    ourContact: ourContact?.trim() || '',
+    salesManagerEmail: salesManagerEmail?.trim() || '',
+    paymentTerms: paymentTerms?.trim() || '',
+    deliveryTerms: deliveryTerms?.trim() || '',
+    tl: tl?.trim() || '',
+    trn: trn?.trim() || '',
+    items: processedItems,
+    taxPercent: tax,
+    discountPercent: discount,
+    ...totals,
+    notes: notes?.trim() || '',
+    termsAndConditions: termsAndConditions?.trim() || '',
+    termsImages: processedTermsImages,
+    internalDocuments: processedInternalDocs,
+    createdBy: req.user.id,
+    createdBySnapshot: {
+      name: req.user.name,
+      email: req.user.email
+    },
+    status: 'pending',
+  });
+
+  await quotation.save();
+  const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
+  
+  console.log(`✅ Quotation created with ${processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0)} item images`);
+  
+  res.status(201).json({
+    success: true,
+    message: 'Quotation created successfully',
+    quotation: populated,
+    stats: {
+      itemsCount: processedItems.length,
+      imagesUploaded: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
+      termsImagesUploaded: processedTermsImages.length
+    }
+  });
 };
 
 // ─────────────────────────────────────────────────────────────
 // UPDATE QUOTATION (with document support)
 // ─────────────────────────────────────────────────────────────
 
+ 
 exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const companyId = req.companyId || req.headers['x-company-id'];
@@ -1009,13 +1132,16 @@ exports.updateQuotation = async (req, res) => {
     currencyCode,
     customerId, customer, contact, customerCountry,
     date, expiryDate, queryDate,
-    ourRef, ourContact, salesOffice, paymentTerms, deliveryTerms,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
     tl, trn,
     items, taxPercent, discountPercent, notes,
-    quotationImages, termsAndConditions, termsImages,
+    quotationImages,  // ← THIS WAS MISSING - ADD IT HERE
+    termsAndConditions, termsImages,
     internalDocuments,
     internalDocDescriptions
   } = req.body;
+
+  console.log("📸 Update - Received quotationImages:", JSON.stringify(quotationImages, null, 2));
 
   if (!companyId) {
     return res.status(400).json({ message: 'Company ID is required' });
@@ -1035,8 +1161,6 @@ exports.updateQuotation = async (req, res) => {
     }
 
     const isAdmin = req.user?.role === 'admin';
-    
-    // Check authorization safely
     let isCreator = false;
     if (existing.createdBy) {
       const creatorId = existing.createdBy._id || existing.createdBy;
@@ -1053,20 +1177,17 @@ exports.updateQuotation = async (req, res) => {
       });
     }
 
-    // Get company for exchange rate
     const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({ message: 'Company not found' });
     }
 
-    // Get exchange rates
     let exchangeRate = existing.currency?.exchangeRate?.rate || 1;
     if (currencyCode && currencyCode !== existing.currency?.code) {
       const rates = await ExchangeRateService.getRates(company.baseCurrency || 'AED');
       exchangeRate = rates[currencyCode] || 1;
     }
 
-    // ========== FETCH CUSTOMER TAX INFORMATION IF CUSTOMER ID CHANGED ==========
     let customerTaxTreatment = existing.customerTaxTreatment || 'non_vat_registered';
     let customerPlaceOfSupply = existing.customerPlaceOfSupply || 'Dubai';
     let customerSnapshotTaxTreatment = existing.customerSnapshot?.taxTreatment || 'non_vat_registered';
@@ -1082,7 +1203,7 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // ========== PROCESS ITEMS SAFELY ==========
+    // Process items with images from quotationImages
     const processedItems = [];
     
     for (let idx = 0; idx < items.length; idx++) {
@@ -1091,25 +1212,15 @@ exports.updateQuotation = async (req, res) => {
       
       let itemDoc = null;
       
-      // Try to find item by ID
       if (item.itemId) {
         if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-          itemDoc = await Item.findOne({ 
-            _id: item.itemId, 
-            companyId: company._id 
-          }).lean();
+          itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
         }
-        
-        // If not found, try by zohoId
         if (!itemDoc) {
-          itemDoc = await Item.findOne({ 
-            zohoId: item.itemId, 
-            companyId: company._id 
-          }).lean();
+          itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
         }
       }
       
-      // If still not found and we have existing item, use that
       if (!itemDoc && existing.items && existing.items[idx]) {
         itemDoc = existing.items[idx].itemId;
       }
@@ -1120,25 +1231,67 @@ exports.updateQuotation = async (req, res) => {
       const totalPriceInBaseCurrency = totalPrice * exchangeRate;
       const unitPriceInBaseCurrency = unitPrice * exchangeRate;
       
+      let imagePaths = [];
+      
+      // Get images from quotationImages (sent from frontend)
+      if (quotationImages && quotationImages[idx] && Array.isArray(quotationImages[idx])) {
+        console.log(`📸 Item ${idx + 1}: Processing ${quotationImages[idx].length} images`);
+        
+        for (let imgIdx = 0; imgIdx < quotationImages[idx].length; imgIdx++) {
+          const imageData = quotationImages[idx][imgIdx];
+          
+          if (imageData && typeof imageData === 'string') {
+            // If it's base64, upload to Cloudinary
+            if (imageData.startsWith('data:image')) {
+              try {
+                console.log(`📤 Uploading image ${imgIdx + 1} for item ${idx + 1}...`);
+                const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
+                if (uploaded && uploaded.url) {
+                  imagePaths.push(uploaded.url);
+                  console.log(`✅ Uploaded: ${uploaded.url.substring(0, 60)}...`);
+                }
+              } catch (err) {
+                console.error(`❌ Upload failed:`, err.message);
+              }
+            }
+            // If it's already a Cloudinary URL, keep it
+            else if (imageData.includes('cloudinary.com')) {
+              imagePaths.push(imageData);
+              console.log(`📎 Keeping existing Cloudinary URL`);
+            }
+          }
+        }
+      }
+      
+      // Also keep existing imagePaths from the item (if any)
+      if (item.imagePaths && Array.isArray(item.imagePaths)) {
+        for (const img of item.imagePaths) {
+          if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
+            imagePaths.push(img);
+          }
+        }
+      }
+      
+      // Remove duplicates
+      imagePaths = [...new Set(imagePaths)];
+      
+      console.log(`📸 Item ${idx + 1}: Final ${imagePaths.length} images`);
+      
       processedItems.push({
         itemId: itemDoc?._id || item.itemId,
         zohoItemId: itemDoc?.zohoId || item.zohoId || null,
+        name: itemDoc?.name || item.name || '',
         description: item.description || itemDoc?.description || '',
         quantity: quantity,
         unitPrice: unitPrice,
         unitPriceInBaseCurrency: unitPriceInBaseCurrency,
         totalPrice: totalPrice,
         totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-        imagePaths: item.imagePaths || [],
-        imagePublicIds: item.imagePublicIds || []
+        imagePaths: imagePaths,
+        imagePublicIds: []
       });
     }
 
-    if (processedItems.length === 0) {
-      return res.status(400).json({ message: 'No valid items to update' });
-    }
-
-    // Calculate totals
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
     const discount = discountPercent !== undefined ? parseFloat(discountPercent) : (existing.discountPercent || 0);
     
@@ -1152,9 +1305,8 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    // ========== PROCESS TERMS IMAGES ==========
+    // Process terms images
     let processedTermsImages = existing.termsImages || [];
-    
     if (termsImages && termsImages.length > 0) {
       for (let i = 0; i < termsImages.length; i++) {
         const imageData = termsImages[i];
@@ -1166,26 +1318,44 @@ exports.updateQuotation = async (req, res) => {
           fileName = imageData.fileName || `terms_image_${i + 1}`;
         }
         
-        if (imageBase64 && imageBase64.startsWith('data:image')) {
+        if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
           try {
+            console.log(`📤 Uploading terms image ${i + 1}...`);
             const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+            if (uploaded && uploaded.url) {
+              processedTermsImages.push({
+                url: uploaded.url,
+                publicId: uploaded.publicId,
+                fileName: fileName,
+                uploadedAt: new Date()
+              });
+              console.log(`✅ Terms image ${i + 1} uploaded`);
+            }
+          } catch (uploadError) {
+            console.error('Failed to upload terms image:', uploadError.message);
+          }
+        } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+          const exists = processedTermsImages.some(img => img.url === imageData.url);
+          if (!exists) {
+            processedTermsImages.push(imageData);
+          }
+        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+          const exists = processedTermsImages.some(img => img.url === imageData);
+          if (!exists) {
             processedTermsImages.push({
-              url: uploaded.url,
-              publicId: uploaded.publicId,
+              url: imageData,
+              publicId: imageData.split('/').pop().split('.')[0],
               fileName: fileName,
               uploadedAt: new Date()
             });
-          } catch (uploadError) {
-            console.error('Failed to upload terms image:', uploadError.message);
           }
         }
       }
     }
 
-    // Process internal documents
     let newInternalDocs = [];
     if (internalDocuments && internalDocuments.length > 0) {
-      const validBase64Strings = internalDocuments.filter(doc => typeof doc === 'string');
+      const validBase64Strings = internalDocuments.filter(doc => typeof doc === 'string' && doc.startsWith('data:'));
       if (validBase64Strings.length > 0) {
         newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
           validBase64Strings,
@@ -1198,7 +1368,6 @@ exports.updateQuotation = async (req, res) => {
 
     const newStatus = (!isAdmin && existing.status === 'ops_rejected') ? 'pending' : existing.status;
 
-    // Build update data
     const updateData = {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
@@ -1208,26 +1377,22 @@ exports.updateQuotation = async (req, res) => {
       }),
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
       ...(customerCountry && { 'customerSnapshot.country': customerCountry }),
-      
-      // ✅ Add customer tax information to update
       ...(customerId && {
         'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment,
         'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply,
         customerTaxTreatment: customerTaxTreatment,
         customerPlaceOfSupply: customerPlaceOfSupply
       }),
-      
       ...(date && { date: new Date(date) }),
       ...(expiryDate && { expiryDate: new Date(expiryDate) }),
       ...(queryDate !== undefined && { queryDate: queryDate ? new Date(queryDate) : null }),
       ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }),
       ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
-      ...(salesOffice !== undefined && { salesOffice: salesOffice?.trim() || '' }),
+      ...(salesManagerEmail !== undefined && { salesManagerEmail: salesManagerEmail?.trim() || '' }),
       ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }),
       ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
       ...(tl !== undefined && { tl: tl?.trim() || '' }),
       ...(trn !== undefined && { trn: trn?.trim() || '' }),
-      
       items: processedItems,
       taxPercent: tax,
       discountPercent: discount,
@@ -1239,17 +1404,13 @@ exports.updateQuotation = async (req, res) => {
       discountAmountInBaseCurrency: discountAmountInBaseCurrency,
       total: total,
       totalInBaseCurrency: totalInBaseCurrency,
-      
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
       ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions?.trim() || '' }),
       termsImages: processedTermsImages,
-      
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
-      
       status: newStatus,
     };
 
-    // Handle currency update
     if (currencyCode && currencyCode !== existing.currency?.code) {
       updateData['currency.code'] = currencyCode;
       updateData['currency.symbol'] = CURRENCY_OPTIONS[currencyCode]?.symbol || currencyCode;
@@ -1258,22 +1419,16 @@ exports.updateQuotation = async (req, res) => {
       updateData['currency.exchangeRate.fetchedAt'] = new Date();
     }
 
-    // Clear rejection reason if needed
     if (newStatus === 'pending' && existing.status === 'ops_rejected') {
       updateData.opsRejectionReason = '';
     }
 
-    const updated = await Quotation.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    );
+    const updated = await Quotation.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
 
     if (!updated) {
       return res.status(404).json({ message: 'Quotation not found after update' });
     }
 
-    // Populate the updated quotation
     const populated = await Quotation.findById(updated._id)
       .populate('customerId', 'name email phone address taxTreatment placeOfSupply')
       .populate('createdBy', 'name email')
@@ -1283,10 +1438,17 @@ exports.updateQuotation = async (req, res) => {
       .populate('companyId', 'name code baseCurrency logo')
       .lean();
     
+    console.log(`✅ Quotation updated with ${processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0)} item images`);
+    
     res.status(200).json({
       success: true,
       message: 'Quotation updated successfully',
-      quotation: populated
+      quotation: populated,
+      stats: {
+        itemsCount: processedItems.length,
+        imagesCount: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
+        termsImagesCount: processedTermsImages.length
+      }
     });
 
   } catch (err) {

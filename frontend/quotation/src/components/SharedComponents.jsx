@@ -84,50 +84,190 @@ export const SortHeader = React.memo(({ label, field, sort, onSort, align }) => 
 });
 SortHeader.displayName = 'SortHeader';
 
+// Optimized PageBtn component (extracted and memoized)
 const PageBtn = React.memo(({ n, current, onPage }) => {
   const active = n === current;
+  const handleClick = React.useCallback(() => onPage(n), [n, onPage]);
+  
   return (
-    <button onClick={() => onPage(n)} style={{ width:30, height:30, border: `1px solid ${active ? '#0f172a' : '#e2e8f0'}`, borderRadius:7, background: active ? '#0f172a' : '#fff', color: active ? '#fff' : '#0f172a', fontWeight: active ? 700 : 400, fontSize:'0.8rem', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+    <button 
+      onClick={handleClick} 
+      style={{ 
+        width: 30, 
+        height: 30, 
+        border: `1px solid ${active ? '#0f172a' : '#e2e8f0'}`, 
+        borderRadius: 7, 
+        background: active ? '#0f172a' : '#fff', 
+        color: active ? '#fff' : '#0f172a', 
+        fontWeight: active ? 700 : 400, 
+        fontSize: '0.8rem', 
+        cursor: 'pointer', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        transition: 'all 0.15s ease'
+      }}
+    >
       {n}
     </button>
   );
 });
 PageBtn.displayName = 'PageBtn';
 
+// Optimized PaginationBar
 export const PaginationBar = React.memo(({ total, page, limit, onPage, onLimit }) => {
   const totalPages = Math.max(1, Math.ceil(total / limit));
+  
+  // Early return if no pagination needed
   if (totalPages <= 1 && total <= PAGE_SIZE_OPTIONS[0]) return null;
   
-  const start = (page - 1) * limit + 1;
-  const end = Math.min(page * limit, total);
+  // Memoize calculated values
+  const { start, end } = useMemo(() => ({
+    start: (page - 1) * limit + 1,
+    end: Math.min(page * limit, total)
+  }), [page, limit, total]);
   
+  // Memoize page numbers
   const pages = useMemo(() => {
     const p = [];
-    for (let i = Math.max(1, page - 2); i <= Math.min(totalPages, page + 2); i++) p.push(i);
+    const startPage = Math.max(1, page - 2);
+    const endPage = Math.min(totalPages, page + 2);
+    for (let i = startPage; i <= endPage; i++) p.push(i);
     return p;
   }, [page, totalPages]);
   
+  // Memoize handlers to prevent recreating on each render
+  const handleLimitChange = React.useCallback((e) => {
+    const newLimit = Number(e.target.value);
+    onLimit(newLimit);
+    onPage(1); // Reset to first page when changing limit
+  }, [onLimit, onPage]);
+  
+  const handlePrevPage = React.useCallback(() => {
+    if (page > 1) onPage(page - 1);
+  }, [page, onPage]);
+  
+  const handleNextPage = React.useCallback(() => {
+    if (page < totalPages) onPage(page + 1);
+  }, [page, totalPages, onPage]);
+  
+  const handlePageClick = React.useCallback((newPage) => {
+    if (newPage !== page) onPage(newPage);
+  }, [page, onPage]);
+  
+  const showStartEllipsis = pages[0] > 1;
+  const showEndEllipsis = pages[pages.length - 1] < totalPages;
+  const showFirstPage = showStartEllipsis;
+  const showLastPage = showEndEllipsis;
+  
   return (
-    <div style={{ padding:'0.75rem 1.5rem', borderTop:'1px solid #f1f5f9', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'0.75rem' }}>
-      <span style={{ fontSize:'0.8rem', color:'#64748b' }}>Showing <strong>{start}–{end}</strong> of <strong>{total}</strong></span>
-      <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}>
-        <span style={{ fontSize:'0.78rem', color:'#94a3b8' }}>Rows:</span>
-        <select value={limit} onChange={e => { onLimit(Number(e.target.value)); onPage(1); }} style={{ fontSize:'0.78rem', border:'1px solid #e2e8f0', borderRadius:6, padding:'0.25rem 0.5rem', color:'#0f172a', background:'#fff', cursor:'pointer' }}>
-          {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+    <div style={{ 
+      padding: '0.75rem 1.5rem', 
+      borderTop: '1px solid #f1f5f9', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'space-between', 
+      flexWrap: 'wrap', 
+      gap: '0.75rem',
+      backgroundColor: '#ffffff'
+    }}>
+      {/* Info text */}
+      <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+        Showing <strong>{start}–{end}</strong> of <strong>{total}</strong>
+      </span>
+      
+      {/* Pagination controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        {/* Rows per page selector */}
+        <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Rows:</span>
+        <select 
+          value={limit} 
+          onChange={handleLimitChange} 
+          style={{ 
+            fontSize: '0.78rem', 
+            border: '1px solid #e2e8f0', 
+            borderRadius: 6, 
+            padding: '0.25rem 0.5rem', 
+            color: '#0f172a', 
+            background: '#fff', 
+            cursor: 'pointer',
+            outline: 'none'
+          }}
+        >
+          {PAGE_SIZE_OPTIONS.map(n => (
+            <option key={n} value={n}>{n}</option>
+          ))}
         </select>
-        <button onClick={() => onPage(page - 1)} disabled={page === 1} style={{ width:30, height:30, border:'1px solid #e2e8f0', borderRadius:7, background:'#fff', cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.4 : 1, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        
+        {/* Previous button */}
+        <button 
+          onClick={handlePrevPage} 
+          disabled={page === 1} 
+          style={{ 
+            width: 30, 
+            height: 30, 
+            border: '1px solid #e2e8f0', 
+            borderRadius: 7, 
+            background: '#fff', 
+            cursor: page === 1 ? 'not-allowed' : 'pointer', 
+            opacity: page === 1 ? 0.4 : 1, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            transition: 'opacity 0.15s ease'
+          }}
+        >
           <ChevronLeft size={14}/>
         </button>
-        {pages[0] > 1 && (<><PageBtn n={1} current={page} onPage={onPage}/>{pages[0] > 2 && <span style={{ color:'#94a3b8', fontSize:'0.8rem' }}>…</span>}</>)}
-        {pages.map(n => <PageBtn key={n} n={n} current={page} onPage={onPage}/>)}
-        {pages[pages.length - 1] < totalPages && (<>{pages[pages.length - 1] < totalPages - 1 && <span style={{ color:'#94a3b8', fontSize:'0.8rem' }}>…</span>}<PageBtn n={totalPages} current={page} onPage={onPage}/></>)}
-        <button onClick={() => onPage(page + 1)} disabled={page === totalPages} style={{ width:30, height:30, border:'1px solid #e2e8f0', borderRadius:7, background:'#fff', cursor: page === totalPages ? 'not-allowed' : 'pointer', opacity: page === totalPages ? 0.4 : 1, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        
+        {/* First page + ellipsis */}
+        {showFirstPage && (
+          <>
+            <PageBtn n={1} current={page} onPage={handlePageClick} />
+            {pages[0] > 2 && <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>…</span>}
+          </>
+        )}
+        
+        {/* Page numbers */}
+        {pages.map(n => (
+          <PageBtn key={n} n={n} current={page} onPage={handlePageClick} />
+        ))}
+        
+        {/* Last page + ellipsis */}
+        {showLastPage && (
+          <>
+            {pages[pages.length - 1] < totalPages - 1 && (
+              <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>…</span>
+            )}
+            <PageBtn n={totalPages} current={page} onPage={handlePageClick} />
+          </>
+        )}
+        
+        {/* Next button */}
+        <button 
+          onClick={handleNextPage} 
+          disabled={page === totalPages} 
+          style={{ 
+            width: 30, 
+            height: 30, 
+            border: '1px solid #e2e8f0', 
+            borderRadius: 7, 
+            background: '#fff', 
+            cursor: page === totalPages ? 'not-allowed' : 'pointer', 
+            opacity: page === totalPages ? 0.4 : 1, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            transition: 'opacity 0.15s ease'
+          }}
+        >
           <ChevronRight size={14}/>
         </button>
       </div>
     </div>
   );
 });
+
 PaginationBar.displayName = 'PaginationBar';
 
 export const SkeletonRow = React.memo(() => (

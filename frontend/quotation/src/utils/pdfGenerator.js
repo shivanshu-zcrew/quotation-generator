@@ -310,8 +310,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </div>
     ` : ''}
 
-    <!-- ✅ Terms Images Gallery -->
-    ${termsImagesHTML}
+ 
 
     <!-- Footer -->
     ${companyFooter}
