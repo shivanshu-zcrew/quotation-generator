@@ -1,3 +1,4 @@
+// screens/ItemsScreen.jsx
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   ArrowLeft, Search, RefreshCw, ChevronLeft, ChevronRight,
@@ -105,6 +106,46 @@ function FilterTabs({ active, onChange, counts }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// StatusFilterTabs Component
+// ─────────────────────────────────────────────────────────────────────────────
+function StatusFilterTabs({ active, onChange, counts }) {
+  const tabs = [
+    { key:'all',      label:'All',      count: counts.all },
+    { key:'active',   label:'Active',   count: counts.active },
+    { key:'inactive', label:'Inactive', count: counts.inactive },
+  ];
+  return (
+    <div style={{ display:'flex', gap:'0.25rem', background:'#f1f5f9', padding:'0.25rem', borderRadius:12 }}>
+      {tabs.map(tab => (
+        <button
+          key={tab.key}
+          onClick={() => onChange(tab.key)}
+          style={{
+            padding:'0.45rem 0.9rem', borderRadius:10,
+            background: active === tab.key ? 'white' : 'transparent',
+            border:'none', cursor:'pointer',
+            fontWeight: active === tab.key ? 700 : 500,
+            fontSize:'0.78rem',
+            color: active === tab.key ? PRIMARY : '#64748b',
+            boxShadow: active === tab.key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            transition:'all 0.15s',
+          }}
+        >
+          {tab.label}
+          <span style={{
+            marginLeft:6, padding:'1px 7px', borderRadius:20,
+            background: active === tab.key ? `${PRIMARY}15` : '#e2e8f0',
+            fontSize:'0.65rem', fontWeight:700, color: active === tab.key ? PRIMARY : '#64748b',
+          }}>
+            {tab.count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // PaginationControls Component
 // ─────────────────────────────────────────────────────────────────────────────
 function PaginationControls({ currentPage, totalPages, onPageChange, loading }) {
@@ -145,9 +186,16 @@ function PaginationControls({ currentPage, totalPages, onPageChange, loading }) 
 // ─────────────────────────────────────────────────────────────────────────────
 function ItemCard({ item }) {
   const sellable = item.can_be_sold !== false;
+  const isActive = item.isActive === true; // Explicit check for active status
+  
   return (
     <div
-      style={{ border:'1px solid #f1f5f9', borderRadius:20, overflow:'hidden', background:'white', transition:'all 0.25s ease', opacity: sellable ? 1 : 0.75 }}
+      style={{ 
+        border:'1px solid #f1f5f9', borderRadius:20, overflow:'hidden', 
+        background:'white', transition:'all 0.25s ease', 
+        opacity: sellable && isActive ? 1 : 0.7,
+        filter: isActive ? 'none' : 'grayscale(0.1)'
+      }}
       onMouseEnter={e => { e.currentTarget.style.transform='translateY(-3px)'; e.currentTarget.style.boxShadow='0 16px 24px -8px rgba(0,0,0,0.12)'; }}
       onMouseLeave={e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='none'; }}
     >
@@ -157,15 +205,25 @@ function ItemCard({ item }) {
             <Package size={20} color={PRIMARY}/>
           </div>
           <div style={{ display:'flex', gap:'0.4rem', flexWrap:'wrap', justifyContent:'flex-end' }}>
-            <span style={{ padding:'2px 8px', borderRadius:20, fontSize:'0.6rem', fontWeight:700, background: sellable ? '#d1fae5' : '#fef3c7', color: sellable ? '#065f46' : '#92400e' }}>
+            <span style={{ 
+              padding:'2px 8px', borderRadius:20, fontSize:'0.6rem', fontWeight:700, 
+              background: sellable ? '#d1fae5' : '#fef3c7', 
+              color: sellable ? '#065f46' : '#92400e' 
+            }}>
               {sellable ? 'Sellable' : 'Non-Sellable'}
             </span>
-            <span style={{ padding:'2px 8px', borderRadius:20, fontSize:'0.6rem', fontWeight:700, background: item.isActive !== false ? '#dbeafe' : '#fee2e2', color: item.isActive !== false ? '#1e40af' : '#991b1b' }}>
-              {item.status || 'active'}
+            <span style={{ 
+              padding:'2px 8px', borderRadius:20, fontSize:'0.6rem', fontWeight:700, 
+              background: isActive ? '#dbeafe' : '#fee2e2', 
+              color: isActive ? '#1e40af' : '#991b1b' 
+            }}>
+              {isActive ? (item.status || 'Active') : 'Inactive'}
             </span>
           </div>
         </div>
-        <h3 style={{ margin:'0.75rem 0 0.25rem', fontSize:'0.95rem', fontWeight:700, color:PRIMARY }}>{item.name || 'Unnamed'}</h3>
+        <h3 style={{ margin:'0.75rem 0 0.25rem', fontSize:'0.95rem', fontWeight:700, color:PRIMARY }}>
+          {item.name || 'Unnamed'}
+        </h3>
         {item.sku && (
           <p style={{ margin:'0 0 0.5rem', color:'#64748b', fontSize:'0.72rem', display:'flex', alignItems:'center', gap:4 }}>
             <Tag size={10}/> {item.sku}
@@ -177,7 +235,7 @@ function ItemCard({ item }) {
           </p>
         )}
         <p style={{ margin:'0.5rem 0 0', fontSize:'1.05rem', fontWeight:700, color:'#059669', display:'flex', alignItems:'center', gap:4 }}>
-           {fmtCurrency(item.price)}
+          {fmtCurrency(item.price)}
         </p>
       </div>
     </div>
@@ -194,7 +252,8 @@ export default function ItemsScreen({ onBack }) {
   const [error, setError] = useState(null);
   
   // UI State
-  const [filterType, setFilterType] = useState('all');
+  const [filterType, setFilterType] = useState('all'); // all, sellable, nonSellable
+  const [statusFilter, setStatusFilter] = useState('all'); // all, active, inactive
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('name');
   const [sortOrder, setSortOrder] = useState('asc');
@@ -214,7 +273,7 @@ export default function ItemsScreen({ onBack }) {
     setError(null);
     try {
       const params = {
-        limit: 10000, // Get ALL items
+        limit: 10000,
         page: 1,
       };
       if (selectedCompany) {
@@ -231,6 +290,12 @@ export default function ItemsScreen({ onBack }) {
       } else if (response.data.data && Array.isArray(response.data.data)) {
         itemsArray = response.data.data;
       }
+      
+      // Debug logging
+      console.log(`📊 Fetched ${itemsArray.length} items from API`);
+      const activeCount = itemsArray.filter(item => item.isActive === true).length;
+      const inactiveCount = itemsArray.filter(item => item.isActive !== true).length;
+      console.log(`   Active: ${activeCount}, Inactive: ${inactiveCount}`);
       
       setAllItems(itemsArray);
     } catch (err) {
@@ -249,7 +314,28 @@ export default function ItemsScreen({ onBack }) {
   // Reset to page 1 when filter or search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterType, searchQuery, sortBy, sortOrder]);
+  }, [filterType, statusFilter, searchQuery, sortBy, sortOrder]);
+  
+  // Calculate statistics from all items (not filtered)
+  const stats = useMemo(() => {
+    const sellable = allItems.filter(item => item.can_be_sold !== false);
+    const nonSellable = allItems.filter(item => item.can_be_sold === false);
+    const active = allItems.filter(item => item.isActive === true);
+    const inactive = allItems.filter(item => item.isActive !== true);
+    const prices = allItems.map(item => Number(item.price) || 0).filter(p => p > 0);
+    const avgPrice = prices.length > 0 
+      ? prices.reduce((a, b) => a + b, 0) / prices.length 
+      : 0;
+    
+    return {
+      total: allItems.length,
+      sellable: sellable.length,
+      nonSellable: nonSellable.length,
+      active: active.length,
+      inactive: inactive.length,
+      avgPrice: avgPrice,
+    };
+  }, [allItems]);
   
   // Filter and sort items
   const processedItems = useMemo(() => {
@@ -260,6 +346,13 @@ export default function ItemsScreen({ onBack }) {
       result = result.filter(item => item.can_be_sold !== false);
     } else if (filterType === 'nonSellable') {
       result = result.filter(item => item.can_be_sold === false);
+    }
+    
+    // Apply status filter (active/inactive)
+    if (statusFilter === 'active') {
+      result = result.filter(item => item.isActive === true);
+    } else if (statusFilter === 'inactive') {
+      result = result.filter(item => item.isActive !== true);
     }
     
     // Apply search filter
@@ -291,24 +384,7 @@ export default function ItemsScreen({ onBack }) {
     });
     
     return result;
-  }, [allItems, filterType, searchQuery, sortBy, sortOrder]);
-  
-  // Calculate statistics from filtered items
-  const stats = useMemo(() => {
-    const sellable = allItems.filter(item => item.can_be_sold !== false);
-    const nonSellable = allItems.filter(item => item.can_be_sold === false);
-    const prices = allItems.map(item => Number(item.price) || 0).filter(p => p > 0);
-    const avgPrice = prices.length > 0 
-      ? prices.reduce((a, b) => a + b, 0) / prices.length 
-      : 0;
-    
-    return {
-      total: allItems.length,
-      sellable: sellable.length,
-      nonSellable: nonSellable.length,
-      avgPrice: avgPrice,
-    };
-  }, [allItems]);
+  }, [allItems, filterType, statusFilter, searchQuery, sortBy, sortOrder]);
   
   // Pagination - calculate current page items
   const paginatedItems = useMemo(() => {
@@ -333,6 +409,11 @@ export default function ItemsScreen({ onBack }) {
   // Handle filter change
   const handleFilterChange = (newFilter) => {
     setFilterType(newFilter);
+  };
+  
+  // Handle status filter change
+  const handleStatusFilterChange = (newStatus) => {
+    setStatusFilter(newStatus);
   };
   
   // Handle sort change
@@ -389,7 +470,7 @@ export default function ItemsScreen({ onBack }) {
           setIsSyncing(false);
           setToast({ message: '❌ Sync timeout after 60 s', type: 'error' });
         }
-      }, 60_000);
+      }, 60000);
 
       pollHandle = setInterval(async () => {
         try {
@@ -490,7 +571,8 @@ export default function ItemsScreen({ onBack }) {
           <StatCard label="Total Items" value={stats.total.toLocaleString()} icon={Package} color="#6366f1" subtitle="All items in catalogue"/>
           <StatCard label="Sellable" value={stats.sellable.toLocaleString()} icon={Tag} color="#10b981" subtitle="Can be quoted & sold"/>
           <StatCard label="Non-Sellable" value={stats.nonSellable.toLocaleString()} icon={Package} color="#f59e0b" subtitle="Internal / purchase only"/>
-           
+          <StatCard label="Active" value={stats.active.toLocaleString()} icon={CheckCircle} color="#3b82f6" subtitle="Currently active items"/>
+          <StatCard label="Inactive" value={stats.inactive.toLocaleString()} icon={AlertCircle} color="#ef4444" subtitle="Inactive items"/>
         </div>
         
         {/* Main Panel */}
@@ -522,7 +604,7 @@ export default function ItemsScreen({ onBack }) {
                 ))}
               </div>
               
-              {/* Filter Tabs */}
+              {/* Sellable Filter Tabs */}
               <FilterTabs
                 active={filterType}
                 onChange={handleFilterChange}
@@ -533,13 +615,23 @@ export default function ItemsScreen({ onBack }) {
                 }}
               />
               
+              {/* Status Filter Tabs */}
+              <StatusFilterTabs
+                active={statusFilter}
+                onChange={handleStatusFilterChange}
+                counts={{ 
+                  all: stats.total, 
+                  active: stats.active, 
+                  inactive: stats.inactive 
+                }}
+              />
+              
               {/* Sort */}
               <select value={sortBy} onChange={e => handleSortChange(e.target.value)}
                 style={{ padding:'0.6rem 0.9rem', border:'1.5px solid #e2e8f0', borderRadius:14, fontSize:'0.78rem', background:'white', cursor:'pointer', outline:'none' }}>
                 <option value="name">Sort: Name</option>
                 <option value="price">Sort: Price</option>
                 <option value="sku">Sort: SKU</option>
-                <option value="status">Sort: Status</option>
               </select>
               
               {/* Items Per Page */}
@@ -569,12 +661,12 @@ export default function ItemsScreen({ onBack }) {
               <Package size={64} style={{ color:'#cbd5e1', margin:'0 auto 1rem', display:'block' }}/>
               <p style={{ color:'#64748b', fontWeight:500, marginBottom:'1rem' }}>
                 {searchQuery
-                  ? `No items match "${searchQuery}"${filterType !== 'all' ? ` with ${filterType} filter` : ''}`
-                  : filterType === 'all' ? 'No items found in catalogue'
-                  : filterType === 'sellable' ? 'No sellable items found'
-                  : 'No non-sellable items found'}
+                  ? `No items match "${searchQuery}"`
+                  : filterType !== 'all' || statusFilter !== 'all'
+                    ? `No items match the selected filters`
+                    : 'No items found in catalogue'}
               </p>
-              {!searchQuery && filterType === 'all' && (
+              {!searchQuery && filterType === 'all' && statusFilter === 'all' && (
                 <button onClick={handleSync} disabled={isSyncing}
                   style={{ padding:'0.75rem 1.5rem', background:`linear-gradient(135deg,${PRIMARY},#1e293b)`, color:'white', border:'none', borderRadius:14, cursor:'pointer', display:'inline-flex', alignItems:'center', gap:'0.5rem', fontWeight:600 }}>
                   <RefreshCw size={15}/> {isSyncing ? 'Syncing…' : 'Sync from Zoho'}
@@ -596,39 +688,56 @@ export default function ItemsScreen({ onBack }) {
                     <th style={{ padding:'0.875rem 1rem', textAlign:'left', color:'#64748b', fontSize:'0.72rem', fontWeight:700 }}>Price</th>
                     <th style={{ padding:'0.875rem 1rem', textAlign:'left', color:'#64748b', fontSize:'0.72rem', fontWeight:700 }}>Status</th>
                     <th style={{ padding:'0.875rem 1rem', textAlign:'left', color:'#64748b', fontSize:'0.72rem', fontWeight:700 }}>Sellable</th>
-                  </tr>
+                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedItems.map(item => (
-                    <tr key={item._id}
-                      style={{ borderBottom:'1px solid #f1f5f9', opacity: item.can_be_sold !== false ? 1 : 0.7 }}
-                      onMouseEnter={e => e.currentTarget.style.background='#f8fafc'}
-                      onMouseLeave={e => e.currentTarget.style.background='transparent'}
-                    >
-                      <td style={{ padding:'0.875rem 1rem' }}>
-                        <div style={{ fontWeight:700, color:PRIMARY, fontSize:'0.875rem' }}>{item.name}</div>
-                        {item.description && (
-                          <div style={{ fontSize:'0.7rem', color:'#94a3b8', marginTop:2 }}>
-                            {item.description.length > 70 ? item.description.slice(0,70)+'…' : item.description}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding:'0.875rem 1rem', color:'#64748b', fontSize:'0.82rem' }}>{item.sku || '—'}</td>
-                      <td style={{ padding:'0.875rem 1rem', color:'#059669', fontWeight:700, fontSize:'0.82rem', whiteSpace:'nowrap' }}>
-                        {fmtCurrency(item.price)}
-                      </td>
-                      <td style={{ padding:'0.875rem 1rem' }}>
-                        <span style={{ padding:'2px 10px', borderRadius:20, fontSize:'0.68rem', fontWeight:700, background: item.isActive !== false ? '#d1fae5' : '#fee2e2', color: item.isActive !== false ? '#065f46' : '#991b1b' }}>
-                          {item.status || 'active'}
-                        </span>
-                      </td>
-                      <td style={{ padding:'0.875rem 1rem' }}>
-                        <span style={{ padding:'2px 10px', borderRadius:20, fontSize:'0.68rem', fontWeight:700, background: item.can_be_sold !== false ? '#d1fae5' : '#fef3c7', color: item.can_be_sold !== false ? '#065f46' : '#92400e' }}>
-                          {item.can_be_sold !== false ? 'Yes' : 'No'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {paginatedItems.map(item => {
+                    const isActive = item.isActive === true;
+                    const sellable = item.can_be_sold !== false;
+                    
+                    return (
+                      <tr key={item._id}
+                        style={{ 
+                          borderBottom:'1px solid #f1f5f9', 
+                          opacity: sellable && isActive ? 1 : 0.6,
+                          background: isActive ? 'transparent' : '#fef2f2'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background='#f8fafc'}
+                        onMouseLeave={e => e.currentTarget.style.background= isActive ? 'transparent' : '#fef2f2'}
+                      >
+                        <td style={{ padding:'0.875rem 1rem' }}>
+                          <div style={{ fontWeight:700, color:PRIMARY, fontSize:'0.875rem' }}>{item.name}</div>
+                          {item.description && (
+                            <div style={{ fontSize:'0.7rem', color:'#94a3b8', marginTop:2 }}>
+                              {item.description.length > 70 ? item.description.slice(0,70)+'…' : item.description}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding:'0.875rem 1rem', color:'#64748b', fontSize:'0.82rem' }}>{item.sku || '—'}</td>
+                        <td style={{ padding:'0.875rem 1rem', color:'#059669', fontWeight:700, fontSize:'0.82rem', whiteSpace:'nowrap' }}>
+                          {fmtCurrency(item.price)}
+                        </td>
+                        <td style={{ padding:'0.875rem 1rem' }}>
+                          <span style={{ 
+                            padding:'2px 10px', borderRadius:20, fontSize:'0.68rem', fontWeight:700, 
+                            background: isActive ? '#d1fae5' : '#fee2e2', 
+                            color: isActive ? '#065f46' : '#991b1b' 
+                          }}>
+                            {isActive ? (item.status || 'Active') : 'Inactive'}
+                          </span>
+                        </td>
+                        <td style={{ padding:'0.875rem 1rem' }}>
+                          <span style={{ 
+                            padding:'2px 10px', borderRadius:20, fontSize:'0.68rem', fontWeight:700, 
+                            background: sellable ? '#d1fae5' : '#fef3c7', 
+                            color: sellable ? '#065f46' : '#92400e' 
+                          }}>
+                            {sellable ? 'Yes' : 'No'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -642,6 +751,11 @@ export default function ItemsScreen({ onBack }) {
                 {filterType !== 'all' && (
                   <span style={{ color:'#6366f1', marginLeft:4 }}>
                     (filtered: {filterType})
+                  </span>
+                )}
+                {statusFilter !== 'all' && (
+                  <span style={{ color:'#6366f1', marginLeft:4 }}>
+                    (status: {statusFilter})
                   </span>
                 )}
                 {searchQuery && (

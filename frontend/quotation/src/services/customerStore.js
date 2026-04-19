@@ -86,59 +86,71 @@ const useCustomerStore = create((set, get) => ({
   },
 
   // Search customers
-  searchCustomers: async (searchTerm, companyId) => {
-    const trimmed = searchTerm?.trim();
-    
-    if (get()._searchTimeout) {
-      clearTimeout(get()._searchTimeout);
-      get()._searchTimeout = null;
-    }
+ searchCustomers: async (searchTerm, companyId) => {
+  const trimmed = searchTerm?.trim();
+  
+  if (get()._searchTimeout) {
+    clearTimeout(get()._searchTimeout);
+    get()._searchTimeout = null;
+  }
 
-    if (!trimmed) {
-      set({
-        isSearching: false,
-        searchResults: [],
-        searchQuery: '',
-        isLoading: false,
-        error: null,
-      });
-      return { success: true, customers: get().customers };
-    }
-
-    if (trimmed.length < 2) {
-      set({
-        isSearching: false,
-        searchResults: [],
-        searchQuery: trimmed,
-        isLoading: false,
-        error: 'Type at least 2 characters',
-      });
-      return { success: false, error: 'Search term too short' };
-    }
-
+  if (!trimmed) {
     set({
-      isSearching: true,
-      searchQuery: trimmed,
-      isLoading: true,
+      isSearching: false,
+      searchResults: [],
+      searchQuery: '',
+      isLoading: false,
       error: null,
     });
+    return { success: true, customers: [] };  // ✅ Return consistent structure
+  }
 
+  if (trimmed.length < 2) {
+    set({
+      isSearching: false,
+      searchResults: [],
+      searchQuery: trimmed,
+      isLoading: false,
+      error: 'Type at least 2 characters',
+    });
+    return { success: false, error: 'Type at least 2 characters', customers: [] };  // ✅ Return consistent structure
+  }
+
+  set({
+    isSearching: true,
+    searchQuery: trimmed,
+    isLoading: true,
+    error: null,
+  });
+
+  return new Promise((resolve) => {
     const timeout = setTimeout(async () => {
       const requestId = ++searchRequestId;
       const currentQuery = get().searchQuery;
       
       if (currentQuery !== trimmed) {
         set({ isLoading: false, isSearching: false });
+        resolve({ success: false, customers: [] });  // ✅ Resolve with consistent structure
         return;
       }
 
       try {
         const { customers } = get();
-        const localResults = customers.filter(c =>
+        
+        // Filter local results by companyId if provided
+        let localResults = customers.filter(c =>
           c.name?.toLowerCase().includes(trimmed.toLowerCase()) ||
           c.email?.toLowerCase().includes(trimmed.toLowerCase()) ||
           c.phone?.includes(trimmed)
         );
+        
+        // Filter by company if companyId is provided
+        if (companyId) {
+          localResults = localResults.filter(c => 
+            c.companyId === companyId || 
+            c.companyId?._id === companyId
+          );
+        }
 
         if (localResults.length > 0) {
           set({
@@ -146,9 +158,11 @@ const useCustomerStore = create((set, get) => ({
             isLoading: false,
             isSearching: false,
           });
+          resolve({ success: true, customers: localResults });  // ✅ Resolve with consistent structure
           return;
         }
 
+        // Pass companyId to API search
         const response = await customerAPI.getAll({
           search: trimmed,
           limit: 100,
@@ -157,6 +171,7 @@ const useCustomerStore = create((set, get) => ({
 
         if (requestId !== searchRequestId || get().searchQuery !== trimmed) {
           set({ isLoading: false, isSearching: false });
+          resolve({ success: false, customers: [] });  // ✅ Resolve with consistent structure
           return;
         }
 
@@ -168,9 +183,12 @@ const useCustomerStore = create((set, get) => ({
           isLoading: false,
           isSearching: false,
         });
+        
+        resolve({ success: true, customers: results });  // ✅ Resolve with consistent structure
 
       } catch (error) {
         if (requestId !== searchRequestId || get().searchQuery !== trimmed) {
+          resolve({ success: false, customers: [] });
           return;
         }
         
@@ -180,11 +198,14 @@ const useCustomerStore = create((set, get) => ({
           error: error.message,
           searchResults: [],
         });
+        
+        resolve({ success: false, error: error.message, customers: [] });  // ✅ Resolve with consistent structure
       }
     }, DEBOUNCE_DELAY);
 
     get()._searchTimeout = timeout;
-  },
+  });
+},
   
   // Clear search
   clearSearch: () => {

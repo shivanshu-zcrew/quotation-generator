@@ -855,6 +855,7 @@ exports.syncFromZoho = async (req, res) => {
     // Pass company object and incremental flag to zohoBooksService
     const result = await zohoBooksService.syncContactsToDatabase(company, !fullSync);
 
+    console.log(">>>>>>>>>", result);
     if (result.success) {
       const redisService = require('../config/redisService');
       // Clear all customer-related caches for this company
@@ -941,10 +942,10 @@ exports.getCustomerStats = async (req, res) => {
       
       stats.totalCustomers = await Customer.countDocuments({ companyId }).catch(() => 0);
       stats.activeCustomers = await Customer.countDocuments({ companyId, isActive: true }).catch(() => 0);
-      stats.vatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'vat_registered', isActive: true }).catch(() => 0);
-      stats.nonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'non_vat_registered', isActive: true }).catch(() => 0);
-      stats.gccVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_vat_registered', isActive: true }).catch(() => 0);
-      stats.gccNonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_non_vat_registered', isActive: true }).catch(() => 0);
+      stats.vatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'vat_registered' }).catch(() => 0);
+      stats.nonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'non_vat_registered' }).catch(() => 0);
+      stats.gccVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_vat_registered' }).catch(() => 0);
+      stats.gccNonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_non_vat_registered' }).catch(() => 0);
       stats.synced = await Customer.countDocuments({ companyId, zohoSynced: true }).catch(() => 0);
       stats.unsynced = await Customer.countDocuments({ companyId, zohoSynced: { $ne: true }, isActive: true }).catch(() => 0);
       stats.syncErrors = await Customer.countDocuments({ companyId, zohoSyncError: { $exists: true } }).catch(() => 0);

@@ -154,7 +154,7 @@ exports.getAllItems = async (req, res) => {
     
     res.setHeader('X-Data-Source', result.source);
     res.setHeader('X-Cache-Hit', result.source === 'mongodb_cache' ? 'true' : 'false');
-    
+    console.log(">>>>>>>>>>", result.data.length);
     res.json({
       success: true,
       data: result.data,

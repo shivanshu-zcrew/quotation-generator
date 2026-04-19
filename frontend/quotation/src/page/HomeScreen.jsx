@@ -61,6 +61,7 @@ import {
   isExpiringSoon,
 } from "../utils/formatters";
 import { downloadQuotationPDF } from "../utils/pdfGenerator";
+import { htmlToSections, sectionsToHTML } from "../components/TermsCondition";
 
 const useMediaQuery = (query) => {
   const [matches, setMatches] = useState(() => {
@@ -316,7 +317,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       const result = await updateQueryDate(id, date);
       if (result?.success) {
         addToast("Follow-up date updated successfully", "success");
-       await refreshCompanyQuotations();
+        await refreshCompanyQuotations();
       } else {
         addToast(result?.error || "Failed to update follow-up date", "error");
       }
@@ -335,21 +336,64 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     }
   }, [fetchAllData, refreshCompanyData, addToast]);
 
+  const buildQuotationForPDF = useCallback(async (quotation) => {
+    if (
+      quotation.termsAndConditions &&
+      quotation.termsAndConditions.includes("<img")
+    ) {
+      return quotation;
+    }
+
+    const cloudinaryImages = quotation.termsImages || [];
+
+    const sections = htmlToSections(
+      quotation.termsAndConditions || "",
+      cloudinaryImages
+    );
+
+    const termsHTMLWithImages = sectionsToHTML(sections);
+
+    return {
+      ...quotation,
+      termsAndConditions: termsHTMLWithImages,
+    };
+  }, []);
+
   const handleDownload = useCallback(
     async (q) => {
       setExportingId(q._id);
       try {
-        await downloadQuotationPDF(q);
+        const storeQuotations = useAppStore.getState().quotations;
+        let completeQuotation = storeQuotations.find(
+          (quot) => quot._id === q._id
+        );
+
+        if (!completeQuotation) {
+          completeQuotation = q;
+        }
+
+        const pdfQuotation = await buildQuotationForPDF(completeQuotation);
+
+        console.log(
+          "PDF Quotation termsImages count:",
+          pdfQuotation.termsImages?.length
+        );
+        console.log(
+          "PDF Quotation termsAndConditions includes img:",
+          pdfQuotation.termsAndConditions?.includes("<img")
+        );
+
+        await downloadQuotationPDF(pdfQuotation);
         addToast("PDF generated successfully!", "success");
       } catch (err) {
+        console.error("PDF generation error:", err);
         addToast(`PDF failed: ${err.message}`, "error");
       } finally {
         setExportingId(null);
       }
     },
-    [addToast]
+    [addToast, buildQuotationForPDF]
   );
-
   const confirmDelete = useCallback(async () => {
     const { quotation } = deleteModal;
     if (!quotation) return;
@@ -361,7 +405,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       setPage((p) =>
         Math.max(1, Math.min(p, Math.ceil((totalFiltered - 1) / limit)))
       );
-     await refreshCompanyQuotations();
+      await refreshCompanyQuotations();
     } else {
       addToast(result?.error || "Delete failed", "error");
       setDeleteModal((m) => ({ ...m, busy: false }));
@@ -379,30 +423,30 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     async (awarded, awardNote) => {
       const { quotation } = awardModal;
       if (!quotation || awarded === null) return;
-       
-      
+
       setAwardModal((m) => ({ ...m, busy: true }));
       const result = await awardQuotation(quotation._id, awarded, awardNote);
-       
+
       if (result?.success) {
-       
         addToast(
           awarded
             ? `🏆 "${quotation.quotationNumber}" marked as Awarded!`
             : `"${quotation.quotationNumber}" marked as Not Awarded.`,
           "success"
         );
-        
-         const currentStoreQuotations = useAppStore.getState().quotations;
-        const updatedQuot = currentStoreQuotations.find(q => q._id === quotation._id);
-   
-        
+
+        const currentStoreQuotations = useAppStore.getState().quotations;
+        const updatedQuot = currentStoreQuotations.find(
+          (q) => q._id === quotation._id
+        );
+
         await refreshCompanyQuotations();
-        
-         const refreshedStoreQuotations = useAppStore.getState().quotations;
-        const refreshedQuot = refreshedStoreQuotations.find(q => q._id === quotation._id);
-       
-        
+
+        const refreshedStoreQuotations = useAppStore.getState().quotations;
+        const refreshedQuot = refreshedStoreQuotations.find(
+          (q) => q._id === quotation._id
+        );
+
         setAwardModal({ open: false, quotation: null, busy: false });
       } else {
         addToast(result?.error || "Failed to update", "error");
@@ -455,7 +499,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
         whiteSpace: "nowrap",
       }}
     >
-      {/* {isMobile && primary ? '+' : label} */}
       {!isMobile && label}
     </button>
   ));

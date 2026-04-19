@@ -177,6 +177,7 @@ exports.opsApproveQuotation = async (req, res) => {
     const sanitized = sanitizeQuotation(updated);
 
     res.json({
+      success: true,
       message: 'Quotation approved by operations manager — now awaiting admin approval',
       quotation: sanitized,
     });
@@ -215,7 +216,8 @@ exports.opsRejectQuotation = async (req, res) => {
     const sanitized = sanitizeQuotation(updated);
 
     res.json({
-      message: 'Quotation rejected by operations manager — sent back to creator',
+      success: true,
+      message: 'Quotation rejected by operations manager',
       quotation: sanitized,
     });
   } catch (error) {
@@ -288,6 +290,7 @@ exports.approveQuotation = async (req, res) => {
     const sanitized = sanitizeQuotation(updated);
 
     res.json({
+      success: true,
       message: 'Quotation approved — ready to be sent to client',
       quotation: sanitized,
     });
@@ -326,6 +329,7 @@ exports.rejectQuotation = async (req, res) => {
     const sanitized = sanitizeQuotation(updated);
 
     res.json({
+      success: true,
       message: 'Quotation rejected',
       quotation: sanitized,
     });

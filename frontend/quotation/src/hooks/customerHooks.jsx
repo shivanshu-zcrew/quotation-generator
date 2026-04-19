@@ -1,5 +1,5 @@
 // hooks/customHooks.js (Fixed with companyId support)
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../services/store';
 import { customerAPI } from '../services/api';
 import useCustomerStore from '../services/customerStore';
@@ -67,6 +67,9 @@ export const usePaginatedCustomers = (initialPage = 1, companyId = null) => {
     page: initialPage, limit: 50, search: '', sortBy: 'createdAt', sortOrder: 'desc',
     taxTreatment: '', placeOfSupply: '',
   });
+  
+  // Track previous companyId to detect changes
+  const prevCompanyIdRef = useRef(companyId);
 
   const fetchCustomers = useCallback(async () => {
     setCustomersData(prev => ({ ...prev, loading: true, error: null }));
@@ -110,10 +113,21 @@ export const usePaginatedCustomers = (initialPage = 1, companyId = null) => {
     }
   }, [filters, companyId]);
 
-  // Refetch when companyId changes
+  // Refetch when companyId changes - reset to page 1
   useEffect(() => {
-    fetchCustomers();
-  }, [fetchCustomers, companyId]);
+    if (prevCompanyIdRef.current !== companyId) {
+      console.log(`🔄 Company changed from ${prevCompanyIdRef.current} to ${companyId}, resetting to page 1`);
+      prevCompanyIdRef.current = companyId;
+      // Reset to page 1 when company changes
+      if (filters.page !== 1) {
+        setFilters(prev => ({ ...prev, page: 1 }));
+      } else {
+        fetchCustomers();
+      }
+    } else {
+      fetchCustomers();
+    }
+  }, [fetchCustomers, companyId, filters.page]);
 
   const setTaxTreatmentFilter = useCallback((taxTreatment) => setFilters(prev => ({ ...prev, taxTreatment, page: 1 })), []);
   const setPlaceOfSupplyFilter = useCallback((placeOfSupply) => setFilters(prev => ({ ...prev, placeOfSupply, page: 1 })), []);
@@ -144,12 +158,13 @@ export const usePaginatedCustomers = (initialPage = 1, companyId = null) => {
   };
 };
 
-// FIXED: useCustomerSearch with companyId support
+ 
 export const useCustomerSearch = () => {
   const [localResults, setLocalResults] = useState({ 
     customers: [], total: 0, loading: false, error: null, hasMore: false 
   });
   const [query, setQuery] = useState('');
+  const [currentCompanyId, setCurrentCompanyId] = useState(null);
   
   const { 
     searchCustomers, 
@@ -168,20 +183,35 @@ export const useCustomerSearch = () => {
     
     console.log(`🔍 Searching customers: "${searchQuery}" for company:`, companyId);
     
-    // Pass companyId to searchCustomers
-    const result = await searchCustomers(searchQuery, companyId);
-    
-    if (result.success) {
-      const results = result.customers || [];
-      setLocalResults({
-        customers: results.slice(0, limit),
-        total: results.length,
-        loading: false,
-        error: null,
-        hasMore: results.length > limit
-      });
-    } else {
-      setLocalResults(prev => ({ ...prev, loading: false, error: result.error }));
+    try {
+      // Pass companyId to searchCustomers
+      const result = await searchCustomers(searchQuery, companyId);
+      
+      // ✅ Check if result exists and has success property
+      if (result && result.success) {
+        const results = result.customers || [];
+        setLocalResults({
+          customers: results.slice(0, limit),
+          total: results.length,
+          loading: false,
+          error: null,
+          hasMore: results.length > limit
+        });
+        setCurrentCompanyId(companyId);
+      } else {
+        setLocalResults(prev => ({ 
+          ...prev, 
+          loading: false, 
+          error: result?.error || 'Search failed' 
+        }));
+      }
+    } catch (error) {
+      console.error('Search error:', error);
+      setLocalResults(prev => ({ 
+        ...prev, 
+        loading: false, 
+        error: error.message || 'Search failed' 
+      }));
     }
   }, [searchCustomers, clearSearch]);
 
@@ -194,6 +224,7 @@ export const useCustomerSearch = () => {
     setQuery(''); 
     clearSearch();
     setLocalResults({ customers: [], total: 0, loading: false, error: null, hasMore: false });
+    setCurrentCompanyId(null);
   }, [clearSearch]);
 
   return { 
@@ -204,21 +235,30 @@ export const useCustomerSearch = () => {
     hasMore: localResults.hasMore, 
     query, 
     search: handleSearch, 
-    clearSearch: clearSearchLocal 
+    clearSearch: clearSearchLocal,
+    currentCompanyId,
   };
 };
 
 // FIXED: useCustomerStats with companyId support
 export const useCustomerStats = (companyId = null) => {
   const [stats, setStats] = useState({ data: null, loading: false, error: null });
+  const prevCompanyIdRef = useRef(companyId);
   
   const fetchStats = useCallback(async () => {
+    if (!companyId) {
+      console.log('⚠️ No companyId provided, skipping stats fetch');
+      return;
+    }
+    
     setStats(prev => ({ ...prev, loading: true, error: null }));
     try {
       const params = {};
       if (companyId) {
         params.companyId = companyId;
       }
+      
+      console.log(`📊 Fetching customer stats for company:`, companyId);
       
       const response = await customerAPI.getStats(params);
       if (response.data.success) {
@@ -237,13 +277,22 @@ export const useCustomerStats = (companyId = null) => {
         throw new Error(response.data.message || 'Failed to fetch stats');
       }
     } catch (error) {
+      console.error('Error fetching stats:', error);
       setStats({ data: null, loading: false, error: error.message });
     }
   }, [companyId]);
   
+  // Refetch when companyId changes
   useEffect(() => { 
     if (companyId) {
+      if (prevCompanyIdRef.current !== companyId) {
+        console.log(`🔄 Stats: Company changed from ${prevCompanyIdRef.current} to ${companyId}`);
+        prevCompanyIdRef.current = companyId;
+      }
       fetchStats(); 
+    } else {
+      console.log('⚠️ No companyId for stats, setting empty data');
+      setStats({ data: { totalCustomers: 0, activeCustomers: 0, vatRegistered: 0, nonVatRegistered: 0, byPlaceOfSupply: {} }, loading: false, error: null });
     }
   }, [fetchStats, companyId]);
   

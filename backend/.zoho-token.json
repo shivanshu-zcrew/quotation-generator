@@ -1,5 +1,12 @@
 {
-  "accessToken": "1000.672cc8545f97a6a45e45881972b3a8b4.ba457c91172df6728b8e0906a47d6374",
-  "tokenExpiry": 1775637249058,
-  "updatedAt": 1775633649058
+  "accessToken": "1000.94d0256e8c010d9696645a5ce27bd4e7.6e156ec10526e851bd22fb9c94b2b09d",
+  "tokenExpiry": 1776620067432,
+  "updatedAt": 1776616467433
 }
+
+
+"termsAndConditions": "<div style=\"margin-bottom:12px;\"><div style=\"display:flex;align-items:baseline;gap:6px;margin-bottom:5px;\"><span style=\"font-weight:700;color:#6366f1;font-size:11px;min-width:18px;\">1.</span><span style=\"font-weight:700;font-size:11px;color:#0f172a;\">re</span></div></div>",
+termsAndConditions: "<div style=\"margin-bottom:12px;\"><div style=\"display:flex;align-items:baseline;gap:6px;margin-bottom:5px;\"><span style=\"font-weight:700;color:#6366f1;font-size:11px;min-width:18px;\">1.</span><span style=\"font-weight:700;font-size:11px;color:#0f172a;\">re</span></div></div>"
+termsAndConditions
+: 
+"<div style=\"margin-bottom:12px;\"><div style=\"display:flex;align-items:baseline;gap:6px;margin-bottom:5px;\"><span style=\"font-weight:700;color:#6366f1;font-size:11px;min-width:18px;\">1.</span><span style=\"font-weight:700;font-size:11px;color:#0f172a;\">re</span></div><div style=\"display:flex;align-items:flex-start;gap:6px;margin-bottom:3px;padding-left:18px;\"><span style=\"font-weight:600;color:#6366f1;font-size:10px;min-width:28px;flex-shrink:0;\">1.1</span><span style=\"font-size:10px;color:#374151;line-height:1.5;\">reer</span></div></div>"

@@ -295,24 +295,54 @@ class ZohoBooksService {
 
   async getAllCustomersPaginated(companyId, lastSyncDate = null) {
     const allCustomers = [];
+    const uniqueCustomers = new Map(); // Track by contact_id
     let page = 1;
     const perPage = 200;
     let hasMorePages = true;
-    while (hasMorePages) {
+    
+    console.log(`\n🔍 Starting customer fetch for company ${companyId}`);
+    
+    while (hasMorePages && page <= 50) {
       try {
         let url = `/contacts?page=${page}&per_page=${perPage}&filter_by=Status.All`;
-        if (lastSyncDate) {
-          url += `&filter_by=Date.Modified.After.${lastSyncDate}`;
-          console.log(`📅 Fetching contacts modified after: ${lastSyncDate}`);
-        }
+        
+        console.log(`📡 Fetching page ${page}...`);
         const result = await this._request('GET', url);
+        
         if (result.success && result.data?.contacts) {
           const contacts = result.data.contacts;
-          const customers = contacts.filter(contact => contact.contact_type === 'customer');
-          allCustomers.push(...customers);
           const pageContext = result.data.page_context || {};
+          
+          // Filter customers
+          const customers = contacts.filter(contact => contact.contact_type === 'customer');
+          
+          console.log(`📥 Page ${page}: ${contacts.length} total contacts, ${customers.length} customers`);
+          
+          // Check for duplicates within this page
+          const pageContactIds = new Set();
+          for (const customer of customers) {
+            if (pageContactIds.has(customer.contact_id)) {
+              console.log(`⚠️ Duplicate found within same page: ${customer.contact_id} - ${customer.contact_name}`);
+            }
+            pageContactIds.add(customer.contact_id);
+            
+            // Check against previously fetched customers
+            if (uniqueCustomers.has(customer.contact_id)) {
+              const existing = uniqueCustomers.get(customer.contact_id);
+              console.log(`⚠️ DUPLICATE DETECTED: ${customer.contact_id} - ${customer.contact_name}`);
+              console.log(`   First seen on page: ${existing.page}`);
+              console.log(`   Duplicate on page: ${page}`);
+            } else {
+              uniqueCustomers.set(customer.contact_id, {
+                customer,
+                page
+              });
+            }
+          }
+          
+          allCustomers.push(...customers);
+          
           hasMorePages = pageContext.has_more_page === true;
-          console.log(`📥 Page ${page}: ${customers.length} customers (Total: ${allCustomers.length})`);
           if (hasMorePages) {
             page++;
             await new Promise(resolve => setTimeout(resolve, 400));
@@ -325,9 +355,34 @@ class ZohoBooksService {
         hasMorePages = false;
       }
     }
-    console.log(`📊 Total customers fetched for company ${companyId}: ${allCustomers.length}`);
-    return { success: true, customers: allCustomers };
-  }
+    
+    console.log(`\n📊 FINAL RESULT for company ${companyId}:`);
+    console.log(`   Total customers fetched (including duplicates): ${allCustomers.length}`);
+    console.log(`   Unique customers: ${uniqueCustomers.size}`);
+    
+    // Log duplicate details if any
+    if (allCustomers.length > uniqueCustomers.size) {
+      console.log(`\n⚠️ DUPLICATES FOUND: ${allCustomers.length - uniqueCustomers.size} duplicate(s)`);
+      
+      // Find and log duplicates
+      const seen = new Map();
+      for (const customer of allCustomers) {
+        if (seen.has(customer.contact_id)) {
+          console.log(`   Duplicate: ${customer.contact_id} - ${customer.contact_name}`);
+        } else {
+          seen.set(customer.contact_id, true);
+        }
+      }
+    }
+    
+    // Return unique customers only
+    return { 
+      success: true, 
+      customers: Array.from(uniqueCustomers.values()).map(item => item.customer),
+      totalUnique: uniqueCustomers.size,
+      totalWithDuplicates: allCustomers.length
+    };
+}
 
   async syncContactsToDatabase(company, incremental = true) {
     try {

@@ -193,7 +193,7 @@ const CustomerSelector = ({ value, onChange, placeholder = "Search or select a c
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{selectedCustomer.name}</div>
-              {selectedCustomer.email && <div style={{ fontSize: '0.7rem', color: '#64748b' }}><Mail size={11} /> {selectedCustomer.email}</div>}
+              {/* {selectedCustomer.email && <div style={{ fontSize: '0.7rem', color: '#64748b' }}><Mail size={11} /> {selectedCustomer.email}</div>} */}
             </div>
             <button onClick={(e) => { e.stopPropagation(); handleClear(); }} style={{ padding: 4, borderRadius: 6, background: '#fee2e2', border: 'none', cursor: 'pointer' }}>
               <X size={14} color="#dc2626" />

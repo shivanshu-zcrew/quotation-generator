@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useCustomers, usePaginatedCustomers, useCustomerSearch, useCustomerStats, useZohoSync } from '../hooks/customerHooks';
 import { customerAPI } from '../services/api';
+import { useCompanyCurrency } from '../components/CompanyCurrencySelector';
 
 const PRIMARY_COLOR = '#0f172a';
 
@@ -339,12 +340,15 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
 };
 
 // Main CustomersScreen Component
-export default function CustomersScreen({ onBack }) {
+export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   // Use the updated hooks from customHooks.js
-  const pagination = usePaginatedCustomers(1);
-  const search = useCustomerSearch();
-  const stats = useCustomerStats();
-  const { syncCustomers, syncing: isSyncing, error: syncError, getSyncStatus } = useZohoSync();
+  const { selectedCompany: contextCompanyId } = useCompanyCurrency();
+  const effectiveCompanyId = propCompanyId || contextCompanyId;
+
+  const pagination = usePaginatedCustomers(1, effectiveCompanyId);
+  const stats = useCustomerStats(effectiveCompanyId);
+    const search = useCustomerSearch();
+   const { syncCustomers, syncing: isSyncing, error: syncError, getSyncStatus } = useZohoSync();
   
   const [mode, setMode] = useState('browse');
   const [toast, setToast] = useState(null);
@@ -366,15 +370,15 @@ export default function CustomersScreen({ onBack }) {
     return { page: currentPagination.page || 1, totalPages: currentPagination.totalPages || 1, totalItems: currentPagination.totalItems || 0 };
   }, [currentPagination]);
 
-  const handleSearch = useCallback((value) => { 
-    if (!value?.trim()) { 
-      search.clearSearch(); 
-      setMode('browse'); 
-    } else { 
-      search.search(value); 
-      setMode('search'); 
-    } 
-  }, [search]);
+const handleSearch = useCallback((value) => { 
+  if (!value?.trim()) { 
+    search.clearSearch(); 
+    setMode('browse'); 
+  } else { 
+    search.search(value, effectiveCompanyId);  
+    setMode('search'); 
+  } 
+}, [search, effectiveCompanyId]);
   
   const handlePageChange = useCallback((newPage) => { 
     if (newPage >= 1 && newPage <= safePageInfo.totalPages) pagination.setPage(newPage); 
@@ -441,7 +445,7 @@ export default function CustomersScreen({ onBack }) {
     });
     
     try {
-      const result = await syncCustomers(fullSync);
+      const result = await syncCustomers(fullSync, effectiveCompanyId);
       
       if (result.success) {
         const statsData = result.stats || {};
@@ -481,7 +485,7 @@ export default function CustomersScreen({ onBack }) {
       setSyncType(null);
       setShowSyncOptions(false);
     }
-  }, [syncCustomers, pagination, stats]);
+  },  [syncCustomers, pagination, stats, effectiveCompanyId]);  
 
   const handleGetSyncStatus = useCallback(async () => {
     try {

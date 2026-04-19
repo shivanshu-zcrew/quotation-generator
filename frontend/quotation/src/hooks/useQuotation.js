@@ -646,7 +646,7 @@ export function useQuotation() {
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes,
-        termsAndConditions: sectionsToHTML(tcSections), // This includes images
+        termsAndConditions: sectionsToHTML(tcSections),  
         items: quotationItems.map(item => ({
           ...item,
           imagePaths: [...(item.imagePaths || []), ...(newImages[item.id] || [])]

@@ -6,6 +6,7 @@ import Snackbar from '../components/Snackbar';
 import { btnStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
+import { useAppStore } from '../services/store';
 
 export default function ViewQuotationScreen() {
   const {
@@ -17,10 +18,33 @@ export default function ViewQuotationScreen() {
     removeNewImage, removeExistingImage, handleDocumentUpload, handleDocumentDelete, handleDocumentDownload,
     cancelEdit, handleSave, handleDelete, handleBack, generatePDF,
     termsImages, handleTermsImagesUpload, removeTermsImage,
-    customerTaxTreatment,  // ← ADD THIS
-    customerPlaceOfSupply  // ← ADD THIS
+    customerTaxTreatment, 
+    customerPlaceOfSupply   
   } = useQuotation();
 
+  // Get current user role
+  const user = useAppStore(state => state.user);
+  const userRole = user?.role;
+  
+  // Check if edit button should be shown
+  const canEdit = () => {
+    // Don't show edit button if already editing
+    if (isEditing) return false;
+    
+    // Check if quotation is approved (status 'approved' or 'awarded')
+    const isApproved = originalQuotation?.status === 'approved' || 
+                       originalQuotation?.status === 'awarded' ||
+                       originalQuotation?.isApproved === true;
+    
+    if (isApproved) return false;
+    
+    // Check user role - only 'user' role can edit
+    if (userRole === 'admin' || userRole === 'manager') return false;
+    
+    // Default - allow edit for regular users
+    return true;
+  };
+  
   const allDocuments = [...internalDocuments, ...newDocuments];
 
   if (loading) {
@@ -51,30 +75,82 @@ export default function ViewQuotationScreen() {
     );
   }
 
+  // Get status display text
+  const getStatusText = () => {
+    const status = originalQuotation?.status;
+    if (status === 'approved') return 'Approved';
+    if (status === 'awarded') return 'Awarded';
+    if (status === 'rejected') return 'Rejected';
+    if (status === 'pending') return 'Pending';
+    return status || 'Draft';
+  };
+
+  const isApproved = originalQuotation?.status === 'approved' || originalQuotation?.status === 'awarded';
+  const showEditButton = canEdit();
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f0f9ff", padding: "1.5rem" }}>
       <style>{`
-        @media print { body { margin: 0; padding: 0; background: white; } .no-print { display: none !important; } .quotation-content { box-shadow: none; border-radius: 0; padding: 20px; } @page { margin: 10mm; } }
+        @media print { body { margin: 0; padding: 0; background: white; } .no-print { display: none !important; } .quotation-content { box-shadow: none; borderRadius: 0; padding: 20px; } @page { margin: 10mm; } }
         .edit-input:focus { outline: 2px solid #3b82f6; border-color: #3b82f6 !important; }
         .item-row:hover { background-color: #f8fafc; }
       `}</style>
 
       <div style={{ maxWidth: "1280px", margin: "0 auto" }}>
         <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem" }}>
-          <h1 style={{ fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>📄 {isEditing ? "Edit Quotation" : "View Quotation"}</h1>
+          <div>
+            <h1 style={{ fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 }}>
+              📄 {isEditing ? "Edit Quotation" : "View Quotation"}
+            </h1>
+            {!isEditing && (
+              <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span style={{ 
+                  padding: "0.25rem 0.75rem", 
+                  borderRadius: "9999px", 
+                  fontSize: "0.75rem", 
+                  fontWeight: "600",
+                  backgroundColor: isApproved ? '#d1fae5' : '#fef3c7',
+                  color: isApproved ? '#065f46' : '#92400e'
+                }}>
+                  Status: {getStatusText()}
+                </span>
+                {/* {!showEditButton && !isEditing && (
+                  <span style={{ 
+                    padding: "0.25rem 0.75rem", 
+                    borderRadius: "9999px", 
+                    fontSize: "0.75rem", 
+                    fontWeight: "600",
+                    backgroundColor: '#fee2e2',
+                    color: '#991b1b'
+                  }}>
+                    {isApproved ? 'Approved quotations cannot be edited' : 'Editing restricted'}
+                  </span>
+                )} */}
+              </div>
+            )}
+          </div>
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            {!isEditing ? (
+            {!isEditing && showEditButton && (
+              <button onClick={() => setIsEditing(true)} style={btnStyle("#f59e0b")}>
+                <Edit2 size={16} /> Edit
+              </button>
+            )}
+            {isEditing && (
               <>
-                <button onClick={() => setIsEditing(true)} style={btnStyle("#f59e0b")}><Edit2 size={16} /> Edit</button>
-              </>
-            ) : (
-              <>
-                <button onClick={handleSave} disabled={isSaving} style={btnStyle("#10b981", isSaving)}><Save size={16} /> {isSaving ? "Saving…" : "Save Changes"}</button>
-                <button onClick={cancelEdit} style={btnStyle("#ef4444")}><X size={16} /> Cancel</button>
+                <button onClick={handleSave} disabled={isSaving} style={btnStyle("#10b981", isSaving)}>
+                  <Save size={16} /> {isSaving ? "Saving…" : "Save Changes"}
+                </button>
+                <button onClick={cancelEdit} style={btnStyle("#ef4444")}>
+                  <X size={16} /> Cancel
+                </button>
               </>
             )}
-            <button onClick={generatePDF} disabled={isExporting} style={btnStyle("#0369a1", isExporting)}><Download size={16} /> {isExporting ? "Generating…" : "Download PDF"}</button>
-            <button onClick={handleBack} style={btnStyle("#6b7280")}><ArrowLeft size={16} /> Back</button>
+            <button onClick={generatePDF} disabled={isExporting} style={btnStyle("#0369a1", isExporting)}>
+              <Download size={16} /> {isExporting ? "Generating…" : "Download PDF"}
+            </button>
+            <button onClick={handleBack} style={btnStyle("#6b7280")}>
+              <ArrowLeft size={16} /> Back
+            </button>
           </div>
         </div>
 
@@ -117,11 +193,9 @@ export default function ViewQuotationScreen() {
           documentLoading={loading}
           formatFileSize={formatFileSize}
           getFileIcon={getFileIcon}
-          // Terms images props
           termsImages={termsImages}
           onTermsImagesUpload={handleTermsImagesUpload}
           onRemoveTermsImage={removeTermsImage}
-          // Customer tax and place of supply props
           customerTaxTreatment={customerTaxTreatment}
           customerPlaceOfSupply={customerPlaceOfSupply}
         />

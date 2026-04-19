@@ -429,7 +429,7 @@ const InfiniteItemSelector = ({
               <div style={styles.statsLeft}>
                 <span style={styles.statsText}>
                   {totalItems > 0 
-                    ? `Showing ${items.length} of ${totalItems} sellable items` 
+                    ? `Showing ${items.length}` 
                     : loading ? 'Loading...' : 'No sellable items found'}
                 </span>
               </div>

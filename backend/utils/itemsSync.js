@@ -29,7 +29,7 @@ class ItemSyncService {
     }
     
     // Build MongoDB query with company filter
-    const query = { isActive: true, companyId: company._id };
+    const query = { companyId: company._id };
     if (search) {
       query.$text = { $search: search };
     }
@@ -311,7 +311,9 @@ class ItemSyncService {
       product_type: item.product_type,
       tax_percentage: item.tax_percentage,
       imagePath: item.imagePath,
-      can_be_sold: item.can_be_sold, 
+      can_be_sold: item.can_be_sold,
+      isActive: item.isActive,       
+      status: item.status,          
       companyId: item.companyId
     };
   }
