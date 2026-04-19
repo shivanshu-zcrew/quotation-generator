@@ -13,14 +13,31 @@ const { CURRENCY_OPTIONS } = require('../models/constants');
 // ─────────────────────────────────────────────────────────────
 let _browser = null;
 
+// const getBrowser = async () => {
+//   if (_browser?.isConnected()) return _browser;
+
+//   _browser = await puppeteer.launch({
+//     headless: 'new',
+//     executablePath: process.env.NODE_ENV === 'production'
+//       ? (process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser')
+//       : undefined,
+//     args: [
+//       '--no-sandbox',
+//       '--disable-setuid-sandbox',
+//       '--disable-dev-shm-usage',
+//       '--disable-gpu',
+//     ],
+//   });
+
+//   _browser.on('disconnected', () => { _browser = null; });
+//   return _browser;
+// };
+
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   _browser = await puppeteer.launch({
-    headless: 'new',
-    executablePath: process.env.NODE_ENV === 'production'
-      ? (process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser')
-      : undefined,
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -32,7 +49,6 @@ const getBrowser = async () => {
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
 };
-
 
 // ─────────────────────────────────────────────────────────────
 // Cloudinary helpers
