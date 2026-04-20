@@ -29,7 +29,7 @@ class RedisService {
         
         // Validate Redis URL
         if (!redisUrl || redisUrl === 'redis://localhost:6379' && process.env.NODE_ENV === 'production') {
-          console.warn('⚠️ Warning: Using default Redis URL in production');
+          // console.warn('⚠️ Warning: Using default Redis URL in production');
         }
 
         this.client = redis.createClient({
@@ -38,10 +38,10 @@ class RedisService {
             reconnectStrategy: (retries) => {
               // Exponential backoff with max delay
               const delay = Math.min(Math.pow(2, retries) * 100, 10000);
-              console.log(`Redis reconnect attempt ${retries}, waiting ${delay}ms...`);
+              // console.log(`Redis reconnect attempt ${retries}, waiting ${delay}ms...`);
               
               if (retries > this.maxRetries) {
-                console.error('❌ Redis max retries reached, stopping reconnection');
+                // console.error('❌ Redis max retries reached, stopping reconnection');
                 return new Error('Max retries reached');
               }
               return delay;
@@ -53,18 +53,18 @@ class RedisService {
 
         // Set up event handlers BEFORE connecting
         this.client.on('error', (err) => {
-          console.error('❌ Redis Client Error:', err.message);
+          // console.error('❌ Redis Client Error:', err.message);
           this.isConnected = false;
         });
 
         this.client.on('connect', () => {
-          console.log('✅ Redis Client Connected');
+          // console.log('✅ Redis Client Connected');
           this.isConnected = true;
           this.retryCount = 0;
         });
 
         this.client.on('ready', () => {
-          console.log('✅ Redis Client Ready');
+          // console.log('✅ Redis Client Ready');
           this.isConnected = true;
         });
 
@@ -74,7 +74,7 @@ class RedisService {
         });
 
         this.client.on('end', () => {
-          console.log('📴 Redis Client Disconnected');
+          // console.log('📴 Redis Client Disconnected');
           this.isConnected = false;
         });
 
@@ -87,9 +87,9 @@ class RedisService {
         ]);
         
         this.isConnected = true;
-        console.log('✅ Redis connection established successfully');
+        // console.log('✅ Redis connection established successfully');
       } catch (error) {
-        console.error('❌ Redis Connection Failed:', error.message);
+        // console.error('❌ Redis Connection Failed:', error.message);
         this.isConnected = false;
         this.client = null;
         throw error;
@@ -103,7 +103,7 @@ class RedisService {
 
   async get(key) {
     if (!this.isConnected || !this.client?.isOpen) {
-      console.warn(`⚠️ Redis not connected, cannot get key: ${key}`);
+      // console.warn(`⚠️ Redis not connected, cannot get key: ${key}`);
       return null;
     }
     
@@ -116,14 +116,14 @@ class RedisService {
       console.log(`🔍 Cache MISS: ${key}`);
       return null;
     } catch (error) {
-      console.error(`❌ Redis GET error for ${key}:`, error.message);
+      // console.error(`❌ Redis GET error for ${key}:`, error.message);
       return null; // Fallback to API on cache error
     }
   }
 
   async set(key, value, ttl = this.DEFAULT_TTL) {
     if (!this.isConnected || !this.client?.isOpen) {
-      console.warn(`⚠️ Redis not connected, cannot set key: ${key}`);
+      // console.warn(`⚠️ Redis not connected, cannot set key: ${key}`);
       return false;
     }
     
@@ -132,28 +132,28 @@ class RedisService {
       const validTtl = Math.max(1, parseInt(ttl, 10));
       
       await this.client.setEx(key, validTtl, JSON.stringify(value));
-      console.log(`💾 Cache SET: ${key} (TTL: ${validTtl}s)`);
+      // console.log(`💾 Cache SET: ${key} (TTL: ${validTtl}s)`);
       return true;
     } catch (error) {
-      console.error(`❌ Redis SET error for ${key}:`, error.message);
+      // console.error(`❌ Redis SET error for ${key}:`, error.message);
       return false;
     }
   }
 
   async del(key) {
     if (!this.isConnected || !this.client?.isOpen) {
-      console.warn(`⚠️ Redis not connected, cannot delete key: ${key}`);
+      // console.warn(`⚠️ Redis not connected, cannot delete key: ${key}`);
       return false;
     }
     
     try {
       const deleted = await this.client.del(key);
       if (deleted > 0) {
-        console.log(`🗑️ Cache DELETED: ${key}`);
+        // console.log(`🗑️ Cache DELETED: ${key}`);
       }
       return true;
     } catch (error) {
-      console.error(`❌ Redis DEL error for ${key}:`, error.message);
+      // console.error(`❌ Redis DEL error for ${key}:`, error.message);
       return false;
     }
   }
@@ -164,7 +164,7 @@ class RedisService {
    */
   async delPattern(pattern) {
     if (!this.isConnected || !this.client?.isOpen) {
-      console.warn(`⚠️ Redis not connected, cannot delete pattern: ${pattern}`);
+      // console.warn(`⚠️ Redis not connected, cannot delete pattern: ${pattern}`);
       return false;
     }
     
@@ -193,14 +193,14 @@ class RedisService {
           const batch = keys.slice(i, i + batchSize);
           await this.client.del(batch);
         }
-        console.log(`🗑️ Cache DELETED ${keys.length} keys matching pattern: ${pattern}`);
+        // console.log(`🗑️ Cache DELETED ${keys.length} keys matching pattern: ${pattern}`);
       } else {
-        console.log(`🔍 No keys found matching pattern: ${pattern}`);
+        // console.log(`🔍 No keys found matching pattern: ${pattern}`);
       }
       
       return true;
     } catch (error) {
-      console.error(`❌ Redis DEL pattern error for ${pattern}:`, error.message);
+      // console.error(`❌ Redis DEL pattern error for ${pattern}:`, error.message);
       return false;
     }
   }
@@ -215,7 +215,7 @@ class RedisService {
       const response = await this.client.ping();
       return response === 'PONG';
     } catch (error) {
-      console.error('❌ Redis PING failed:', error.message);
+      // console.error('❌ Redis PING failed:', error.message);
       return false;
     }
   }
@@ -230,7 +230,7 @@ class RedisService {
       const info = await this.client.info('memory');
       return info;
     } catch (error) {
-      console.error('❌ Redis INFO error:', error.message);
+      // console.error('❌ Redis INFO error:', error.message);
       return null;
     }
   }
@@ -240,16 +240,16 @@ class RedisService {
    */
   async flushAll() {
     if (!this.isConnected || !this.client?.isOpen) {
-      console.warn('⚠️ Redis not connected, cannot flush');
+      // console.warn('⚠️ Redis not connected, cannot flush');
       return false;
     }
     
     try {
       await this.client.flushAll();
-      console.log('🧹 Redis cache flushed completely');
+      // console.log('🧹 Redis cache flushed completely');
       return true;
     } catch (error) {
-      console.error('❌ Redis FLUSHALL error:', error.message);
+      // console.error('❌ Redis FLUSHALL error:', error.message);
       return false;
     }
   }
@@ -259,9 +259,9 @@ class RedisService {
       try {
         await this.client.quit();
         this.isConnected = false;
-        console.log('📴 Redis disconnected gracefully');
+        // console.log('📴 Redis disconnected gracefully');
       } catch (error) {
-        console.error('❌ Error disconnecting from Redis:', error.message);
+        // console.error('❌ Error disconnecting from Redis:', error.message);
       }
     }
   }
