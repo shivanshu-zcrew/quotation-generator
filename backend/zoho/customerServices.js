@@ -103,7 +103,7 @@ class ZohoBooksService {
   setCompany(companyId, organizationId) {
     this.currentCompanyId = companyId;
     this.organizationId = organizationId;
-    console.log(`🏢 Company context set: ${companyId} (Org: ${organizationId})`);
+    // console.log(`🏢 Company context set: ${companyId} (Org: ${organizationId})`);
   }
 
   getCompanyContext() {

@@ -172,7 +172,7 @@ const withCache = async (key, requestFn, options = {}) => {
 const api = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
-  timeout: 60000,
+  timeout: 120000,
 });
 
 // Request interceptor

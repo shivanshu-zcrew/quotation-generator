@@ -9,6 +9,7 @@ import MobileQuotationLayout from './MobileQuotationLayout';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { fmtDate } from '../utils/formatters';
 import useItemStore from '../services/itemStore';
+import { itemAPI } from '../services/api';
 
 // ============================================================
 // CONSTANTS
@@ -953,6 +954,10 @@ export default function QuotationLayout({
 
   const { items: storeItems, getItemOptions, isLoaded } = useItemStore();
   
+  console.log('LEFT_FIELDS:', LEFT_FIELDS.map(f => f[1]));
+console.log('quotationData keys:', Object.keys(quotationData));
+console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
+
   useEffect(() => {
     if (isLoaded && storeItems.length > 0) {
       const options = getItemOptions();
@@ -961,6 +966,7 @@ export default function QuotationLayout({
     }
   }, [storeItems, isLoaded, getItemOptions]);
 
+ 
   const loadAllItems = useCallback(async () => {
     if (loadingItems) return;
     setLoadingItems(true);
@@ -972,11 +978,20 @@ export default function QuotationLayout({
       let hasMorePages = true;
       
       while (hasMorePages && currentPage <= 50) {
-        const params = new URLSearchParams({ page: currentPage, limit: pageSize, can_be_sold: 'true' });
-        const response = await fetch(`/api/items?${params}`);
-        const data = await response.json();
-        const items = data.data || data.items || [];
-        const pagination = data.pagination || {};
+         const response = await itemAPI.getAll({
+          page: currentPage,
+          limit: pageSize,
+          can_be_sold: 'true'
+        });
+        
+             const result = response.data;
+        
+        if (!result.success) {
+          throw new Error(result.message || 'Failed to fetch items');
+        }
+        
+        const items = result.data || [];
+        const pagination = result.pagination || {};
         
         if (items.length === 0) {
           hasMorePages = false;
@@ -993,7 +1008,10 @@ export default function QuotationLayout({
       }
       
       const formattedOptions = allItems.map(item => ({ 
-        value: item._id, label: item.name, sku: item.sku, fullData: item 
+        value: item._id, 
+        label: item.name, 
+        sku: item.sku, 
+        fullData: item 
       }));
       
       allItems.forEach(item => itemCache.current.set(item._id, item));
@@ -1002,7 +1020,11 @@ export default function QuotationLayout({
       
     } catch (error) {
       console.error('Error loading items:', error);
-      setSnackbar({ show: true, message: 'Failed to load items: ' + error.message, type: 'error' });
+      setSnackbar({ 
+        show: true, 
+        message: 'Failed to load items: ' + (error.response?.data?.message || error.message), 
+        type: 'error' 
+      });
     } finally {
       setLoadingItems(false);
     }

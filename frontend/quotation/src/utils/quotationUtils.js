@@ -51,8 +51,7 @@ export const btnStyle = (bg, disabled = false) => ({
   fontWeight: "500",
 });
 
-// ✅ FIXED: Removed termsImage
-export const parseQuotationData = (q) => ({
+ export const parseQuotationData = (q) => ({
   projectName: q.projectName || "",
   currencyCode: q.currency?.code || "",
   customer: q.customer || q.customerId?.name || "",
@@ -61,7 +60,7 @@ export const parseQuotationData = (q) => ({
   expiryDate: q.expiryDate?.split("T")[0] || "",
   ourRef: q.ourRef || "",
   ourContact: q.ourContact || "",
-  salesOffice: q.salesOffice || "",
+  salesManagerEmail: q.salesManagerEmail || "",
   paymentTerms: q.paymentTerms || "",
   deliveryTerms: q.deliveryTerms || "",
   tl: q.tl || "",

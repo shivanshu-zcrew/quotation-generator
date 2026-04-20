@@ -25,7 +25,7 @@ export default function ViewQuotationScreen() {
   // Get current user role
   const user = useAppStore(state => state.user);
   const userRole = user?.role;
-  
+  console.log(">>>>>>>>", userRole);
   // Check if edit button should be shown
   const canEdit = () => {
     // Don't show edit button if already editing
@@ -39,7 +39,7 @@ export default function ViewQuotationScreen() {
     if (isApproved) return false;
     
     // Check user role - only 'user' role can edit
-    if (userRole === 'admin' || userRole === 'manager') return false;
+    if (userRole === 'admin' || userRole === 'ops_manager') return false;
     
     // Default - allow edit for regular users
     return true;

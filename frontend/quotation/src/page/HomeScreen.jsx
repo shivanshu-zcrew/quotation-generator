@@ -84,6 +84,164 @@ const useMediaQuery = (query) => {
   return matches;
 };
 
+const STATUS_CONFIG = {
+  pending: {
+    label: "Pending",
+    bg: "#fef3c7",
+    color: "#92400e",
+    borderColor: "#fde68a",
+    icon: "⏳",
+    description: "Awaiting submission",
+  },
+  ops_approved: {
+    label: "In Review",
+    bg: "#dbeafe",
+    color: "#0c4a6e",
+    borderColor: "#7dd3fc",
+    icon: "👁️",
+    description: "Under ops review",
+  },
+  approved: {
+    label: "Approved",
+    bg: "#d1fae5",
+    color: "#065f46",
+    borderColor: "#6ee7b7",
+    icon: "✓",
+    description: "Ready to present",
+  },
+  awarded: {
+    label: "Awarded",
+    bg: "#e9d5ff",
+    color: "#6b21a8",
+    borderColor: "#d8b4fe",
+    icon: "🏆",
+    description: "Order confirmed",
+  },
+  not_awarded: {
+    label: "Not Awarded",
+    bg: "#fed7aa",
+    color: "#9a3412",
+    borderColor: "#fdba74",
+    icon: "✗",
+    description: "Lost to competitor",
+  },
+  ops_rejected: {
+    label: "Returned",
+    bg: "#fee2e2",
+    color: "#991b1b",
+    borderColor: "#fecaca",
+    icon: "⚠️",
+    description: "Ops rejected - revise",
+  },
+  rejected: {
+    label: "Rejected",
+    bg: "#fee2e2",
+    color: "#991b1b",
+    borderColor: "#fecaca",
+    icon: "✗",
+    description: "Customer rejected",
+  },
+};
+
+const EnhancedStatusBadge = ({ status, quotation }) => {
+  const config = STATUS_CONFIG[status] || {
+    label: status?.replace(/_/g, " ") || "Unknown",
+    bg: "#f1f5f9",
+    color: "#64748b",
+    borderColor: "#cbd5e1",
+    icon: "?",
+    description: "Unknown status",
+  };
+
+  const isExpired = quotation && new Date(quotation.expiryDate) < new Date();
+  const isExpiringSoon =
+    quotation &&
+    !isExpired &&
+    new Date(quotation.expiryDate) - new Date() < 7 * 24 * 60 * 60 * 1000;
+
+  // Override for expired quotations
+  if (isExpired && status === "pending") {
+    return (
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "0.4rem",
+          padding: "0.35rem 0.75rem",
+          borderRadius: "999px",
+          fontSize: "0.8rem",
+          fontWeight: 600,
+          backgroundColor: "#fee2e2",
+          color: "#991b1b",
+          border: "1px solid #fecaca",
+          whiteSpace: "nowrap",
+          cursor: "help",
+          title: "Quotation has expired",
+        }}
+      >
+        <span>🔴</span> Expired
+      </div>
+    );
+  }
+
+  // Override for expiring soon
+  if (isExpiringSoon && status === "pending") {
+    return (
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "0.4rem",
+          padding: "0.35rem 0.75rem",
+          borderRadius: "999px",
+          fontSize: "0.8rem",
+          fontWeight: 600,
+          backgroundColor: "#fffbeb",
+          color: "#d97706",
+          border: "1px solid #fde68a",
+          whiteSpace: "nowrap",
+          cursor: "help",
+          title: "Expiring in less than 7 days",
+        }}
+      >
+        <span>⚡</span> Expiring Soon
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.35rem",
+        padding: "0.35rem 0.75rem",
+        borderRadius: "999px",
+        fontSize: "0.8rem",
+        fontWeight: 600,
+        backgroundColor: config.bg,
+        color: config.color,
+        border: `1px solid ${config.borderColor}`,
+        whiteSpace: "nowrap",
+        cursor: "help",
+        title: config.description,
+        transition: "all 0.2s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = `0 2px 8px ${config.color}30`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "none";
+      }}
+    >
+      <span>{config.icon}</span>
+      {config.label}
+    </div>
+  );
+};
+
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
   // Responsive hooks
   const isMobile = useMediaQuery("(max-width: 768px)");
@@ -1280,8 +1438,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                               align="right"
                             />
                             <SortHeader
-                              label="Created By"
-                              field="createdBy"
+                              label="Status"
+                              field="status"
                               sort={sort}
                               onSort={handleSort}
                             />
@@ -1532,12 +1690,13 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                   <td
                                     style={{
                                       padding: "0.85rem 1rem",
-                                      fontSize: "0.8rem",
-                                      color: "#64748b",
                                       verticalAlign: "middle",
                                     }}
                                   >
-                                    {q.createdBy?.name || "—"}
+                                    <EnhancedStatusBadge
+                                      status={q.status}
+                                      quotation={q}
+                                    />
                                   </td>
                                   <td
                                     style={{

@@ -249,6 +249,7 @@ const useTableData = (quotations, activeTab, search, sort) => {
   }, [quotations, activeTab, search, sort]);
 };
 
+
 // ─────────────────────────────────────────────────────────────
 // Main Dashboard
 // ─────────────────────────────────────────────────────────────
