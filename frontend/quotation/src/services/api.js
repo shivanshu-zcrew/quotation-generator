@@ -223,6 +223,11 @@ export const authAPI = {
   getAllUsers: () => api.get("/auth/users"),
   toggleUserStatus: (id) => api.put(`/auth/users/${id}/toggle-status`),
   changeUserRole: (id, data) => api.put(`/auth/users/${id}/role`, data),
+  sendPasswordResetEmail: (userId) => api.post(`/auth/users/${userId}/send-reset-password`),
+  setUserPassword: (userId, data) => api.put(`/auth/users/${userId}/set-password`, data),
+  generateTemporaryPassword: (userId) => api.post(`/auth/users/${userId}/generate-temp-password`),
+  resetPasswordWithToken: (data) => api.put(`/auth/reset-password`, data),
+  forceChangePassword: (data) => api.put(`/auth/force-change-password`, data),
 };
 
 // ==================== ADMIN ====================

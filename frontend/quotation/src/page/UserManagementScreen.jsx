@@ -4,6 +4,7 @@ import { authAPI } from "../services/api";
 // Import store hooks
 import { useAppStore } from "../services/store";
 import { useAuth } from "../hooks/customHooks";
+import { PasswordResetModal } from "../components/PasswordResetModel";
 
 // ─── Reusable Field — defined OUTSIDE AddUserForm to prevent remount on every keystroke ───
 function Field({
@@ -306,6 +307,8 @@ export default function UserManagementScreen({ onBack }) {
   const [newRole,      setNewRole]      = useState("");
   const [actionLoading,setActionLoading]= useState(false);
   const [toast,        setToast]        = useState(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+const [selectedUserForPassword, setSelectedUserForPassword] = useState(null);
 
   useEffect(() => { fetchUsers(); }, []);
 
@@ -367,6 +370,11 @@ export default function UserManagementScreen({ onBack }) {
     setSelectedUser(user);
     setNewRole(user.role);
     setShowRoleModal(true);
+  }, []);
+
+  const openPasswordResetModal = useCallback((user) => {
+    setSelectedUserForPassword(user);
+    setShowPasswordModal(true);
   }, []);
 
   const formatDate = useCallback((dateString) => {
@@ -578,6 +586,27 @@ export default function UserManagementScreen({ onBack }) {
                           )}
                         </svg>
                       </button>
+                      <button
+  onClick={() => openPasswordResetModal(user)}
+  style={{
+    padding: '6px',
+    backgroundColor: '#667eea20',
+    color: '#667eea',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }}
+  title="Reset Password"
+  disabled={actionLoading}
+>
+  <svg style={{ width: '16px', height: '16px' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+      d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+  </svg>
+</button>
                     </div>
                   </td>
                 </tr>
@@ -673,6 +702,21 @@ export default function UserManagementScreen({ onBack }) {
           onCancel={() => setShowAddForm(false)}
         />
       )}
+      {showPasswordModal && (
+  <PasswordResetModal
+    open={showPasswordModal}
+    user={selectedUserForPassword}
+    onClose={() => {
+      setShowPasswordModal(false);
+      setSelectedUserForPassword(null);
+    }}
+    onSuccess={(message) => {
+      showToast(message, 'success');
+      fetchUsers();
+    }}
+    loading={actionLoading}
+  />
+)}
     </div>
   );
 }
@@ -768,3 +812,4 @@ styleSheet.textContent = `
   button:disabled { opacity: 0.5; cursor: not-allowed !important; }
 `;
 document.head.appendChild(styleSheet);
+

@@ -238,208 +238,31 @@ const processItemImages = async (item, itemIndex) => {
   return imagePaths;
 };
 
-// Updated processItems function
-async function processItemsWithImages(items, exchangeRate) {
-  const processedItems = [];
-  
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    
-    // Find the item document
-    let itemDoc = await Item.findOne({ 
-      _id: item.itemId, 
-      companyId: req.companyId 
-    }).lean();
-    
-    if (!itemDoc && item.zohoId) {
-      itemDoc = await Item.findOne({ zohoId: item.zohoId }).lean();
-    }
-    
-    if (!itemDoc) {
-      throw new Error(`Item not found: ${item.itemId}`);
-    }
-    
-    // Process images - upload each base64 to Cloudinary
-    const uploadedImages = [];
-    
-    if (item.images && Array.isArray(item.images)) {
-      for (let imgIdx = 0; imgIdx < item.images.length; imgIdx++) {
-        const imageData = item.images[imgIdx];
-        
-        // If it's a base64 string, upload to Cloudinary
-        if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
-          const uploaded = await uploadImageToCloudinary(imageData, `quotations/items/item_${i + 1}`);
-          if (uploaded && uploaded.url) {
-            uploadedImages.push({
-              url: uploaded.url,
-              publicId: uploaded.publicId,
-              fileName: `item_${i + 1}_image_${imgIdx + 1}.png`,
-              uploadedAt: new Date()
-            });
-          }
-        }
-        // If it's already a Cloudinary URL object
-        else if (imageData && typeof imageData === 'object' && imageData.url) {
-          uploadedImages.push(imageData);
-        }
-        // If it's a string Cloudinary URL
-        else if (imageData && typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-          uploadedImages.push({
-            url: imageData,
-            publicId: imageData.split('/').pop().split('.')[0],
-            fileName: `existing_image.png`,
-            uploadedAt: new Date()
-          });
-        }
-      }
-    }
-    
-    const unitPriceInBaseCurrency = item.unitPrice * exchangeRate;
-    const totalPrice = item.quantity * item.unitPrice;
-    const totalPriceInBaseCurrency = totalPrice * exchangeRate;
-    
-    processedItems.push({
-      itemId: itemDoc._id,
-      zohoItemId: itemDoc.zohoId,
-      name: itemDoc.name,
-      description: item.description || '',
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      unitPriceInBaseCurrency,
-      totalPrice,
-      totalPriceInBaseCurrency,
-      images: uploadedImages,  // Store as array of objects
-      imageUrls: uploadedImages.map(img => img.url)  // Also store just URLs for easy access
-    });
-  }
-  
-  return processedItems;
-}
-
-// Add this helper function to process and upload item images during update
-const processAndUploadItemImages = async (items, existingQuotation, exchangeRate, companyId) => {
-  const processedItems = [];
-  
-  for (let idx = 0; idx < items.length; idx++) {
-    const item = items[idx];
-    if (!item) continue;
-    
-    let itemDoc = null;
-    
-    // Try to find item by ID
-    if (item.itemId) {
-      if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-        itemDoc = await Item.findOne({ 
-          _id: item.itemId, 
-          companyId: companyId 
-        }).lean();
-      }
-      
-      // If not found, try by zohoId
-      if (!itemDoc) {
-        itemDoc = await Item.findOne({ 
-          zohoId: item.itemId, 
-          companyId: companyId 
-        }).lean();
-      }
-    }
-    
-    // If still not found and we have existing item, use that
-    if (!itemDoc && existingQuotation.items && existingQuotation.items[idx]) {
-      itemDoc = existingQuotation.items[idx].itemId;
-    }
-    
-    const quantity = Number(item.quantity) || 1;
-    const unitPrice = Number(item.unitPrice) || 0;
-    const totalPrice = quantity * unitPrice;
-    const totalPriceInBaseCurrency = totalPrice * exchangeRate;
-    const unitPriceInBaseCurrency = unitPrice * exchangeRate;
-    
-    // Process images for this item
-    let imagePaths = item.imagePaths || [];
-    let newImageUrls = [];
-    
-    // Check if there are new base64 images to upload
-    if (item.newImages && Array.isArray(item.newImages) && item.newImages.length > 0) {
-      console.log(`📸 Uploading ${item.newImages.length} new images for item ${idx + 1}`);
-      
-      for (let imgIdx = 0; imgIdx < item.newImages.length; imgIdx++) {
-        const imageData = item.newImages[imgIdx];
-        
-        // Check if it's base64 (needs upload)
-        if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
-          try {
-            const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
-            if (uploaded && uploaded.url) {
-              newImageUrls.push(uploaded.url);
-              console.log(`✅ Uploaded new image ${imgIdx + 1} for item ${idx + 1}: ${uploaded.url}`);
-            }
-          } catch (uploadError) {
-            console.error(`❌ Failed to upload image for item ${idx + 1}:`, uploadError.message);
-          }
-        } else if (imageData && typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-          // Already a Cloudinary URL, keep it
-          newImageUrls.push(imageData);
-        }
-      }
-    }
-    
-    // Combine existing images (that weren't deleted) with new uploaded images
-    const existingImages = imagePaths.filter(path => 
-      path && typeof path === 'string' && path.includes('cloudinary.com')
-    );
-    
-    const finalImagePaths = [...existingImages, ...newImageUrls];
-    
-    processedItems.push({
-      itemId: itemDoc?._id || item.itemId,
-      zohoItemId: itemDoc?.zohoId || item.zohoId || null,
-      name: itemDoc?.name || item.name || '',
-      description: item.description || itemDoc?.description || '',
-      quantity: quantity,
-      unitPrice: unitPrice,
-      unitPriceInBaseCurrency: unitPriceInBaseCurrency,
-      totalPrice: totalPrice,
-      totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-      imagePaths: finalImagePaths,
-      imagePublicIds: item.imagePublicIds || []
-    });
-  }
-  
-  return processedItems;
-};
-
+ 
 // ─────────────────────────────────────────────────────────────
 // Calculate totals with currency conversion
 // ─────────────────────────────────────────────────────────────
 const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
-  // Calculate subtotal (sum of all items)
-  const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
+   const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
   const subtotalInBaseCurrency = subtotal * exchangeRate;
   
-  // STEP 1: Calculate discount amount (based on subtotal)
-  const discountAmount = (subtotal * (discountPercent || 0)) / 100;
+   const discountAmount = (subtotal * (discountPercent || 0)) / 100;
   const discountAmountInBaseCurrency = discountAmount * exchangeRate;
   
-  // STEP 2: Calculate subtotal AFTER discount
-  const subtotalAfterDiscount = subtotal - discountAmount;
+   const subtotalAfterDiscount = subtotal - discountAmount;
   const subtotalAfterDiscountInBaseCurrency = subtotalAfterDiscount * exchangeRate;
   
-  // STEP 3: Calculate tax on the DISCOUNTED amount (NOT on original subtotal)
-  const taxAmount = (subtotalAfterDiscount * (taxPercent || 0)) / 100;
+   const taxAmount = (subtotalAfterDiscount * (taxPercent || 0)) / 100;
   const taxAmountInBaseCurrency = taxAmount * exchangeRate;
   
-  // STEP 4: Calculate grand total (discounted amount + tax)
   const total = subtotalAfterDiscount + taxAmount;
   const totalInBaseCurrency = total * exchangeRate;
   
-  // Optional: Keep for debugging/display
-  const subtotalOriginal = subtotal;
+   const subtotalOriginal = subtotal;
   const subtotalOriginalInBaseCurrency = subtotalInBaseCurrency;
 
   return {
-    // Main fields (keep original names for backward compatibility)
-    subtotal,
+     subtotal,
     taxAmount,
     discountAmount,
     total,
@@ -447,8 +270,6 @@ const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
     taxAmountInBaseCurrency,     
     discountAmountInBaseCurrency, 
     totalInBaseCurrency,
-    
-    // Additional fields for clarity (optional)
     subtotalOriginal,
     subtotalOriginalInBaseCurrency,
     subtotalAfterDiscount,
@@ -1981,44 +1802,11 @@ exports.awardQuotation = async (req, res) => {
 
 function convertHtmlToPlainText(html) {
   if (!html) return '';
-
-  let text = html;
- 
-  text = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-  text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
- 
-  text = text.replace(/<li[^>]*>\s*<p[^>]*>/gi, '<li>');
-  text = text.replace(/<\/p>\s*<\/li>/gi, '</li>');
-
-  const stack = [];
-
-  text = text.replace(/<ol[^>]*>/gi, () => {
-    stack.push(0);
-    return '\n';
-  });
-
-  text = text.replace(/<\/ol>/gi, () => {
-    stack.pop();
-    return '\n';
-  });
-
-  text = text.replace(/<li[^>]*>/gi, () => {
-    if (stack.length) {
-      stack[stack.length - 1]++;
-      const numbering = stack.join('.');
-      const indent = '   '.repeat(stack.length - 1);
-      return `\n${indent}${numbering}. `;
-    }
-    return '\n• ';
-  });
-
-  text = text.replace(/<\/li>/gi, '');
- 
-  text = text.replace(/<br\s*\/?>/gi, '\n');
-
   
-  text = text.replace(/<[^>]+>/g, '');
- 
+  // Remove HTML tags
+  let text = html.replace(/<[^>]*>/g, ' ');
+  
+  // Decode HTML entities
   text = text
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -2026,28 +1814,41 @@ function convertHtmlToPlainText(html) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
-
-   text = text.replace(/\n\s*\n\s*\n/g, '\n\n');
-  text = text.replace(/[ \t]+/g, ' ');
+  
+   text = text.replace(/\s+/g, ' ').trim();
+  
+   text = text.replace(/(\d+\.\d+)/g, '\n  $1');
+  
+   text = text.replace(/(\d+\.)(\s+)([^\d])/g, '\n$1 $3');
+  
+   text = text.replace(/(\d+\.\s+)(?!\d)/g, '\n$1');
+  
+   text = text.replace(/(\d+\.\s+[^\n]+?)(\n\s*\d+\.\d+)/g, '$1\n$2');
+  
+   text = text.replace(/\n{3,}/g, '\n\n');
   text = text.trim();
-
+  
   return text;
 }
- function cleanHtmlForZoho(html) {
+
+function cleanHtmlForZoho(html) {
   if (!html) return '';
   
-   let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
+  // Remove images
+  let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
+  cleaned = cleaned.replace(/<img[^>]*>/gi, '');
   
-   cleaned = cleaned.replace(/<img[^>]*>/gi, '');
+  // Convert to plain text
+  let text = convertHtmlToPlainText(cleaned);
   
-   let text = convertHtmlToPlainText(cleaned);
-  
-   if (text.length > 9500) {
+  // Limit length for Zoho
+  if (text.length > 9500) {
     text = text.substring(0, 9500) + '... (truncated)';
   }
   
   return text;
 }
+
 
 // ─────────────────────────────────────────────────────────────
 // DELETE QUOTATION  

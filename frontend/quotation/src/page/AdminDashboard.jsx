@@ -677,8 +677,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         </td>
         <td style={styles.cell}>
           <div style={styles.projectCell}>
-            <div style={styles.projectName}>{q.tl || '—'}</div>
-            {q.trn && <div style={styles.trnText}>TRN: {q.trn}</div>}
+            <div style={styles.projectName}>{q.projectName || '—'}</div>
+            {/* {q.trn && <div style={styles.trnText}>TRN: {q.trn}</div>} */}
           </div>
         </td>
         <td style={{ ...styles.cell, textAlign: 'center' }}>
