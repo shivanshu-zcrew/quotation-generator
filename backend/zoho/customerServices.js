@@ -1,7 +1,7 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const redisService = require('../config/redisService');
+// const redisService = require('../config/redisService');
 const SyncLogger = require('../utils/syncLogger');
 const { Customer } = require('../models/customer');
 const { Item } = require('../models/items');
@@ -44,6 +44,10 @@ class ZohoBooksService {
     this.lastRefreshAttempt = 0;
     this.minRefreshInterval = 60000;
     
+    // In-memory cache as fallback (instead of Redis)
+    this.memoryCache = new Map();
+    this.cacheTTL = 600000; // 10 minutes in milliseconds
+    
     this.EMIRATE_CODE_MAP = {
       'Abu Dhabi': 'AB',
       'Ajman': 'AJ',
@@ -63,6 +67,37 @@ class ZohoBooksService {
     };
       
     this._loadToken();
+  }
+
+  // Helper method for in-memory cache
+  _getFromCache(key) {
+    const cached = this.memoryCache.get(key);
+    if (cached && cached.expiry > Date.now()) {
+      return cached.data;
+    }
+    if (cached) {
+      this.memoryCache.delete(key);
+    }
+    return null;
+  }
+
+  _setToCache(key, data, ttlSeconds = 600) {
+    this.memoryCache.set(key, {
+      data,
+      expiry: Date.now() + (ttlSeconds * 1000)
+    });
+  }
+
+  _clearCache(key) {
+    this.memoryCache.delete(key);
+  }
+
+  _clearCachePattern(pattern) {
+    for (const key of this.memoryCache.keys()) {
+      if (key.includes(pattern)) {
+        this.memoryCache.delete(key);
+      }
+    }
   }
 
   setCompany(companyId, organizationId) {
@@ -95,7 +130,7 @@ class ZohoBooksService {
         }
       }
     } catch (error) {
-      console.warn('⚠️ Could not load token file:', error.message);
+      // console.warn('⚠️ Could not load token file:', error.message);
       this.accessToken = null;
       this.tokenExpiry = null;
     }
@@ -112,7 +147,7 @@ class ZohoBooksService {
       await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2));
       await fs.promises.rename(tempPath, this.tokenFilePath);
     } catch (error) {
-      console.warn('⚠️ Could not save token file:', error.message);
+      // console.warn('⚠️ Could not save token file:', error.message);
     }
   }
 
@@ -221,15 +256,19 @@ class ZohoBooksService {
 
   async _getCurrencyId(currencyCode) {
     try {
+      // Check memory cache first
       if (this.currencyCache && this.currencyCacheExpiry && Date.now() < this.currencyCacheExpiry) {
         return this.currencyCache[currencyCode];
       }
-      const cachedCurrencies = await redisService.get(this.CACHE_KEYS.CURRENCIES);
-      if (cachedCurrencies) {
-        this.currencyCache = cachedCurrencies;
-        this.currencyCacheExpiry = Date.now() + 3600000;
-        return cachedCurrencies[currencyCode];
-      }
+      
+      // Check Redis cache (commented out)
+      // const cachedCurrencies = await redisService.get(this.CACHE_KEYS.CURRENCIES);
+      // if (cachedCurrencies) {
+      //   this.currencyCache = cachedCurrencies;
+      //   this.currencyCacheExpiry = Date.now() + 3600000;
+      //   return cachedCurrencies[currencyCode];
+      // }
+      
       const result = await this._request('GET', '/settings/currencies');
       if (result.success && result.data?.currencies) {
         const currencyMap = {};
@@ -238,11 +277,15 @@ class ZohoBooksService {
         });
         this.currencyCache = currencyMap;
         this.currencyCacheExpiry = Date.now() + 3600000;
-        await redisService.set(this.CACHE_KEYS.CURRENCIES, currencyMap, 3600);
+        
+        // Store in Redis (commented out)
+        // await redisService.set(this.CACHE_KEYS.CURRENCIES, currencyMap, 3600);
+        
         return currencyMap[currencyCode];
       }
       return null;
     } catch (error) {
+      // console.error('Error fetching currency ID:', error.message);
       return null;
     }
   }
@@ -260,6 +303,7 @@ class ZohoBooksService {
   _getPlaceOfSupplyData(taxTreatment, placeOfSupply) {
     let countryCode, placeOfSupplyCode;
     const isUAEPlace = this.EMIRATE_CODE_MAP[placeOfSupply] !== undefined;
+    
     if (taxTreatment === 'vat_registered') {
       if (isUAEPlace) {
         countryCode = 'AE';
@@ -290,6 +334,7 @@ class ZohoBooksService {
       countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE';
       placeOfSupplyCode = countryCode;
     }
+    
     return { countryCode, placeOfSupplyCode };
   }
 
@@ -300,13 +345,13 @@ class ZohoBooksService {
     const perPage = 200;
     let hasMorePages = true;
     
-    console.log(`\n🔍 Starting customer fetch for company ${companyId}`);
+    // console.log(`\n🔍 Starting customer fetch for company ${companyId}`);
     
     while (hasMorePages && page <= 50) {
       try {
         let url = `/contacts?page=${page}&per_page=${perPage}&filter_by=Status.All`;
         
-        console.log(`📡 Fetching page ${page}...`);
+        // console.log(`📡 Fetching page ${page}...`);
         const result = await this._request('GET', url);
         
         if (result.success && result.data?.contacts) {
@@ -316,22 +361,22 @@ class ZohoBooksService {
           // Filter customers
           const customers = contacts.filter(contact => contact.contact_type === 'customer');
           
-          console.log(`📥 Page ${page}: ${contacts.length} total contacts, ${customers.length} customers`);
+          // console.log(`📥 Page ${page}: ${contacts.length} total contacts, ${customers.length} customers`);
           
           // Check for duplicates within this page
           const pageContactIds = new Set();
           for (const customer of customers) {
             if (pageContactIds.has(customer.contact_id)) {
-              console.log(`⚠️ Duplicate found within same page: ${customer.contact_id} - ${customer.contact_name}`);
+              // console.log(`⚠️ Duplicate found within same page: ${customer.contact_id} - ${customer.contact_name}`);
             }
             pageContactIds.add(customer.contact_id);
             
             // Check against previously fetched customers
             if (uniqueCustomers.has(customer.contact_id)) {
               const existing = uniqueCustomers.get(customer.contact_id);
-              console.log(`⚠️ DUPLICATE DETECTED: ${customer.contact_id} - ${customer.contact_name}`);
-              console.log(`   First seen on page: ${existing.page}`);
-              console.log(`   Duplicate on page: ${page}`);
+              // console.log(`⚠️ DUPLICATE DETECTED: ${customer.contact_id} - ${customer.contact_name}`);
+              // console.log(`   First seen on page: ${existing.page}`);
+              // console.log(`   Duplicate on page: ${page}`);
             } else {
               uniqueCustomers.set(customer.contact_id, {
                 customer,
@@ -351,14 +396,14 @@ class ZohoBooksService {
           hasMorePages = false;
         }
       } catch (error) {
-        console.error(`❌ Error fetching page ${page}:`, error.message);
+        // console.error(`❌ Error fetching page ${page}:`, error.message);
         hasMorePages = false;
       }
     }
     
-    console.log(`\n📊 FINAL RESULT for company ${companyId}:`);
-    console.log(`   Total customers fetched (including duplicates): ${allCustomers.length}`);
-    console.log(`   Unique customers: ${uniqueCustomers.size}`);
+    // console.log(`\n📊 FINAL RESULT for company ${companyId}:`);
+    // console.log(`   Total customers fetched (including duplicates): ${allCustomers.length}`);
+    // console.log(`   Unique customers: ${uniqueCustomers.size}`);
     
     // Log duplicate details if any
     if (allCustomers.length > uniqueCustomers.size) {
@@ -382,7 +427,7 @@ class ZohoBooksService {
       totalUnique: uniqueCustomers.size,
       totalWithDuplicates: allCustomers.length
     };
-}
+  }
 
   async syncContactsToDatabase(company, incremental = true) {
     try {
@@ -390,10 +435,10 @@ class ZohoBooksService {
       const startTime = Date.now();
       const CustomerModel = Customer;
       
-      console.log(`\n${'='.repeat(70)}`);
-      console.log(`🔄 Starting Customer Sync for Company: ${company.name} (${company.code})`);
-      console.log(`📅 Mode: ${incremental ? 'INCREMENTAL' : 'FULL'}`);
-      console.log(`${'='.repeat(70)}`);
+      // console.log(`\n${'='.repeat(70)}`);
+      // console.log(`🔄 Starting Customer Sync for Company: ${company.name} (${company.code})`);
+      // console.log(`📅 Mode: ${incremental ? 'INCREMENTAL' : 'FULL'}`);
+      // console.log(`${'='.repeat(70)}`);
       
       let lastSyncDate = null;
       if (incremental) {
@@ -402,29 +447,32 @@ class ZohoBooksService {
           zohoSyncDate: { $ne: null },
           zohoSynced: true 
         }).sort({ zohoSyncDate: -1 });
+        
         if (lastSyncedCustomer && lastSyncedCustomer.zohoSyncDate) {
           const syncDate = new Date(lastSyncedCustomer.zohoSyncDate);
           syncDate.setHours(syncDate.getHours() - 1);
           lastSyncDate = syncDate.toISOString().split('T')[0];
-          console.log(`📅 Last sync: ${lastSyncedCustomer.zohoSyncDate.toISOString()}`);
-          console.log(`📅 Fetching customers modified after: ${lastSyncDate}`);
+          // console.log(`📅 Last sync: ${lastSyncedCustomer.zohoSyncDate.toISOString()}`);
+          // console.log(`📅 Fetching customers modified after: ${lastSyncDate}`);
         } else {
           const ninetyDaysAgo = new Date();
           ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
           lastSyncDate = ninetyDaysAgo.toISOString().split('T')[0];
-          console.log(`📅 First sync - fetching customers from last 90 days: ${lastSyncDate}`);
+          // console.log(`📅 First sync - fetching customers from last 90 days: ${lastSyncDate}`);
         }
       } else {
-        console.log(`📅 Full sync - fetching ALL customers from Zoho`);
+        // console.log(`📅 Full sync - fetching ALL customers from Zoho`);
       }
       
       console.log(`\n📡 Fetching customers from Zoho...`);
       const fetchResult = await this.getAllCustomersPaginated(company._id, lastSyncDate);
+      
       if (!fetchResult.success) {
         throw new Error(fetchResult.error || 'Failed to fetch customers from Zoho');
       }
+      
       const zohoCustomers = fetchResult.customers || [];
-      console.log(`✅ Fetched ${zohoCustomers.length} customers from Zoho`);
+      // console.log(`✅ Fetched ${zohoCustomers.length} customers from Zoho`);
       
       if (zohoCustomers.length === 0) {
         return {
@@ -440,6 +488,7 @@ class ZohoBooksService {
       
       const nonVatCustomers = [];
       const vatCustomers = [];
+      
       for (const zc of zohoCustomers) {
         const isVatRegistered = zc.tax_treatment === 'vat_registered' || 
                                  zc.gcc_vat_treatment === 'vat_registered' ||
@@ -451,12 +500,12 @@ class ZohoBooksService {
         }
       }
       
-      console.log(`\n📊 Customer Breakdown:`);
-      console.log(`   Non-VAT Customers: ${nonVatCustomers.length}`);
-      console.log(`   VAT Customers: ${vatCustomers.length}`);
-      console.log(`   Total: ${zohoCustomers.length}`);
+      // console.log(`\n📊 Customer Breakdown:`);
+      // console.log(`   Non-VAT Customers: ${nonVatCustomers.length}`);
+      // console.log(`   VAT Customers: ${vatCustomers.length}`);
+      // console.log(`   Total: ${zohoCustomers.length}`);
       
-      console.log(`\n🔄 Processing ${nonVatCustomers.length} Non-VAT Customers...`);
+      // console.log(`\n🔄 Processing ${nonVatCustomers.length} Non-VAT Customers...`);
       let created = 0;
       let updated = 0;
       let unchanged = 0;
@@ -473,14 +522,14 @@ class ZohoBooksService {
             else if (result.action === 'unchanged') unchanged++;
             if (result.error) errors++;
           } catch (error) {
-            console.error(`❌ Error processing ${zc.contact_name}:`, error.message);
+            // console.error(`❌ Error processing ${zc.contact_name}:`, error.message);
             errors++;
           }
         }));
-        console.log(`   Non-VAT Progress: ${Math.min(i + batchSize, nonVatCustomers.length)}/${nonVatCustomers.length} (Created: ${created}, Updated: ${updated})`);
+        // console.log(`   Non-VAT Progress: ${Math.min(i + batchSize, nonVatCustomers.length)}/${nonVatCustomers.length} (Created: ${created}, Updated: ${updated})`);
       }
       
-      console.log(`\n🔄 Processing ${vatCustomers.length} VAT Customers (fetching TRN)...`);
+      // console.log(`\n🔄 Processing ${vatCustomers.length} VAT Customers (fetching TRN)...`);
       let vatCreated = 0;
       let vatUpdated = 0;
       let vatUnchanged = 0;
@@ -493,34 +542,35 @@ class ZohoBooksService {
         const batch = vatCustomers.slice(i, i + vatBatchSize);
         const batchResults = await Promise.all(batch.map(async (zc) => {
           try {
-            console.log(`🔍 Fetching TRN for: ${zc.contact_name} (Zoho ID: ${zc.contact_id})`);
+            // console.log(`🔍 Fetching TRN for: ${zc.contact_name} (Zoho ID: ${zc.contact_id})`);
             const contactResult = await this.getContact(zc.contact_id);
             if (contactResult.success && contactResult.contact) {
               trnFetched++;
               const trn = contactResult.contact.tax_reg_no || '';
-              console.log(`✅ TRN fetched for ${zc.contact_name}: ${trn || 'No TRN'}`);
+              // console.log(`✅ TRN fetched for ${zc.contact_name}: ${trn || 'No TRN'}`);
               const result = await this.processCustomerRecord(company._id, zc, contactResult.contact);
               return result;
             } else {
               trnFailed++;
-              console.warn(`⚠️ Could not fetch TRN for ${zc.contact_name}, using basic data`);
+              // console.warn(`⚠️ Could not fetch TRN for ${zc.contact_name}, using basic data`);
               const result = await this.processCustomerRecord(company._id, zc, null);
               return result;
             }
           } catch (error) {
             trnFailed++;
-            console.error(`❌ Error fetching TRN for ${zc.contact_name}:`, error.message);
+            // console.error(`❌ Error fetching TRN for ${zc.contact_name}:`, error.message);
             const result = await this.processCustomerRecord(company._id, zc, null);
             return result;
           }
         }));
+        
         for (const result of batchResults) {
           if (result.action === 'created') vatCreated++;
           else if (result.action === 'updated') vatUpdated++;
           else if (result.action === 'unchanged') vatUnchanged++;
           if (result.error) vatErrors++;
         }
-        console.log(`   VAT Progress: ${Math.min(i + vatBatchSize, vatCustomers.length)}/${vatCustomers.length} (TRN: ${trnFetched} fetched)`);
+        // console.log(`   VAT Progress: ${Math.min(i + vatBatchSize, vatCustomers.length)}/${vatCustomers.length} (TRN: ${trnFetched} fetched)`);
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       
@@ -530,13 +580,15 @@ class ZohoBooksService {
       const totalErrors = errors + vatErrors;
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       
-      console.log(`\n${'='.repeat(70)}`);
-      console.log(`✅ SYNC COMPLETED in ${duration} seconds for ${company.name}`);
-      console.log(`${'='.repeat(70)}`);
-      console.log(`📊 Results: Created: ${totalCreated}, Updated: ${totalUpdated}, Unchanged: ${totalUnchanged}, Errors: ${totalErrors}`);
-      console.log(`${'='.repeat(70)}\n`);
+      // console.log(`\n${'='.repeat(70)}`);
+      // console.log(`✅ SYNC COMPLETED in ${duration} seconds for ${company.name}`);
+      // console.log(`${'='.repeat(70)}`);
+      // console.log(`📊 Results: Created: ${totalCreated}, Updated: ${totalUpdated}, Unchanged: ${totalUnchanged}, Errors: ${totalErrors}`);
+      // console.log(`${'='.repeat(70)}\n`);
       
-      await redisService.del(this.CACHE_KEYS.ALL_CONTACTS(company._id)).catch(() => {});
+      // Clear cache after sync
+      this._clearCache(this.CACHE_KEYS.ALL_CONTACTS(company._id));
+      // await redisService.del(this.CACHE_KEYS.ALL_CONTACTS(company._id)).catch(() => {});
       
       return {
         success: true,
@@ -552,7 +604,7 @@ class ZohoBooksService {
         lastSyncDate: new Date().toISOString()
       };
     } catch (error) {
-      console.error('❌ Sync error:', error);
+      // console.error('❌ Sync error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -561,6 +613,7 @@ class ZohoBooksService {
     try {
       const contactData = fullContact || zc;
       const mapped = this._mapZohoContactToCustomer(contactData);
+      
       if (!mapped.email || mapped.email.trim() === '') {
         mapped.email = null;
       }
@@ -574,6 +627,7 @@ class ZohoBooksService {
       if (existingCustomer) {
         const zohoLastModified = contactData.last_modified_time;
         const storedLastModified = existingCustomer.lastModifiedTime;
+        
         if (zohoLastModified !== storedLastModified) {
           await Customer.findOneAndUpdate(
             { companyId: companyId, zohoId: mapped.zohoId },
@@ -615,7 +669,7 @@ class ZohoBooksService {
         return { action: 'created' };
       }
     } catch (error) {
-      console.error(`   ❌ Error: ${error.message}`);
+      // console.error(`   ❌ Error: ${error.message}`);
       return { action: 'error', error: error.message };
     }
   }
@@ -625,6 +679,7 @@ class ZohoBooksService {
     let page = 1;
     const perPage = 200;
     let hasMorePages = true;
+    
     while (hasMorePages) {
       try {
         let url = `/items?page=${page}&per_page=${perPage}&filter_by=Status.All`;
@@ -632,12 +687,14 @@ class ZohoBooksService {
           url += `&filter_by=Date.Modified.After.${lastSyncDate}`;
         }
         const result = await this._request('GET', url);
+        
         if (result.success && result.data?.items) {
           const items = result.data.items;
           allItems.push(...items);
           const pageContext = result.data.page_context || {};
           hasMorePages = pageContext.has_more_page === true;
-          console.log(`📥 Page ${page}: ${items.length} items (Total: ${allItems.length})`);
+          // console.log(`📥 Page ${page}: ${items.length} items (Total: ${allItems.length})`);
+          
           if (hasMorePages) {
             page++;
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -650,15 +707,16 @@ class ZohoBooksService {
         hasMorePages = false;
       }
     }
+    
     return { success: true, items: allItems };
   }
 
   async syncItemsToDatabase(company, incremental = true) {
     try {
       this.setCompany(company._id, company.zohoOrganizationId);
-      console.log(`\n${'='.repeat(70)}`);
-      console.log(`🔄 Starting Item Sync for Company: ${company.name} (${company.code})`);
-      console.log(`${'='.repeat(70)}`);
+      // console.log(`\n${'='.repeat(70)}`);
+      // console.log(`🔄 Starting Item Sync for Company: ${company.name} (${company.code})`);
+      // console.log(`${'='.repeat(70)}`);
       
       let lastSyncDate = null;
       if (incremental) {
@@ -666,6 +724,7 @@ class ZohoBooksService {
           companyId: company._id,
           lastSyncedAt: { $ne: null }
         }).sort({ lastSyncedAt: -1 });
+        
         if (lastSyncedItem && lastSyncedItem.lastSyncedAt) {
           const syncDate = new Date(lastSyncedItem.lastSyncedAt);
           syncDate.setHours(syncDate.getHours() - 1);
@@ -677,8 +736,9 @@ class ZohoBooksService {
       if (!fetchResult.success) {
         throw new Error(fetchResult.error || 'Failed to fetch items from Zoho');
       }
+      
       const zohoItems = fetchResult.items || [];
-      console.log(`✅ Fetched ${zohoItems.length} items from Zoho`);
+      // console.log(`✅ Fetched ${zohoItems.length} items from Zoho`);
       
       let created = 0;
       let updated = 0;
@@ -704,6 +764,7 @@ class ZohoBooksService {
             );
             updated++;
           } else {
+ 
             unchanged++;
           }
         } else {
@@ -712,8 +773,12 @@ class ZohoBooksService {
         }
       }
       
-      console.log(`📊 Item Sync Results: Created: ${created}, Updated: ${updated}, Unchanged: ${unchanged}`);
-      await redisService.del(this.CACHE_KEYS.ALL_ITEMS(company._id)).catch(() => {});
+      // console.log(`📊 Item Sync Results: Created: ${created}, Updated: ${updated}, Unchanged: ${unchanged}`);
+      
+      // Clear cache after sync
+      this._clearCache(this.CACHE_KEYS.ALL_ITEMS(company._id));
+      // await redisService.del(this.CACHE_KEYS.ALL_ITEMS(company._id)).catch(() => {});
+      
       return { success: true, created, updated, unchanged, total: zohoItems.length };
     } catch (error) {
       console.error('❌ Item sync error:', error);
@@ -761,17 +826,20 @@ class ZohoBooksService {
 
     let email = zohoContact.email || '';
     let phone = zohoContact.phone || '';
+    
     if (!email && zohoContact.contact_persons && zohoContact.contact_persons.length > 0) {
       const primary = zohoContact.contact_persons.find(cp => cp.is_primary_contact) || zohoContact.contact_persons[0];
       email = primary.email || '';
       phone = primary.mobile || primary.phone || '';
     }
+    
     const finalEmail = email && email.trim() !== '' ? email.toLowerCase().trim() : null;
     
     const currencyCode = zohoContact.currency_code || 'AED';
     const allowedCurrencies = ['AED', 'SAR', 'KWD', 'QAR', 'BHD', 'OMR', 'USD', 'EUR', 'GBP'];
     let finalCurrencyCode = allowedCurrencies.includes(currencyCode) ? currencyCode : 'AED';
     let currencyWarning = null;
+    
     if (!allowedCurrencies.includes(currencyCode)) {
       console.warn(`⚠️ Unsupported currency "${currencyCode}" for customer "${zohoContact.contact_name}". Defaulting to AED.`);
       finalCurrencyCode = 'AED';
@@ -814,6 +882,7 @@ class ZohoBooksService {
       };
       return emirateCodeMap[zohoContact.place_of_contact] || 'Dubai';
     }
+    
     const countryCodeMap = {
       'SA': 'Saudi Arabia',
       'KW': 'Kuwait',
@@ -857,23 +926,38 @@ class ZohoBooksService {
   async getContact(contactId) {
     const { companyId } = this.getCompanyContext();
     const cacheKey = this.CACHE_KEYS.CONTACT(contactId, companyId);
+    
     try {
-      const cachedData = await redisService.get(cacheKey);
+      // Check memory cache first
+      const cachedData = this._getFromCache(cacheKey);
       if (cachedData) {
         return { success: true, contact: cachedData, source: 'cache' };
       }
+      
+      // Check Redis cache (commented out)
+      // const cachedData = await redisService.get(cacheKey);
+      // if (cachedData) {
+      //   return { success: true, contact: cachedData, source: 'cache' };
+      // }
+      
       const result = await this._request('GET', `/contacts/${contactId}`);
       if (result.success && result.data?.contact) {
         const contact = result.data.contact;
-        await redisService.set(cacheKey, contact, 600);
+        this._setToCache(cacheKey, contact, 600);
+        // await redisService.set(cacheKey, contact, 600);
         return { success: true, contact, source: 'api' };
       }
       return result;
     } catch (error) {
-      const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      // Try fallback cache
+      const fallbackCache = this._getFromCache(cacheKey);
       if (fallbackCache) {
         return { success: true, contact: fallbackCache, source: 'cache-fallback' };
       }
+      // const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      // if (fallbackCache) {
+      //   return { success: true, contact: fallbackCache, source: 'cache-fallback' };
+      // }
       return { success: false, error: error.message };
     }
   }
@@ -883,52 +967,83 @@ class ZohoBooksService {
     const cacheKey = this.CACHE_KEYS.ALL_CONTACTS(companyId);
     const loadingFlagKey = `${cacheKey}:loading`;
     let isLoadingFlagSet = false;
+    
     try {
       const bypassCache = params.bypassCache === true;
+      
       if (!bypassCache) {
-        const cachedData = await redisService.get(cacheKey);
+        // Check memory cache first
+        const cachedData = this._getFromCache(cacheKey);
         if (cachedData) {
           return { success: true, contacts: cachedData, source: 'cache' };
         }
+        
+        // Check Redis cache (commented out)
+        // const cachedData = await redisService.get(cacheKey);
+        // if (cachedData) {
+        //   return { success: true, contacts: cachedData, source: 'cache' };
+        // }
       }
-      const isAlreadyLoading = await redisService.get(loadingFlagKey);
+      
+      // Check if already loading (to prevent duplicate requests)
+      const isAlreadyLoading = this._getFromCache(loadingFlagKey);
       if (isAlreadyLoading && !bypassCache) {
         await new Promise(r => setTimeout(r, 500));
-        const retryCache = await redisService.get(cacheKey);
+        const retryCache = this._getFromCache(cacheKey);
         if (retryCache) {
           return { success: true, contacts: retryCache, source: 'cache' };
         }
       }
-      await redisService.set(loadingFlagKey, true, 30);
+      
+      // Set loading flag
+      this._setToCache(loadingFlagKey, true, 30);
+      // await redisService.set(loadingFlagKey, true, 30);
       isLoadingFlagSet = true;
+      
       const queryParams = { ...params };
       if (params.lastSyncDate) {
         queryParams.filter_by = `Date.Modified.After.${params.lastSyncDate}`;
       }
       delete queryParams.bypassCache;
       delete queryParams.lastSyncDate;
+      
       const queryString = new URLSearchParams(queryParams).toString();
       const endpoint = `/contacts${queryString ? '?' + queryString : ''}`;
-      console.log(`📡 Fetching contacts from Zoho with params:`, queryParams);
+      // console.log(`📡 Fetching contacts from Zoho with params:`, queryParams);
+      
       const result = await this._request('GET', endpoint);
+      
       if (result.success) {
         const contacts = result.data.contacts || [];
-        console.log(`✅ Retrieved ${contacts.length} contacts from Zoho`);
+        // console.log(`✅ Retrieved ${contacts.length} contacts from Zoho`);
+        
         if (!bypassCache) {
-          await redisService.set(cacheKey, contacts, 600);
+          this._setToCache(cacheKey, contacts, 600);
+          // await redisService.set(cacheKey, contacts, 600);
         }
-        return { success: true, contacts, source: 'api', totalCount: result.data.page_context?.total || contacts.length };
+        
+        return { 
+          success: true, 
+          contacts, 
+          source: 'api', 
+          totalCount: result.data.page_context?.total || contacts.length 
+        };
       }
       return result;
     } catch (error) {
-      const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      const fallbackCache = this._getFromCache(cacheKey);
       if (fallbackCache) {
         return { success: true, contacts: fallbackCache, source: 'cache-fallback' };
       }
+      // const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      // if (fallbackCache) {
+      //   return { success: true, contacts: fallbackCache, source: 'cache-fallback' };
+      // }
       return { success: false, error: error.message };
     } finally {
       if (isLoadingFlagSet) {
-        await redisService.del(loadingFlagKey).catch(() => {});
+        this._clearCache(loadingFlagKey);
+        // await redisService.del(loadingFlagKey).catch(() => {});
       }
     }
   }
@@ -936,14 +1051,18 @@ class ZohoBooksService {
   async createContact(customerData) {
     const { taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber, currencyCode } = customerData;
     let effectivePlaceOfSupply = placeOfSupply;
+    
     if (taxTreatment === 'vat_registered' && uaeEmirate) {
       effectivePlaceOfSupply = uaeEmirate;
     }
+    
     const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(taxTreatment, effectivePlaceOfSupply);
     let currencyId = null;
+    
     if (currencyCode) {
       currencyId = await this._getCurrencyId(currencyCode);
     }
+    
     const contactPayload = {
       contact_name: customerData.name,
       company_name: customerData.companyName || '',
@@ -953,16 +1072,21 @@ class ZohoBooksService {
       country_code: countryCode,
       place_of_contact: placeOfSupplyCode
     };
+    
     if (currencyId) contactPayload.currency_id = currencyId;
+    
     const address = this._buildAddress(customerData);
     if (address && Object.values(address).some(v => v)) {
       contactPayload.billing_address = address;
     }
+    
     if ((taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
       contactPayload.tax_reg_no = taxRegistrationNumber;
     }
+    
     const cleanPayload = this._cleanPayload(contactPayload);
     const result = await this._request('POST', '/contacts', cleanPayload);
+    
     if (result.success && result.data?.contact) {
       await this.clearContactsCache();
       return {
@@ -982,28 +1106,35 @@ class ZohoBooksService {
       company_name: customerData.companyName || customerData.name,
       contact_persons: [this._buildContactPerson(customerData)]
     };
+    
     if (taxTreatment) {
       const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(taxTreatment, placeOfSupply);
       contactPayload.tax_treatment = this._mapTaxTreatmentToZoho(taxTreatment);
       contactPayload.country_code = countryCode;
       contactPayload.place_of_contact = placeOfSupplyCode;
     }
+    
     if (currencyCode) {
       const currencyId = await this._getCurrencyId(currencyCode);
       if (currencyId) contactPayload.currency_id = currencyId;
     }
+    
     const address = this._buildAddress(customerData);
     if (address && Object.values(address).some(v => v)) {
       contactPayload.billing_address = address;
     }
+    
     if (taxTreatment && (taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
       contactPayload.tax_reg_no = taxRegistrationNumber;
     }
+    
     const cleanPayload = this._cleanPayload(contactPayload);
     const result = await this._request('PUT', `/contacts/${contactId}`, cleanPayload);
+    
     if (result.success && result.data?.contact) {
       await this.clearContactsCache();
-      await redisService.del(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
+      this._clearCache(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
+      // await redisService.del(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
       return {
         success: true,
         message: 'Contact updated successfully',
@@ -1017,7 +1148,8 @@ class ZohoBooksService {
     const result = await this._request('DELETE', `/contacts/${contactId}`);
     if (result.success) {
       await this.clearContactsCache();
-      await redisService.del(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
+      this._clearCache(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
+      // await redisService.del(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
       return { success: true, message: 'Contact deleted from Zoho Books' };
     }
     return result;
@@ -1025,18 +1157,24 @@ class ZohoBooksService {
 
   async clearContactsCache() {
     const { companyId } = this.getCompanyContext();
-    await Promise.all([
-      redisService.del(this.CACHE_KEYS.ALL_CONTACTS(companyId)),
-      redisService.delPattern(`zoho_contact_${companyId}:*`)
-    ]);
+    this._clearCache(this.CACHE_KEYS.ALL_CONTACTS(companyId));
+    this._clearCachePattern(`zoho_contact_${companyId}:`);
+    
+    // await Promise.all([
+    //   redisService.del(this.CACHE_KEYS.ALL_CONTACTS(companyId)),
+    //   redisService.delPattern(`zoho_contact_${companyId}:*`)
+    // ]);
   }
 
   async clearItemsCache() {
     const { companyId } = this.getCompanyContext();
-    await Promise.all([
-      redisService.del(this.CACHE_KEYS.ALL_ITEMS(companyId)),
-      redisService.delPattern(`zoho_item_${companyId}:*`)
-    ]);
+    this._clearCache(this.CACHE_KEYS.ALL_ITEMS(companyId));
+    this._clearCachePattern(`zoho_item_${companyId}:`);
+    
+    // await Promise.all([
+    //   redisService.del(this.CACHE_KEYS.ALL_ITEMS(companyId)),
+    //   redisService.delPattern(`zoho_item_${companyId}:*`)
+    // ]);
   }
 
   async getAllItems(params = {}) {
@@ -1044,31 +1182,49 @@ class ZohoBooksService {
     const cacheKey = this.CACHE_KEYS.ALL_ITEMS(companyId);
     const loadingFlagKey = `${cacheKey}:loading`;
     let isLoadingFlagSet = false;
+    
     try {
-      const cachedData = await redisService.get(cacheKey);
+      // Check memory cache first
+      const cachedData = this._getFromCache(cacheKey);
       if (cachedData && !params.forceRefresh) {
-        console.log('✅ Returning cached items');
+        // console.log('✅ Returning cached items');
         return { success: true, items: cachedData, source: 'cache', total: cachedData.length };
       }
-      const isAlreadyLoading = await redisService.get(loadingFlagKey);
+      
+      // Check Redis cache (commented out)
+      // const cachedData = await redisService.get(cacheKey);
+      // if (cachedData && !params.forceRefresh) {
+      //   console.log('✅ Returning cached items');
+      //   return { success: true, items: cachedData, source: 'cache', total: cachedData.length };
+      // }
+      
+      // Check if already loading
+      const isAlreadyLoading = this._getFromCache(loadingFlagKey);
       if (isAlreadyLoading) {
         await new Promise(r => setTimeout(r, 500));
-        const retryCache = await redisService.get(cacheKey);
+        const retryCache = this._getFromCache(cacheKey);
         if (retryCache) {
           return { success: true, items: retryCache, source: 'cache' };
         }
       }
-      await redisService.set(loadingFlagKey, true, 60);
+      
+      // Set loading flag
+      this._setToCache(loadingFlagKey, true, 60);
+      // await redisService.set(loadingFlagKey, true, 60);
       isLoadingFlagSet = true;
+      
       let allItems = [];
       let currentPage = 1;
       let hasMorePages = true;
+      
       console.log(`\n🔄 Fetching items from Zoho...`);
       const token = await this.getValidAccessToken();
       console.log('✅ Access token obtained');
+      
       while (hasMorePages) {
         const url = `${this.apiDomain}/items?organization_id=${this.organizationId}&page=${currentPage}&per_page=200`;
         console.log(`📥 Fetching page ${currentPage}...`);
+        
         try {
           const response = await axios.get(url, {
             headers: { 
@@ -1077,7 +1233,9 @@ class ZohoBooksService {
             },
             timeout: 30000
           });
+          
           console.log(`Response status: ${response.status}`);
+          
           if (response.data) {
             let items = [];
             if (response.data.items) {
@@ -1092,10 +1250,12 @@ class ZohoBooksService {
             } else {
               console.log(`⚠️ Unexpected response structure:`, Object.keys(response.data));
             }
+            
             if (items.length > 0) {
               allItems = [...allItems, ...items];
               const pageContext = response.data.page_context || {};
               hasMorePages = pageContext.has_more_page === true;
+              
               if (hasMorePages) {
                 currentPage++;
                 await new Promise(resolve => setTimeout(resolve, 200));
@@ -1121,11 +1281,16 @@ class ZohoBooksService {
           hasMorePages = false;
         }
       }
+      
       console.log(`\n📊 Total items fetched: ${allItems.length}`);
+      
       if (allItems.length > 0) {
-        await redisService.set(cacheKey, allItems, 600);
-        console.log('💾 Items cached in Redis');
+        this._setToCache(cacheKey, allItems, 600);
+        console.log('💾 Items cached in memory');
+        // await redisService.set(cacheKey, allItems, 600);
+        // console.log('💾 Items cached in Redis');
       }
+      
       return { 
         success: true, 
         items: allItems, 
@@ -1135,8 +1300,9 @@ class ZohoBooksService {
       };
     } catch (error) {
       console.error('\n❌ Zoho Items API Error:', error.message);
+      
       try {
-        const fallbackCache = await redisService.get(cacheKey);
+        const fallbackCache = this._getFromCache(cacheKey);
         if (fallbackCache) {
           console.log('⚠️ Using fallback cache');
           return { 
@@ -1147,9 +1313,22 @@ class ZohoBooksService {
             warning: 'Using cached data - API unavailable'
           };
         }
+        
+        // const fallbackCache = await redisService.get(cacheKey);
+        // if (fallbackCache) {
+        //   console.log('⚠️ Using fallback cache');
+        //   return { 
+        //     success: true, 
+        //     items: fallbackCache, 
+        //     source: 'cache-fallback',
+        //     total: fallbackCache.length,
+        //     warning: 'Using cached data - API unavailable'
+        //   };
+        // }
       } catch (cacheError) {
         console.error('Cache fallback failed:', cacheError.message);
       }
+      
       return { 
         success: false, 
         error: error.message,
@@ -1158,7 +1337,8 @@ class ZohoBooksService {
       };
     } finally {
       if (isLoadingFlagSet) {
-        await redisService.del(loadingFlagKey).catch(() => {});
+        this._clearCache(loadingFlagKey);
+        // await redisService.del(loadingFlagKey).catch(() => {});
       }
     }
   }
@@ -1166,22 +1346,36 @@ class ZohoBooksService {
   async getItem(itemId) {
     const { companyId } = this.getCompanyContext();
     const cacheKey = this.CACHE_KEYS.ITEM(itemId, companyId);
+    
     try {
-      const cachedData = await redisService.get(cacheKey);
+      // Check memory cache first
+      const cachedData = this._getFromCache(cacheKey);
       if (cachedData) {
         return { success: true, item: cachedData, source: 'cache' };
       }
+      
+      // Check Redis cache (commented out)
+      // const cachedData = await redisService.get(cacheKey);
+      // if (cachedData) {
+      //   return { success: true, item: cachedData, source: 'cache' };
+      // }
+      
       const result = await this._request('GET', `/items/${itemId}`);
       if (result.success && result.data?.item) {
-        await redisService.set(cacheKey, result.data.item, 600);
+        this._setToCache(cacheKey, result.data.item, 600);
+        // await redisService.set(cacheKey, result.data.item, 600);
         return { success: true, item: result.data.item, source: 'api' };
       }
       return result;
     } catch (error) {
-      const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      const fallbackCache = this._getFromCache(cacheKey);
       if (fallbackCache) {
         return { success: true, item: fallbackCache, source: 'cache-fallback' };
       }
+      // const fallbackCache = await redisService.get(cacheKey).catch(() => null);
+      // if (fallbackCache) {
+      //   return { success: true, item: fallbackCache, source: 'cache-fallback' };
+      // }
       return { success: false, error: error.message };
     }
   }
@@ -1196,7 +1390,9 @@ class ZohoBooksService {
         unit: itemData.unit,
         product_type: itemData.product_type || 'goods'
       };
+      
       const result = await this._request('POST', '/items', this._cleanPayload(payload));
+      
       if (result.success && result.data?.item) {
         await this.clearItemsCache();
         return { success: true, zohoId: result.data.item.item_id, item: result.data.item };
@@ -1217,10 +1413,13 @@ class ZohoBooksService {
         unit: itemData.unit,
         product_type: itemData.product_type
       };
+      
       const result = await this._request('PUT', `/items/${itemId}`, this._cleanPayload(payload));
+      
       if (result.success && result.data?.item) {
         await this.clearItemsCache();
-        await redisService.del(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
+        this._clearCache(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
+        // await redisService.del(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
         return { success: true, item: result.data.item };
       }
       return result;
@@ -1233,7 +1432,8 @@ class ZohoBooksService {
     const result = await this._request('DELETE', `/items/${itemId}`);
     if (result.success) {
       await this.clearItemsCache();
-      await redisService.del(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
+      this._clearCache(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
+      // await redisService.del(this.CACHE_KEYS.ITEM(itemId, this.currentCompanyId));
       return { success: true, message: 'Item deleted from Zoho Books' };
     }
     return result;
@@ -1243,9 +1443,11 @@ class ZohoBooksService {
     try {
       const token = await this.getValidAccessToken();
       let currencyId = estimateData.currency_id;
+      
       if (!currencyId && estimateData.currency_code) {
         currencyId = await this._getCurrencyId(estimateData.currency_code);
       }
+      
       const lineItems = estimateData.line_items.map(item => {
         const lineItem = {
           item_id: item.item_id,
@@ -1255,18 +1457,22 @@ class ZohoBooksService {
           item_total: item.item_total,
           item_order: item.item_order
         };
+        
         if (item.discount && item.discount > 0) {
           lineItem.discount = item.discount;
           lineItem.discount_amount = item.discount_amount || 0;
         }
+        
         if (item.tax_id && item.tax_percentage > 0) {
           lineItem.tax_id = item.tax_id;
           lineItem.tax_percentage = item.tax_percentage;
           lineItem.tax_name = item.tax_name || 'VAT';
           lineItem.tax_type = 'tax';
         }
+        
         return lineItem;
       });
+      
       const payload = {
         customer_id: estimateData.customer_id,
         date: estimateData.date,
@@ -1280,24 +1486,30 @@ class ZohoBooksService {
         tax_treatment: estimateData.tax_treatment || 'vat_not_registered',
         place_of_supply: estimateData.place_of_supply || 'AE'
       };
+      
       if (estimateData.estimate_number) {
         payload.estimate_number = estimateData.estimate_number;
       }
+      
       if (currencyId) {
         payload.currency_id = currencyId;
       }
+      
       if (estimateData.tax_id && estimateData.tax_percentage > 0) {
         payload.tax_id = estimateData.tax_id;
       }
+      
       const hasItemLevelDiscount = lineItems.some(item => item.discount && item.discount > 0);
       if (estimateData.discount && estimateData.discount > 0 && !hasItemLevelDiscount) {
         payload.discount = estimateData.discount;
         payload.is_discount_before_tax = false;
         payload.discount_type = 'entity_level';
       }
+      
       if (estimateData.is_inclusive_tax !== undefined) {
         payload.is_inclusive_tax = estimateData.is_inclusive_tax;
       }
+      
       if (estimateData.contact_persons_associated) payload.contact_persons_associated = estimateData.contact_persons_associated;
       if (estimateData.template_id) payload.template_id = estimateData.template_id;
       if (estimateData.custom_fields) payload.custom_fields = estimateData.custom_fields;
@@ -1308,8 +1520,10 @@ class ZohoBooksService {
       if (estimateData.salesperson_name) payload.salesperson_name = estimateData.salesperson_name;
       if (estimateData.custom_body) payload.custom_body = estimateData.custom_body;
       if (estimateData.custom_subject) payload.custom_subject = estimateData.custom_subject;
+      
       const cleanPayload = this._cleanPayload(payload);
       console.log('📤 Sending estimate to Zoho:', JSON.stringify(cleanPayload, null, 2));
+      
       const response = await axios.post(
         `${this.apiDomain}/estimates?organization_id=${this.organizationId}`,
         cleanPayload,
@@ -1321,11 +1535,13 @@ class ZohoBooksService {
           timeout: 30000
         }
       );
+      
       if (response.data && response.data.estimate) {
         console.log('✅ Zoho estimate created successfully:', {
           estimateId: response.data.estimate.estimate_id,
           estimateNumber: response.data.estimate.estimate_number
         });
+        
         return {
           success: true,
           estimateId: response.data.estimate.estimate_id,

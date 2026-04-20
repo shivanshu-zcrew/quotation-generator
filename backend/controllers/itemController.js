@@ -1,5 +1,5 @@
 const Item = require('../models/items');
-const Company = require('../models/company'); // Add this import
+const Company = require('../models/company');
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 const zohoBooksService = require('../zoho/customerServices');
 const ItemSyncService = require('../utils/itemsSync');
@@ -16,6 +16,42 @@ const PAGINATION_CACHE_TTL = 300;
 
 // Track sync status per company
 const syncStatusMap = new Map(); // key: companyId, value: { isSyncing, lastSyncTime, lastSyncResult }
+
+// In-memory cache for search results and stats
+const memoryCache = new Map();
+const CACHE_TTL = 600000; // 10 minutes in milliseconds
+
+// Helper function for in-memory cache
+function getFromCache(key) {
+  const cached = memoryCache.get(key);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data;
+  }
+  if (cached) {
+    memoryCache.delete(key);
+  }
+  return null;
+}
+
+function setToCache(key, data, ttlSeconds = 600) {
+  memoryCache.set(key, {
+    data,
+    expiry: Date.now() + (ttlSeconds * 1000)
+  });
+}
+
+function clearCache(pattern) {
+  if (pattern) {
+    // Clear keys matching pattern
+    for (const key of memoryCache.keys()) {
+      if (key.includes(pattern)) {
+        memoryCache.delete(key);
+      }
+    }
+  } else {
+    memoryCache.clear();
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // HELPER FUNCTIONS
@@ -154,7 +190,7 @@ exports.getAllItems = async (req, res) => {
     
     res.setHeader('X-Data-Source', result.source);
     res.setHeader('X-Cache-Hit', result.source === 'mongodb_cache' ? 'true' : 'false');
-    console.log(">>>>>>>>>>", result.data.length);
+    // console.log(">>>>>>>>>>", result.data.length);
     res.json({
       success: true,
       data: result.data,
@@ -283,6 +319,11 @@ exports.syncItems = async (req, res) => {
     // Perform sync in background
     const result = await ItemSyncService.syncFromZoho(company);
     
+    // Clear cache after sync
+    clearCache(`zoho_items_${companyId}`);
+    clearCache(`zoho_items_stats_${companyId}`);
+    clearCache(`zoho_items_search_${companyId}`);
+    
     // Update sync status
     setSyncStatusForCompany(companyId, {
       isSyncing: false,
@@ -290,7 +331,7 @@ exports.syncItems = async (req, res) => {
       lastSyncResult: result
     });
     
-    console.log(`✅ Item sync completed for ${company.name}: ${result.created} created, ${result.updated} updated`);
+    // console.log(`✅ Item sync completed for ${company.name}: ${result.created} created, ${result.updated} updated`);
     
   } catch (error) {
     console.error('❌ Error syncing items:', error);
@@ -365,10 +406,10 @@ exports.searchItems = async (req, res) => {
     const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const parsedOffset = Math.max(parseInt(offset, 10) || 0, 0);
 
-    const redisService = require('../config/redisService');
+    // Use in-memory cache instead of Redis
     const cacheKey = `zoho_items_search_${companyId}:${searchTerm}:${parsedLimit}:${parsedOffset}`;
-
-    const cachedResult = await redisService.get(cacheKey).catch(() => null);
+    const cachedResult = getFromCache(cacheKey);
+    
     if (cachedResult) {
       return res.status(200).json({
         success: true,
@@ -422,7 +463,8 @@ exports.searchItems = async (req, res) => {
       hasMore: parsedOffset + parsedLimit < searchResults.length
     };
 
-    await redisService.set(cacheKey, responseData, 300).catch(() => {});
+    // Store in memory cache
+    setToCache(cacheKey, responseData, 300);
 
     res.status(200).json({
       success: true,
@@ -454,10 +496,10 @@ exports.getItemsStats = async (req, res) => {
       });
     }
     
-    const redisService = require('../config/redisService');
+    // Use in-memory cache instead of Redis
     const cacheKey = `zoho_items_stats_${companyId}`;
-
-    const cachedStats = await redisService.get(cacheKey).catch(() => null);
+    const cachedStats = getFromCache(cacheKey);
+    
     if (cachedStats) {
       return res.status(200).json({
         success: true,
@@ -530,7 +572,8 @@ exports.getItemsStats = async (req, res) => {
     stats.averagePrice = validPrices.length > 0 ? stats.totalValue / validPrices.length : 0;
     stats.lowestPrice = stats.lowestPrice === Infinity ? 0 : stats.lowestPrice;
 
-    await redisService.set(cacheKey, stats, 600).catch(() => {});
+    // Store in memory cache
+    setToCache(cacheKey, stats, 600);
 
     res.status(200).json({
       success: true,
@@ -553,20 +596,20 @@ exports.getItemsStats = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────
 exports.clearItemsCache = async (req, res) => {
   try {
-    const redisService = require('../config/redisService');
     const companyId = req.headers['x-company-id'] || req.query.companyId;
 
-    let patterns = ['zoho_items*', 'zoho_item:*'];
+    let patterns = ['zoho_items', 'zoho_item'];
     
     if (companyId) {
-      patterns = [`zoho_items_${companyId}*`, `zoho_item_${companyId}:*`];
+      patterns = [`zoho_items_${companyId}`, `zoho_item_${companyId}`];
     }
 
     let totalCleared = 0;
 
+    // Clear from memory cache
     for (const pattern of patterns) {
-      const result = await redisService.delPattern(pattern).catch(() => false);
-      if (result) totalCleared++;
+      clearCache(pattern);
+      totalCleared++;
     }
 
     res.status(200).json({
