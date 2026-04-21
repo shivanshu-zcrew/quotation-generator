@@ -1,4 +1,3 @@
-// controllers/quotationController.js
 const mongoose = require("mongoose");
 const { Quotation, ExchangeRateService, Company } = require('../models/quotation');
 const { Customer } = require('../models/customer');
@@ -8,6 +7,8 @@ const mime = require('mime-types')
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
+const imageCompressor = require('../utils/imageCompressor');
+
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
 // ─────────────────────────────────────────────────────────────
@@ -32,207 +33,7 @@ let _browser = null;
 //   _browser.on('disconnected', () => { _browser = null; });
 //   return _browser;
 // };
-
-// class BrowserPool {
-//   constructor(options = {}) {
-//     this.pool = [];
-//     this.activeCount = 0;
-//     this.waitingQueue = [];
-//     this.maxConcurrent = options.maxConcurrent || Math.max(1, os.cpus().length - 1);
-//     this.maxQueueSize = options.maxQueueSize || 50;
-//     this.browserTTL = options.browserTTL || 5 * 60 * 1000; // 5 minutes
-//     this.idleTimeout = options.idleTimeout || 30 * 1000; // 30 seconds
-    
-//     // Metrics
-//     this.metrics = {
-//       totalRequests: 0,
-//       successfulRequests: 0,
-//       failedRequests: 0,
-//       averageResponseTime: 0,
-//       peakConcurrent: 0
-//     };
-    
-//     this.browserOptions = {
-//       headless: true,
-//       args: [
-//         '--no-sandbox',
-//         '--disable-setuid-sandbox',
-//         '--disable-dev-shm-usage',
-//         '--disable-gpu',
-//         '--disable-accelerated-2d-canvas',
-//         '--disable-web-security',
-//         '--disable-features=VizDisplayCompositor',
-//         '--disable-font-subpixel-positioning',
-//         '--disable-software-rasterizer',
-//         '--disable-extensions',
-//         '--disable-component-extensions-with-background-pages',
-//         '--disable-default-apps',
-//         '--disable-sync',
-//         '--disable-translate',
-//         '--hide-scrollbars',
-//         '--mute-audio',
-//         '--no-first-run',
-//         '--no-zygote',
-//         '--single-process',
-//         '--memory-pressure-off',
-//         '--max_old_space_size=512',
-//       ],
-//       ...options.browserOptions
-//     };
-    
-//     // Start cleanup interval
-//     this.cleanupInterval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
-//   }
-  
-//   async acquire() {
-//     // Check queue size
-//     if (this.waitingQueue.length >= this.maxQueueSize) {
-//       throw new Error('Server is busy. Please try again later.');
-//     }
-    
-//     return new Promise((resolve, reject) => {
-//       const request = { resolve, reject, timestamp: Date.now() };
-      
-//       const availableBrowser = this.pool.find(b => !b.isBusy && !b.isExpired);
-      
-//       if (availableBrowser && this.activeCount < this.maxConcurrent) {
-//         this.activeCount++;
-//         this.metrics.peakConcurrent = Math.max(this.metrics.peakConcurrent, this.activeCount);
-//         availableBrowser.isBusy = true;
-//         availableBrowser.lastUsed = Date.now();
-//         resolve(availableBrowser.browser);
-//       } else {
-//         this.waitingQueue.push(request);
-//         this.tryCreateNewBrowser();
-//       }
-//     });
-//   }
-  
-//   async tryCreateNewBrowser() {
-//     if (this.pool.length + this.activeCount >= this.maxConcurrent) {
-//       return;
-//     }
-    
-//     try {
-//       const browser = await puppeteer.launch(this.browserOptions);
-      
-//       // Handle browser disconnection
-//       browser.on('disconnected', () => {
-//         const index = this.pool.findIndex(b => b.browser === browser);
-//         if (index > -1) {
-//           this.pool.splice(index, 1);
-//         }
-//       });
-      
-//       const browserInstance = {
-//         browser,
-//         isBusy: false,
-//         createdAt: Date.now(),
-//         lastUsed: Date.now(),
-//         isExpired: false
-//       };
-      
-//       this.pool.push(browserInstance);
-//       this.processQueue();
-//     } catch (error) {
-//       console.error('Failed to launch browser:', error);
-//     }
-//   }
-  
-//   async release(browser) {
-//     const instance = this.pool.find(b => b.browser === browser);
-//     if (instance) {
-//       instance.isBusy = false;
-//       instance.lastUsed = Date.now();
-//       this.activeCount--;
-      
-//       // Check if browser is expired
-//       if (Date.now() - instance.createdAt > this.browserTTL) {
-//         await this.destroyBrowser(instance);
-//       }
-//     }
-    
-//     this.processQueue();
-//   }
-  
-//   async processQueue() {
-//     while (this.waitingQueue.length > 0 && this.activeCount < this.maxConcurrent) {
-//       const availableBrowser = this.pool.find(b => !b.isBusy && !b.isExpired);
-//       if (!availableBrowser) break;
-      
-//       const request = this.waitingQueue.shift();
-//       this.activeCount++;
-//       availableBrowser.isBusy = true;
-//       availableBrowser.lastUsed = Date.now();
-//       request.resolve(availableBrowser.browser);
-//     }
-//   }
-  
-//   async destroyBrowser(instance) {
-//     const index = this.pool.indexOf(instance);
-//     if (index > -1) {
-//       this.pool.splice(index, 1);
-//       try {
-//         await instance.browser.close();
-//       } catch (error) {
-//         console.error('Error closing browser:', error);
-//       }
-//     }
-//   }
-  
-//   async cleanup() {
-//     const now = Date.now();
-//     const toRemove = this.pool.filter(b => 
-//       !b.isBusy && (now - b.lastUsed > this.idleTimeout || now - b.createdAt > this.browserTTL)
-//     );
-    
-//     for (const instance of toRemove) {
-//       await this.destroyBrowser(instance);
-//     }
-//   }
-  
-//   async shutdown() {
-//     clearInterval(this.cleanupInterval);
-//     for (const instance of this.pool) {
-//       await this.destroyBrowser(instance);
-//     }
-//     this.pool = [];
-//     this.waitingQueue = [];
-//   }
-  
-//   getMetrics() {
-//     return {
-//       ...this.metrics,
-//       activeBrowsers: this.pool.filter(b => b.isBusy).length,
-//       idleBrowsers: this.pool.filter(b => !b.isBusy).length,
-//       totalBrowsers: this.pool.length,
-//       queueLength: this.waitingQueue.length,
-//       maxConcurrent: this.maxConcurrent
-//     };
-//   }
-// }
-
-// // Initialize browser pool
-// const browserPool = new BrowserPool({
-//   maxConcurrent: parseInt(process.env.PDF_MAX_CONCURRENT) || Math.max(1, os.cpus().length - 1),
-//   maxQueueSize: parseInt(process.env.PDF_MAX_QUEUE) || 50,
-//   browserTTL: 5 * 60 * 1000,
-//   idleTimeout: 30 * 1000
-// });
-
-// // Graceful shutdown
-// process.on('SIGTERM', async () => {
-//   console.log('SIGTERM received, closing browser pool...');
-//   await browserPool.shutdown();
-//   process.exit(0);
-// });
-
-// process.on('SIGINT', async () => {
-//   console.log('SIGINT received, closing browser pool...');
-//   await browserPool.shutdown();
-//   process.exit(0);
-// });
-
+ 
 // ─────────────────────────────────────────────────────────────
 // Health check endpoint for PDF service
 // ─────────────────────────────────────────────────────────────
@@ -909,15 +710,11 @@ exports.createQuotation = async (req, res) => {
   // ============================================================
   // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
   // ============================================================
-  const imageCompressor = require('../utils/imageCompressor');
-  
-  console.log("📸 Original payload size estimate:", JSON.stringify(req.body).length, "chars");
-  
+   
   // Compress quotation images (item images)
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-    console.log("📸 Compressing quotation images...");
-    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
+     compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
       maxWidth: 800,
       quality: 70,
       maxSizeKB: 300
@@ -927,8 +724,7 @@ exports.createQuotation = async (req, res) => {
   // Compress terms images
   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-    console.log(`📸 Compressing ${termsImages.length} terms images...`);
-    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
+     compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
       maxWidth: 600,
       quality: 65,
       maxSizeKB: 200
@@ -938,23 +734,21 @@ exports.createQuotation = async (req, res) => {
   // Compress internal documents that are images
   let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-    console.log(`📸 Compressing ${internalDocuments.length} internal documents...`);
-    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
+     compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
       maxWidth: 1000,
       quality: 75,
       maxSizeKB: 400
     });
   }
   
-  console.log("📸 Compressed payload size estimate:", JSON.stringify({
-    ...req.body,
-    quotationImages: compressedQuotationImages,
-    termsImages: compressedTermsImages,
-    internalDocuments: compressedInternalDocuments
-  }).length, "chars");
+  // console.log("📸 Compressed payload size estimate:", JSON.stringify({
+  //   ...req.body,
+  //   quotationImages: compressedQuotationImages,
+  //   termsImages: compressedTermsImages,
+  //   internalDocuments: compressedInternalDocuments
+  // }).length, "chars");
   // ============================================================
-
-  console.log("📸 Received quotationImages:", Object.keys(compressedQuotationImages || {}).length, "items with images");
+ 
 
   if (!projectName) {
     return res.status(400).json({ message: 'Project Name is required' });
@@ -1008,8 +802,7 @@ exports.createQuotation = async (req, res) => {
     console.error('Error getting exchange rates:', rateError.message);
   }
 
-  // Process items and UPLOAD images to Cloudinary (using COMPRESSED images)
-  const processedItems = [];
+   const processedItems = [];
   
   for (let i = 0; i < validatedItems.length; i++) {
     const item = validatedItems[i];
@@ -1017,29 +810,24 @@ exports.createQuotation = async (req, res) => {
     
     let imageUrls = [];
     
-    // ✅ Use compressedQuotationImages instead of quotationImages
-    if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
-      console.log(`📸 Item ${i + 1}: Processing ${compressedQuotationImages[i].length} compressed images`);
-      
+     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
+       
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
         
         if (imageData && typeof imageData === 'string') {
-          // If it's base64 (compressed), upload to Cloudinary
-          if (imageData.startsWith('data:image')) {
+           if (imageData.startsWith('data:image')) {
             try {
               console.log(`📤 Uploading compressed image ${imgIdx + 1} for item ${i + 1}...`);
               const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
               if (uploaded && uploaded.url) {
                 imageUrls.push(uploaded.url);
-                console.log(`✅ Uploaded: ${uploaded.url.substring(0, 60)}...`);
-              }
+               }
             } catch (err) {
               console.error(`❌ Upload failed:`, err.message);
             }
           }
-          // If it's already a Cloudinary URL, keep it
-          else if (imageData.includes('cloudinary.com')) {
+           else if (imageData.includes('cloudinary.com')) {
             imageUrls.push(imageData);
             console.log(`📎 Keeping existing Cloudinary URL`);
           }
@@ -1047,8 +835,7 @@ exports.createQuotation = async (req, res) => {
       }
     }
     
-    // Also check item.images array (alternative format)
-    if (item.images && Array.isArray(item.images)) {
+     if (item.images && Array.isArray(item.images)) {
       for (const img of item.images) {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
           try {
@@ -1065,8 +852,7 @@ exports.createQuotation = async (req, res) => {
       }
     }
     
-    // Remove duplicates
-    imageUrls = [...new Set(imageUrls)];
+     imageUrls = [...new Set(imageUrls)];
     
     console.log(`📸 Item ${i + 1}: Final ${imageUrls.length} images stored`);
     
@@ -1093,8 +879,7 @@ exports.createQuotation = async (req, res) => {
   const discount = parseFloat(discountPercent) || 0;
   const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
-  // Process terms images (upload to Cloudinary) - using COMPRESSED images
-  let processedTermsImages = [];
+   let processedTermsImages = [];
   if (compressedTermsImages && compressedTermsImages.length > 0) {
     console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
     
@@ -1108,11 +893,9 @@ exports.createQuotation = async (req, res) => {
         fileName = imageData.fileName || `terms_image_${i + 1}`;
       }
       
-      // Only upload if it's base64 (compressed new image)
-      if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
+       if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
         try {
-          console.log(`📤 Uploading compressed terms image ${i + 1}...`);
-          const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+           const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
           if (uploaded && uploaded.url) {
             processedTermsImages.push({
               url: uploaded.url,
@@ -1120,18 +903,15 @@ exports.createQuotation = async (req, res) => {
               fileName: fileName,
               uploadedAt: new Date()
             });
-            console.log(`✅ Terms image ${i + 1} uploaded`);
-          }
+           }
         } catch (uploadError) {
           console.error('Failed to upload terms image:', uploadError.message);
         }
       }
-      // If it's already a Cloudinary URL object
-      else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+       else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
         processedTermsImages.push(imageData);
       }
-      // If it's a string Cloudinary URL
-      else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+       else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
         processedTermsImages.push({
           url: imageData,
           publicId: imageData.split('/').pop().split('.')[0],
@@ -1144,8 +924,7 @@ exports.createQuotation = async (req, res) => {
 
   const quotationNumber = generateQuotationNumber(company.code);
 
-  // Process internal documents - using COMPRESSED documents
-  let processedInternalDocs = [];
+   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
     console.log(`📸 Processing ${compressedInternalDocuments.length} compressed internal documents`);
     processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
@@ -1228,8 +1007,7 @@ exports.createQuotation = async (req, res) => {
   await quotation.save();
   const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
   
-  // Calculate compression stats
-  const originalSize = JSON.stringify(req.body).length;
+   const originalSize = JSON.stringify(req.body).length;
   const compressedSize = JSON.stringify({
     ...req.body,
     quotationImages: compressedQuotationImages,
@@ -1238,9 +1016,7 @@ exports.createQuotation = async (req, res) => {
   }).length;
   const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
   
-  console.log(`✅ Quotation created with ${processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0)} item images`);
-  console.log(`📊 Payload compression: ${(originalSize / 1024 / 1024).toFixed(2)}MB → ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${reduction}% reduction)`);
-  
+ 
   res.status(201).json({
     success: true,
     message: 'Quotation created successfully',
@@ -1283,38 +1059,30 @@ exports.updateQuotation = async (req, res) => {
   // ============================================================
   // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
   // ============================================================
-  const imageCompressor = require('../utils/imageCompressor');
+
+   
   
-  console.log("📸 Update - Original payload size estimate:", JSON.stringify(req.body).length, "chars");
-  console.log("📸 Update - Received quotationImages:", JSON.stringify(quotationImages, null, 2));
-  
-  // Compress quotation images (item images)
-  let compressedQuotationImages = quotationImages;
+   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-    console.log("📸 Update - Compressing quotation images...");
-    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
+     compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
       maxWidth: 800,
       quality: 70,
       maxSizeKB: 300
     });
   }
   
-  // Compress terms images
-  let compressedTermsImages = termsImages;
+   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-    console.log(`📸 Update - Compressing ${termsImages.length} terms images...`);
-    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
+     compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
       maxWidth: 600,
       quality: 65,
       maxSizeKB: 200
     });
   }
   
-  // Compress internal documents that are images
-  let compressedInternalDocuments = internalDocuments;
+   let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-    console.log(`📸 Update - Compressing ${internalDocuments.length} internal documents...`);
-    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
+     compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
       maxWidth: 1000,
       quality: 75,
       maxSizeKB: 400
@@ -1328,9 +1096,7 @@ exports.updateQuotation = async (req, res) => {
     internalDocuments: compressedInternalDocuments
   }).length;
   
-  console.log("📸 Update - Compressed payload size estimate:", compressedPayloadSize, "chars");
-  // ============================================================
-
+ 
   if (!companyId) {
     return res.status(400).json({ message: 'Company ID is required' });
   }
@@ -1391,8 +1157,7 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // Process items with images from COMPRESSED quotationImages
-    const processedItems = [];
+     const processedItems = [];
     
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -1421,37 +1186,29 @@ exports.updateQuotation = async (req, res) => {
       
       let imagePaths = [];
       
-      // ✅ Use compressedQuotationImages instead of quotationImages
-      if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
-        console.log(`📸 Item ${idx + 1}: Processing ${compressedQuotationImages[idx].length} compressed images`);
-        
+       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
+         
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
           
           if (imageData && typeof imageData === 'string') {
-            // If it's base64 (compressed), upload to Cloudinary
-            if (imageData.startsWith('data:image')) {
+             if (imageData.startsWith('data:image')) {
               try {
-                console.log(`📤 Uploading compressed image ${imgIdx + 1} for item ${idx + 1}...`);
-                const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
+                 const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
                 if (uploaded && uploaded.url) {
                   imagePaths.push(uploaded.url);
-                  console.log(`✅ Uploaded: ${uploaded.url.substring(0, 60)}...`);
-                }
+                 }
               } catch (err) {
                 console.error(`❌ Upload failed:`, err.message);
               }
             }
-            // If it's already a Cloudinary URL, keep it
-            else if (imageData.includes('cloudinary.com')) {
+             else if (imageData.includes('cloudinary.com')) {
               imagePaths.push(imageData);
-              console.log(`📎 Keeping existing Cloudinary URL`);
-            }
+             }
           }
         }
       }
-      
-      // Also keep existing imagePaths from the item (if any)
+       
       if (item.imagePaths && Array.isArray(item.imagePaths)) {
         for (const img of item.imagePaths) {
           if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
@@ -1459,12 +1216,10 @@ exports.updateQuotation = async (req, res) => {
           }
         }
       }
-      
-      // Remove duplicates
+       
       imagePaths = [...new Set(imagePaths)];
       
-      console.log(`📸 Item ${idx + 1}: Final ${imagePaths.length} images`);
-      
+       
       processedItems.push({
         itemId: itemDoc?._id || item.itemId,
         zohoItemId: itemDoc?.zohoId || item.zohoId || null,
@@ -1493,11 +1248,9 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    // Process terms images - using COMPRESSED terms images
-    let processedTermsImages = existing.termsImages || [];
+     let processedTermsImages = existing.termsImages || [];
     if (compressedTermsImages && compressedTermsImages.length > 0) {
-      console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
-      
+       
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
         let imageBase64 = imageData;
@@ -1510,8 +1263,7 @@ exports.updateQuotation = async (req, res) => {
         
         if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
           try {
-            console.log(`📤 Uploading compressed terms image ${i + 1}...`);
-            const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+             const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
             if (uploaded && uploaded.url) {
               processedTermsImages.push({
                 url: uploaded.url,
@@ -1519,8 +1271,7 @@ exports.updateQuotation = async (req, res) => {
                 fileName: fileName,
                 uploadedAt: new Date()
               });
-              console.log(`✅ Terms image ${i + 1} uploaded`);
-            }
+             }
           } catch (uploadError) {
             console.error('Failed to upload terms image:', uploadError.message);
           }
@@ -1543,13 +1294,11 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // Process internal documents - using COMPRESSED documents
-    let newInternalDocs = [];
+     let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
       const validBase64Strings = compressedInternalDocuments.filter(doc => typeof doc === 'string' && doc.startsWith('data:'));
       if (validBase64Strings.length > 0) {
-        console.log(`📸 Processing ${validBase64Strings.length} compressed internal documents`);
-        newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
+         newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
           validBase64Strings,
           existing.quotationNumber,
           req.user.id,
@@ -1630,14 +1379,10 @@ exports.updateQuotation = async (req, res) => {
       .populate('companyId', 'name code baseCurrency logo')
       .lean();
     
-    // Calculate compression stats for update
-    const originalSize = JSON.stringify(req.body).length;
+     const originalSize = JSON.stringify(req.body).length;
     const compressedSize = compressedPayloadSize;
     const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-    
-    console.log(`✅ Quotation updated with ${processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0)} item images`);
-    console.log(`📊 Update payload compression: ${(originalSize / 1024 / 1024).toFixed(2)}MB → ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${reduction}% reduction)`);
-    
+     
     res.status(200).json({
       success: true,
       message: 'Quotation updated successfully',
@@ -1655,8 +1400,7 @@ exports.updateQuotation = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Update quotation error:', err);
-    res.status(500).json({ 
+     res.status(500).json({ 
       success: false,
       message: 'Error updating quotation', 
       error: err.message 
@@ -2200,15 +1944,12 @@ function convertHtmlToPlainText(html) {
 function cleanHtmlForZoho(html) {
   if (!html) return '';
   
-  // Remove images
-  let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
+   let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
   cleaned = cleaned.replace(/<img[^>]*>/gi, '');
   
-  // Convert to plain text
-  let text = convertHtmlToPlainText(cleaned);
+   let text = convertHtmlToPlainText(cleaned);
   
-  // Limit length for Zoho
-  if (text.length > 9500) {
+   if (text.length > 9500) {
     text = text.substring(0, 9500) + '... (truncated)';
   }
   
@@ -2272,42 +2013,7 @@ exports.deleteQuotation = async (req, res) => {
 // GENERATE PDF
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Optimize Cloudinary URLs for PDF generation
- * This reduces image size without re-downloading
- */
-function optimizeImagesForPDF(html) {
-  // Pattern to match Cloudinary URLs
-  const cloudinaryPattern = /(https:\/\/res\.cloudinary\.com\/[^\/]+\/image\/upload\/)(v\d+\/)([^"'\s]+)/g;
-  
-  let optimizedHtml = html;
-  let match;
-  let replacements = 0;
-  
-  // Find all Cloudinary URLs and replace with optimized versions
-  while ((match = cloudinaryPattern.exec(html)) !== null) {
-    const fullUrl = match[0];
-    const base = match[1];      // https://res.cloudinary.com/.../image/upload/
-    const version = match[2];   // v123456789/
-    const path = match[3];      // folder/image.jpg
-    
-    // Add Cloudinary transformations for PDF:
-    // w_400 = max width 400px
-    // q_60 = quality 60%
-    // c_limit = maintain aspect ratio
-    const optimizedUrl = `${base}c_limit,w_400,q_60/${version}${path}`;
-    
-    optimizedHtml = optimizedHtml.replace(new RegExp(fullUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), optimizedUrl);
-    replacements++;
-  }
-  
-  if (replacements > 0) {
-    console.log(`📸 Optimized ${replacements} Cloudinary images for PDF (w_400, q_60)`);
-  }
-  
-  return optimizedHtml;
-}
-
+ 
 exports.generatePDF = async (req, res) => {
   const { html, filename = 'quotation' } = req.body;
   const startTime = Date.now();
@@ -2504,11 +2210,7 @@ exports.getDashboardStats = async (req, res) => {
 // INTERNAL DOCUMENT CRUD OPERATIONS
 // =============================================================
 
-/**
- * @desc    Add internal documents to quotation
- * @route   POST /api/quotations/:id/internal-documents
- * @access  Private (Creator, Ops, Admin)
- */
+ 
 exports.addInternalDocuments = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2579,11 +2281,7 @@ exports.addInternalDocuments = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get all internal documents for a quotation
- * @route   GET /api/quotations/:id/internal-documents
- * @access  Private (Internal team only)
- */
+ 
 exports.getInternalDocuments = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2628,11 +2326,7 @@ exports.getInternalDocuments = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get single internal document by ID
- * @route   GET /api/quotations/:id/internal-documents/:docId
- * @access  Private (Internal team only)
- */
+ 
 exports.getInternalDocumentById = async (req, res) => {
   try {
     const { id, docId } = req.params;
@@ -2685,11 +2379,7 @@ exports.getInternalDocumentById = async (req, res) => {
   }
 };
 
-/**
- * @desc    Update internal document description
- * @route   PATCH /api/quotations/:id/internal-documents/:docId
- * @access  Private (Creator only)
- */
+ 
 exports.updateInternalDocumentDescription = async (req, res) => {
   try {
     const { id, docId } = req.params;
@@ -2740,11 +2430,7 @@ exports.updateInternalDocumentDescription = async (req, res) => {
   }
 };
 
-/**
- * @desc    Remove internal document from quotation
- * @route   DELETE /api/quotations/:id/internal-documents/:docId
- * @access  Private (Creator only)
- */
+ 
 exports.removeInternalDocument = async (req, res) => {
   try {
     const { id, docId } = req.params;
@@ -2798,11 +2484,7 @@ exports.removeInternalDocument = async (req, res) => {
   }
 };
 
-/**
- * @desc    Get internal document download URL
- * @route   GET /api/quotations/:id/internal-documents/:docId/download
- * @access  Private (Internal team only)
- */
+ 
 exports.getInternalDocumentDownloadUrl = async (req, res) => {
   try {
     const { id, docId } = req.params;
