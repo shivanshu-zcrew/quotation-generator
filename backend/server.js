@@ -32,8 +32,8 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // ── Body parsing middleware ──────────────────────────────────────────────
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // TEMPORARY DEBUG — remove after fixing
 console.log('CLOUDINARY CHECK:', {

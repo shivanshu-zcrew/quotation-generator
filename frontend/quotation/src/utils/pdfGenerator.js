@@ -98,7 +98,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const deliveryTerms = quotation.deliveryTerms || '';
   const notes = quotation.notes || '';
   const termsAndConditions = quotation.termsAndConditions || '';
-  const termsImages = quotation.termsImages || []; // ✅ Get terms images array
+  const termsImages = quotation.termsImages || [];  
   const quotationNumber = quotation.quotationNumber || '';
   const currency = quotation.currency?.code || 'AED';
   const companySnapshot = quotation.companySnapshot || null;

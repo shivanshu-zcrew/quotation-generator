@@ -455,9 +455,61 @@ export const quotationAPI = {
   updateQueryDate: (id, date) => api.patch(`/quotations/${id}/query-date`, { queryDate: date }),
   awardQuotation: (id, awarded, awardNote = "") => api.patch(`/quotations/${id}/award`, { awarded, awardNote }),
   generatePDF: async (html, filename = "quotation") => {
-    const response = await api.post("/quotations/generate-pdf", { html, filename }, { responseType: "blob", timeout: 60000 });
-    triggerBlobDownload(response.data, `${filename}.pdf`);
-    return { success: true };
+    try {
+      console.log(`📄 Sending PDF request, HTML size: ${(html.length / 1024).toFixed(1)}KB`);
+      
+      const response = await api.post("/quotations/generate-pdf", 
+        { html, filename }, 
+        { 
+          responseType: "blob", 
+          timeout: 120000
+        }
+      );
+      
+      console.log('📥 Response status:', response.status);
+      console.log('📥 Response content type:', response.headers['content-type']);
+      console.log('📥 Response size:', response.data?.size);
+      
+      // ✅ Check if response is valid blob
+      if (!response.data || response.data.size === 0) {
+        throw new Error('Empty response received');
+      }
+      
+      // ✅ Create blob with correct type
+      const pdfBlob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(pdfBlob);
+      
+      // ✅ Test if blob is readable
+      const testUrl = URL.createObjectURL(pdfBlob);
+      const testImg = document.createElement('iframe');
+      testImg.onload = () => {
+        console.log('✅ PDF blob is valid');
+        URL.revokeObjectURL(testUrl);
+      };
+      testImg.onerror = () => {
+        console.error('❌ PDF blob is invalid');
+        URL.revokeObjectURL(testUrl);
+      };
+      
+      // ✅ Trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${filename}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1000);
+      
+      return { success: true };
+      
+    } catch (error) {
+      console.error('PDF generation error:', error);
+      throw error;
+    }
   },
   testPDF: async () => {
     const response = await api.post("/quotations/test-pdf", {}, { responseType: "blob", timeout: 30000 });
