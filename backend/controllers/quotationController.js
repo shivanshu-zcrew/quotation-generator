@@ -260,7 +260,7 @@ const getBrowser = async () => {
 
   _browser = await puppeteer.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
+    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
