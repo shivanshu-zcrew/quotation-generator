@@ -15,18 +15,22 @@ const allowedOrigins = [
 ];
 
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'x-company-id', 
-    'X-Company-Id',
-    'x-company-id'
-  ],
-  exposedHeaders: ['x-company-id'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+  optionsSuccessStatus: 200
 };
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
