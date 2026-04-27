@@ -11,7 +11,7 @@ const app = express();
 // ── CORS Configuration ───────────────────────────────────────────────────
 const allowedOrigins = [
   'http://localhost:3000',
-  'http://13.234.239.26',
+  '',
 ];
 
 const corsOptions = {
