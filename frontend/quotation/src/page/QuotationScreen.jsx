@@ -1,8 +1,8 @@
-// screens/QuotationScreen.jsx (Complete Fixed Version)
+// screens/QuotationScreen.jsx (Complete Fixed Version with Manual Query Date)
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
-  Building2, Mail, Phone, AlertCircle, CheckCircle, RefreshCw, Loader2
+  Building2, Mail, Phone, AlertCircle, CheckCircle, RefreshCw, Loader2, Calendar
 } from "lucide-react";
 import QuotationTemplate from "./QuotationTemplate";
 import { CompanyCurrencySelector, useCompanyCurrency } from "../components/CompanyCurrencySelector";
@@ -17,6 +17,18 @@ import useCustomerStore from "../services/customerStore";
 const PRIMARY = "#0f172a";
 const STEP = { SELECTION: 1, TEMPLATE: 2 };
 const TOAST_DURATION = 3000;
+
+// Helper function to get default query date (30 days from today)
+const getDefaultQueryDate = () => {
+  const date = new Date();
+  date.setDate(date.getDate() + 30);
+  return date.toISOString().split("T")[0];
+};
+
+// Helper function to get today's date
+const getTodayDate = () => {
+  return new Date().toISOString().split("T")[0];
+};
 
 // ============================================================================
 // Reusable Components
@@ -359,11 +371,11 @@ export default function QuotationScreen({ onBack }) {
   const [selectedItems, setSelectedItems] = useState([]);
   const [showItemsModal, setShowItemsModal] = useState(false);
   const [toast, setToast] = useState(null);
+  const [manualQueryDate, setManualQueryDate] = useState(getDefaultQueryDate()); // ✅ Added manual query date state
 
   // --------------------------------------------------------------------------
   // Derived State - FIXED
   // --------------------------------------------------------------------------
-  // Fix: Proper loading state based on actual data
   const isItemsLoading = !itemsLoaded && (isItemsLoadingStore || items.length === 0);
   const isCustomersActuallyLoading = isCustomersLoading || (!isCustomersLoaded && customers.length === 0);
   const showNoCustomersMessage = initialized && customers.length === 0 && !storeLoading && !isCustomersLoading;
@@ -388,8 +400,9 @@ export default function QuotationScreen({ onBack }) {
     console.log('   - Customers count:', customers.length);
     console.log('   - Customers loading:', isCustomersLoading);
     console.log('   - Selected items:', selectedItems.length);
+    console.log('   - Query Date:', manualQueryDate);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  }, [selectedCompany, itemsLoaded, items.length, isItemsLoading, isItemsLoadingStore, isCustomersLoaded, customers.length, isCustomersLoading, selectedItems.length]);
+  }, [selectedCompany, itemsLoaded, items.length, isItemsLoading, isItemsLoadingStore, isCustomersLoaded, customers.length, isCustomersLoading, selectedItems.length, manualQueryDate]);
 
   // --------------------------------------------------------------------------
   // Effects - Company Change Handling
@@ -410,6 +423,9 @@ export default function QuotationScreen({ onBack }) {
     resetItems();
     setSelectedItems([]);
     loadAllItems(selectedCompany, true);
+    
+    // Reset query date
+    setManualQueryDate(getDefaultQueryDate());
     
   }, [selectedCompany, resetCustomers, loadAllCustomers, resetItems, loadAllItems]);
 
@@ -535,8 +551,9 @@ export default function QuotationScreen({ onBack }) {
       customerSnapshot: selectedCustomer,
       customer: selectedCustomer?.name,
       contact: selectedCustomer?.phone || "",
-      date: new Date().toISOString().split("T")[0],
+      date: getTodayDate(),
       expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      queryDate: manualQueryDate, 
       projectName: "", tl: "", trn: "", ourRef: "", ourContact: "", salesManagerEmail: "",
       paymentTerms: "", deliveryTerms: "", tax: 0, discount: 0, notes: "", termsAndConditions: "", termsImage: null,
     };
@@ -659,6 +676,63 @@ export default function QuotationScreen({ onBack }) {
                 <><Plus size={16} /> {selectedItems.length > 0 ? "Add More Items" : "Add Items"}</>
               )}
             </button>
+          </div>
+
+          {/* Query Date Section - ADDED */}
+          <div style={{ padding: "0 1.5rem", marginTop: "1.5rem" }}>
+            <div style={{ 
+              background: "#f8fafc", 
+              borderRadius: 16, 
+              padding: "1rem 1.25rem",
+              border: "1px solid #e2e8f0"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
+                <Calendar size={18} color={PRIMARY} />
+                <label style={{ fontWeight: 600, color: PRIMARY, fontSize: "0.875rem" }}>
+                  Follow-up / Query Date
+                </label>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+                <input
+                  type="date"
+                  value={manualQueryDate}
+                  onChange={(e) => setManualQueryDate(e.target.value)}
+                  min={getTodayDate()}
+                  style={{
+                    padding: "0.6rem 1rem",
+                    border: "1.5px solid #e2e8f0",
+                    borderRadius: 10,
+                    fontSize: "0.875rem",
+                    outline: "none",
+                    fontFamily: "inherit",
+                    flex: 1,
+                    minWidth: "200px",
+                    transition: "all 0.2s",
+                  }}
+                  onFocus={(e) => e.currentTarget.style.borderColor = PRIMARY}
+                  onBlur={(e) => e.currentTarget.style.borderColor = "#e2e8f0"}
+                />
+                <button
+                  onClick={() => setManualQueryDate(getDefaultQueryDate())}
+                  style={{
+                    padding: "0.6rem 1rem",
+                    background: "#e2e8f0",
+                    color: "#475569",
+                    border: "none",
+                    borderRadius: 10,
+                    fontSize: "0.75rem",
+                    fontWeight: 500,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Reset to Default (30 days)
+                </button>
+              </div>
+              <p style={{ fontSize: "0.7rem", color: "#94a3b8", marginTop: "0.5rem" }}>
+                Set a follow-up date to remind when to check back with the customer
+              </p>
+            </div>
           </div>
 
           {/* Summary */}

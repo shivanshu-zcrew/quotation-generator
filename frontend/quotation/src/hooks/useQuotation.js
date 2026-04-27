@@ -530,6 +530,7 @@ export function useQuotation() {
 
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
+        projectName: quotationData.projectName,
         customer: quotationData.customer,
         contact: quotationData.contact,
         date: quotationData.date,

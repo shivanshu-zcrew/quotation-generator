@@ -1,7 +1,6 @@
-// screens/QuotationTemplate.jsx (UPDATED with Terms Images Props)
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle } from "lucide-react";
+import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText } from "lucide-react";
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import { useAppStore } from '../services/store';
@@ -16,20 +15,11 @@ import { formatFileSize, getDefaultExpiryDate, getTodayDate } from "../utils/for
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { DEFAULT_COMPANY_NAME, SNACK_HIDE, VALIDATION_MESSAGES } from '../utils/constants';
 import useItemStore from '../services/itemStore';
+import LoadingOverlay from "../components/LoadingOverlay";
 
 // ============================================================
-// COMPONENTS
+// LOADING COMPONENTS
 // ============================================================
-
-const PdfOverlay = React.memo(({ step }) => (
-  <div style={styles.pdfOverlay}>
-    <div style={styles.pdfOverlayContent}>
-      <Loader size={36} color="#0369a1" style={styles.spinningIcon} />
-      <div style={styles.pdfOverlayTitle}>Generating PDF…</div>
-      <div style={styles.pdfOverlayStep}>{step}</div>
-    </div>
-  </div>
-));
 
 const ContentSkeleton = React.memo(() => (
   <div style={styles.skeletonContainer}>
@@ -55,9 +45,9 @@ const ContentSkeleton = React.memo(() => (
   </div>
 ));
 
-const ActionButton = ({ onClick, disabled, bgColor, icon, label }) => (
-  <button onClick={onClick} disabled={disabled} style={{ ...styles.actionButton, backgroundColor: disabled ? "#d1d5db" : bgColor, opacity: disabled ? 0.6 : 1 }}>
-    {icon} {label}
+const ActionButton = ({ onClick, disabled, bgColor, icon, label, loading }) => (
+  <button onClick={onClick} disabled={disabled || loading} style={{ ...styles.actionButton, backgroundColor: disabled ? "#d1d5db" : bgColor, opacity: disabled ? 0.6 : 1 }}>
+    {loading ? <Loader size={18} style={styles.spinningIconSmall} /> : icon} {loading ? (label === "Save" ? "Saving..." : "Generating...") : label}
   </button>
 );
 
@@ -75,10 +65,11 @@ const ErrorState = ({ message }) => (
   </div>
 );
 
-const SaveButton = ({ onClick, disabled, hasError }) => (
+// SaveButton component
+const SaveButton = ({ onClick, disabled, hasError, loading }) => (
   <div style={styles.saveButtonContainer}>
     <button onClick={onClick} disabled={disabled} style={{ ...styles.saveButton, opacity: hasError ? 0.6 : 1 }}>
-      {disabled ? <><Loader size={18} style={styles.spinningIconSmall} /> Saving…</> : <>💾 Save Quotation</>}
+      {loading ? <><Loader size={18} style={styles.spinningIconSmall} /> Saving Quotation...</> : <>💾 Save Quotation</>}
     </button>
     {hasError && <div style={styles.saveError}><AlertCircle size={14} /> Fix validation errors above to save</div>}
   </div>
@@ -113,7 +104,7 @@ const generateQuotationNumber = () => {
 // MAIN COMPONENT
 // ============================================================
 
-export default function QuotationTemplate({ customer, selectedItems, selectedCompany, selectedCurrency, onBack }) {
+export default function QuotationTemplate({ customer, selectedItems, selectedCompany, selectedCurrency,quotationData, onBack }) {
   if (!customer || !selectedItems) {
     return (
       <div style={styles.loadingContainer}>
@@ -122,10 +113,10 @@ export default function QuotationTemplate({ customer, selectedItems, selectedCom
       </div>
     );
   }
-  return <QuotationTemplateInner customer={customer} selectedItems={selectedItems} selectedCompany={selectedCompany} selectedCurrency={selectedCurrency} onBack={onBack} />;
+  return <QuotationTemplateInner customer={customer} selectedItems={selectedItems} selectedCompany={selectedCompany} selectedCurrency={selectedCurrency} quotationData={quotationData} onBack={onBack} />;
 }
 
-function QuotationTemplateInner({ customer, selectedItems, selectedCompany, selectedCurrency, onBack }) {
+function QuotationTemplateInner({ customer, selectedItems, selectedCompany, selectedCurrency, quotationData: initialQuotationData, onBack }) {
   const navigate = useNavigate();
   const { companies, user } = useAppStore();
   const { items, isLoading: isItemsLoading, loadAllItems } = useItemStore();
@@ -135,14 +126,26 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [quotationItems, setQuotationItems] = useState([]);
   const [quotationData, setQuotationData] = useState({
-    date: getTodayDate(),
-    expiryDate: getDefaultExpiryDate(),
-    customer: customer?.name || "",
-    contact: customer?.phone || "",
-    projectName: "", ourRef: "", ourContact: "", salesManagerEmail: "", paymentTerms: "", deliveryTerms: "",
-    tl: "", trn: customer?.trn || customer?.taxRegistrationNumber || "",
-    tax: 0, discount: 0, notes: "", termsAndConditions: "", termsImage: null,
-    currency: getCurrencyObject(selectedCurrency)
+    date: initialQuotationData?.date || getTodayDate(),
+    expiryDate: initialQuotationData?.expiryDate || getDefaultExpiryDate(),
+    customer: initialQuotationData?.customer || customer?.name || "",
+    contact: initialQuotationData?.contact || customer?.phone || "",
+    projectName: initialQuotationData?.projectName || "",
+    ourRef: initialQuotationData?.ourRef || "",
+    ourContact: initialQuotationData?.ourContact || "",
+    salesManagerEmail: initialQuotationData?.salesManagerEmail || "",
+    paymentTerms: initialQuotationData?.paymentTerms || "",
+    deliveryTerms: initialQuotationData?.deliveryTerms || "",
+    tl: initialQuotationData?.tl || "",
+    trn: initialQuotationData?.trn || customer?.trn || customer?.taxRegistrationNumber || "",
+    tax: initialQuotationData?.tax || 0,
+    discount: initialQuotationData?.discount || 0,
+    notes: initialQuotationData?.notes || "",
+    termsAndConditions: initialQuotationData?.termsAndConditions || "",
+    termsImage: initialQuotationData?.termsImage || null,
+    currency: initialQuotationData?.currency || getCurrencyObject(selectedCurrency),
+    queryDate: initialQuotationData?.queryDate || ""   
+    
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [headerErrors, setHeaderErrors] = useState({});
@@ -152,6 +155,10 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportStep, setExportStep] = useState("");
+  const [saveProgress, setSaveProgress] = useState(0);
+  const [saveStep, setSaveStep] = useState("");
+  const [exportProgress, setExportProgress] = useState(0);
+  const [imageCount, setImageCount] = useState(0);
   const [tcSections, setTcSections] = useState([newSection()]);
   const [snackbar, setSnackbar] = useState(SNACK_HIDE);
   
@@ -211,25 +218,21 @@ const subtotal = useMemo(() =>
   [quotationItems]
 );
 
-// Step 1: Calculate discount amount (based on subtotal)
 const discountAmount = useMemo(() => 
   subtotal * (quotationData.discount || 0) / 100, 
   [subtotal, quotationData.discount]
 );
 
-// Step 2: Calculate subtotal after discount
 const subtotalAfterDiscount = useMemo(() => 
   subtotal - discountAmount, 
   [subtotal, discountAmount]
 );
 
-// Step 3: Calculate tax on the discounted amount (NOT on original subtotal)
 const taxAmount = useMemo(() => 
   subtotalAfterDiscount * (quotationData.tax || 0) / 100, 
   [subtotalAfterDiscount, quotationData.tax]
 );
 
-// Step 4: Calculate grand total (discounted amount + tax)
 const grandTotal = useMemo(() => 
   subtotalAfterDiscount + taxAmount, 
   [subtotalAfterDiscount, taxAmount]
@@ -240,6 +243,14 @@ const quotationNumber = useMemo(generateQuotationNumber, []);
 const companyName = useMemo(() => getCompanyName(selectedCompany, companies), [selectedCompany, companies]);
 const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldErrors).some(e => e && Object.keys(e).length > 0);
 
+// Calculate total image count for progress
+const totalImageCount = useMemo(() => {
+  let count = 0;
+  quotationItems.forEach(item => {
+    count += (item.imagePaths?.length || 0) + (item.newImages?.length || 0);
+  });
+  return count;
+}, [quotationItems]);
 
   // Handlers
   const handleDataChange = useCallback((field, value) => {
@@ -362,6 +373,7 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
     const toProcess = files.slice(0, slots);
     if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} added.`);
     
+    let processed = 0;
     toProcess.forEach(file => {
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
         showSnack(`"${file.name}" is not a supported type.`);
@@ -374,6 +386,7 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
       
       const reader = new FileReader();
       reader.onload = () => {
+        processed++;
         setItemImages(prev => ({ ...prev, [itemId]: [...(prev[itemId] || []), reader.result] }));
         setQuotationItems(prev => prev.map(item => item.id === itemId ? { ...item, newImages: [...(item.newImages || []), reader.result] } : item));
       };
@@ -398,6 +411,7 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
   }, []);
   
   const handleSubmit = useCallback(async () => {
+    console.log(">>>>>>>>>>><<<<<<<<<", quotationData);
     if (!validateAll()) return;
     if (!selectedCompany) {
       showSnack("Please select a company", "error");
@@ -405,7 +419,14 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
     }
     
     setIsSaving(true);
+    setSaveProgress(10);
+    setSaveStep("Validating data...");
+    setImageCount(totalImageCount);
+    
     try {
+      setSaveProgress(20);
+      setSaveStep("Formatting items...");
+      
       // Format items
       const formattedItems = quotationItems.map(item => ({
         itemId: item.zohoId || item.itemId,
@@ -414,11 +435,13 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
-        // Include imagePaths for the backend to process
         imagePaths: [...(item.imagePaths || []), ...(item.newImages || [])]
       }));
       
-      // ✅ Create quotationImages object for the backend (index-based)
+      setSaveProgress(40);
+      setSaveStep("Processing images...");
+      
+      // Create quotationImages object
       const quotationImages = {};
       quotationItems.forEach((item, index) => {
         const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
@@ -426,6 +449,9 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
           quotationImages[index] = allImages;
         }
       });
+      
+      setSaveProgress(60);
+      setSaveStep("Extracting terms images...");
       
       // Extract terms images from tcSections
       const allTermsImages = [];
@@ -446,6 +472,9 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         });
       }
       
+      setSaveProgress(70);
+      setSaveStep("Building terms HTML...");
+      
       // Create clean sections without images
       const cleanSections = tcSections.map(section => ({
         heading: section.heading || '',
@@ -453,6 +482,9 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
       }));
       
       const termsHTML = sectionsToHTMLWithoutImages(cleanSections);
+      
+      setSaveProgress(80);
+      setSaveStep("Saving to database...");
       
       const quotation = {
         companyId: selectedCompany,
@@ -476,19 +508,22 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         notes: quotationData.notes?.trim() || "",
         termsAndConditions: termsHTML,
         items: formattedItems,
-        // ✅ IMPORTANT: Send quotationImages in the format backend expects
         quotationImages: quotationImages,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
-        termsImages: allTermsImages
+        termsImages: allTermsImages,
+        queryDate: quotationData.queryDate
       };
+    
       
-      console.log('📤 Sending quotationImages:', Object.keys(quotationImages));
-      console.log('📤 Items with images:', formattedItems.filter(i => i.imagePaths?.length > 0).length);
+      setSaveProgress(90);
+      setSaveStep("Finalizing...");
       
       const result = await addQuotation(quotation);
       
       if (result?.success) {
+        setSaveProgress(100);
+        setSaveStep("Complete!");
         showSnack("Quotation created successfully!", "success");
         const { refetchQuotations } = useAppStore.getState();
         await refetchQuotations();
@@ -501,13 +536,17 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
       showSnack(err?.response?.data?.message || err.message || "Error creating quotation", "error");
     } finally {
       setIsSaving(false);
+      setSaveProgress(0);
+      setSaveStep("");
     }
-  }, [validateAll, selectedCompany, showSnack, selectedCurrency, customer, quotationData, quotationItems, uploadedDocuments, tcSections, addQuotation, user, navigate]);
+  }, [validateAll, selectedCompany, showSnack, selectedCurrency, customer, quotationData, quotationItems, uploadedDocuments, tcSections, addQuotation, user, navigate, totalImageCount]);
 
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
     setIsExporting(true);
+    setExportProgress(10);
     setExportStep("Preparing PDF...");
+    setImageCount(totalImageCount);
     
     try {
       const imageToBase64 = (url) => {
@@ -537,6 +576,7 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         });
       };
   
+      setExportProgress(20);
       setExportStep("Processing item images...");
       
       const companySnapshot = typeof selectedCompany === 'object' && selectedCompany?.name 
@@ -559,9 +599,10 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         };
       }));
       
+      setExportProgress(40);
       setExportStep("Processing terms images...");
       
-      // ✅ CRITICAL: Extract ALL images from tcSections
+      // Extract ALL images from tcSections
       let allTermsImages = [];
       
       if (tcSections && tcSections.length > 0) {
@@ -595,7 +636,10 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         }));
       }
       
-      // Process sections for HTML content (with images embedded)
+      setExportProgress(60);
+      setExportStep("Building HTML content...");
+      
+      // Process sections for HTML content
       const sectionsWithBase64Images = await Promise.all(tcSections.map(async (section) => {
         if (section.images && section.images.length > 0) {
           const imagesWithBase64 = await Promise.all(
@@ -615,6 +659,9 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
       const termsHTML = sectionsWithBase64Images.length > 0 
         ? sectionsToHTML(sectionsWithBase64Images) 
         : '';
+      
+      setExportProgress(80);
+      setExportStep("Generating PDF...");
       
       // Prepare quotation object for PDF generator
       const pdfQuotation = {
@@ -646,17 +693,15 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
         },
         companySnapshot: companySnapshot ? { name: companyName, ...companySnapshot } : { name: companyName },
         termsAndConditions: termsHTML,
-        // ✅ Pass extracted images to PDF generator
         termsImages: processedTermsImages
       };
       
-      console.log('📤 Sending to PDF generator:', {
-        hasTermsImages: pdfQuotation.termsImages.length > 0,
-        termsImagesCount: pdfQuotation.termsImages.length
-      });
-      
-      setExportStep("Generating PDF...");
+      setExportProgress(90);
+      setExportStep("Finalizing PDF...");
       await downloadQuotationPDF(pdfQuotation);
+      
+      setExportProgress(100);
+      setExportStep("Complete!");
       showSnack("PDF downloaded successfully!", "success");
       
     } catch (err) {
@@ -664,75 +709,91 @@ const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldE
       showSnack(err?.message || "Failed to export PDF", "error");
     } finally {
       setIsExporting(false);
+      setExportProgress(0);
       setExportStep("");
     }
-  }, [validateAll, quotationData, quotationItems, quotationNumber, selectedCurrency, selectedCompany, companies, customer, companyName, tcSections, showSnack]);
+  }, [validateAll, quotationData, quotationItems, quotationNumber, selectedCurrency, selectedCompany, companies, customer, companyName, tcSections, showSnack, totalImageCount]);
   
-
-  
-const handleDocumentUpload = useCallback(async (files, descriptions) => {
-  try {
-    setIsSaving(true);
-    for (const file of files) {
-      const validation = validateFile(file);
-      if (!validation.valid) { 
-        showSnack(validation.error, 'error'); 
-        return; 
+  const handleDocumentUpload = useCallback(async (files, descriptions) => {
+    try {
+      setIsSaving(true);
+      for (const file of files) {
+        const validation = validateFile(file);
+        if (!validation.valid) { 
+          showSnack(validation.error, 'error'); 
+          return; 
+        }
       }
+      
+      const base64Promises = files.map(file => new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve({ 
+          fileData: reader.result, 
+          name: file.name, 
+          type: file.type, 
+          size: file.size 
+        });
+        reader.readAsDataURL(file);
+      }));
+
+      const base64Files = await Promise.all(base64Promises);
+      const newDocs = base64Files.map((file, index) => ({
+        id: `doc-${Date.now()}-${index}-${Math.random()}`,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        fileData: file.fileData,
+        description: descriptions[index] || '',
+        uploadedAt: new Date().toISOString(),
+        isTemp: true
+      }));
+
+      setUploadedDocuments(prev => [...prev, ...newDocs]);
+      showSnack(`${files.length} document(s) ready`, 'success');
+    } catch (error) {
+      console.error('Error processing documents:', error);
+      showSnack('Failed to process documents', 'error');
+    } finally {
+      setIsSaving(false);
     }
-    
-    const base64Promises = files.map(file => new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({ 
-        fileData: reader.result, 
-        name: file.name, 
-        type: file.type, 
-        size: file.size 
-      });
-      reader.readAsDataURL(file);
-    }));
+  }, [showSnack]);
 
-    const base64Files = await Promise.all(base64Promises);
-    const newDocs = base64Files.map((file, index) => ({
-      id: `doc-${Date.now()}-${index}-${Math.random()}`,
-      fileName: file.name,
-      fileType: file.type,
-      fileSize: file.size,
-      fileData: file.fileData,
-      description: descriptions[index] || '',
-      uploadedAt: new Date().toISOString(),
-      isTemp: true
-    }));
+  const handleDocumentDelete = useCallback((docId) => {
+    setUploadedDocuments(prev => prev.filter(doc => doc.id !== docId));
+  }, []);
 
-    setUploadedDocuments(prev => [...prev, ...newDocs]);
-    showSnack(`${files.length} document(s) ready`, 'success');
-  } catch (error) {
-    console.error('Error processing documents:', error);
-    showSnack('Failed to process documents', 'error');
-  } finally {
-    setIsSaving(false);
-  }
-}, [showSnack]);
-
-const handleDocumentDelete = useCallback((docId) => {
-  setUploadedDocuments(prev => prev.filter(doc => doc.id !== docId));
-}, []);
-
-const handleDocumentDownload = useCallback((docId) => {
-  const doc = uploadedDocuments.find(d => d.id === docId);
-  if (doc?.fileData) {
-    const link = document.createElement('a');
-    link.href = doc.fileData;
-    link.download = doc.fileName;
-    link.click();
-  }
-}, [uploadedDocuments]);
+  const handleDocumentDownload = useCallback((docId) => {
+    const doc = uploadedDocuments.find(d => d.id === docId);
+    if (doc?.fileData) {
+      const link = document.createElement('a');
+      link.href = doc.fileData;
+      link.download = doc.fileName;
+      link.click();
+    }
+  }, [uploadedDocuments]);
 
   return (
     <div style={styles.container}>
       <style>{styles.globalStyles}</style>
       
-      {isExporting && <PdfOverlay step={exportStep} />}
+      {/* Reusable Loading Overlays */}
+      {isSaving && (
+        <LoadingOverlay 
+          type="saving"
+          step={saveStep}
+          progress={saveProgress}
+          imageCount={totalImageCount}
+        />
+      )}
+      
+      {isExporting && (
+        <LoadingOverlay 
+          type="pdf"
+          step={exportStep}
+          progress={exportProgress}
+          imageCount={totalImageCount}
+        />
+      )}
       
       <div style={styles.innerContainer}>
         <div className="no-print" style={styles.header}>
@@ -742,7 +803,7 @@ const handleDocumentDownload = useCallback((docId) => {
               bgColor={isEditing ? "#ef4444" : "#f59e0b"} icon={isEditing ? <Save size={18} /> : <Edit2 size={18} />} label={isEditing ? "Done" : "Edit"} />
             <ActionButton onClick={handleExportPDF} disabled={isExporting || isItemsLoading || hasAnyError} 
               bgColor="#0369a1" icon={isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={18} />} 
-              label={isExporting ? "Generating…" : "Download PDF"} />
+              label={isExporting ? "Generating…" : "Download PDF"} loading={isExporting} />
             <ActionButton onClick={onBack} bgColor="#6b7280" icon={<ArrowLeft size={18} />} label="Back" />
           </div>
         </div>
@@ -788,14 +849,20 @@ const handleDocumentDownload = useCallback((docId) => {
             companyName={companyName}
             customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
             customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
-            // Terms images props - ADDED
             termsImages={termsImages}
             onTermsImagesUpload={handleTermsImagesUpload}
             onRemoveTermsImage={handleRemoveTermsImage}
           />
         )}
         
-        {!isEditing && <SaveButton onClick={handleSubmit} disabled={isSaving || hasAnyError} hasError={hasAnyError} />}
+        {!isEditing && (
+          <SaveButton 
+            onClick={handleSubmit} 
+            disabled={isSaving || hasAnyError} 
+            hasError={hasAnyError}
+            loading={isSaving}
+          />
+        )}
       </div>
       
       {snackbar.show && <Snackbar message={snackbar.message} type={snackbar.type} onClose={hideSnack} />}
@@ -813,20 +880,21 @@ const styles = {
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "0.75rem" },
   title: { fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 },
   headerActions: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
-  actionButton: { color: "white", padding: "0.625rem 1rem", borderRadius: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: "500" },
+  actionButton: { color: "white", padding: "0.625rem 1rem", borderRadius: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: "500", transition: "all 0.2s" },
   loadingContainer: { minHeight: "100vh", backgroundColor: "#f0f9ff", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column" },
   loadingText: { fontSize: "0.9375rem", fontWeight: "500", color: "#6b7280", marginTop: "1rem" },
   loadingState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#1e40af" },
   errorState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#991b1b" },
+  
+  // Enhanced Save Button
   saveButtonContainer: { display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem", marginTop: "2rem" },
-  saveButton: { backgroundColor: "#10b981", color: "white", padding: "1rem 2rem", borderRadius: "0.5rem", fontWeight: "bold", border: "none", cursor: "pointer", fontSize: "1rem", display: "flex", alignItems: "center", gap: "0.75rem" },
+  saveButton: { backgroundColor: "#10b981", color: "white", padding: "1rem 2rem", borderRadius: "0.5rem", fontWeight: "bold", border: "none", cursor: "pointer", fontSize: "1rem", display: "flex", alignItems: "center", gap: "0.75rem", transition: "all 0.2s" },
   saveError: { display: "flex", alignItems: "center", gap: "0.375rem", color: "#dc2626", fontSize: "0.8125rem", fontWeight: "500" },
-  pdfOverlay: { position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" },
-  pdfOverlayContent: { backgroundColor: "white", borderRadius: "1rem", padding: "2rem 2.5rem", textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", minWidth: "280px" },
-  pdfOverlayTitle: { fontWeight: "700", fontSize: "1rem", color: "#1f2937", marginBottom: "0.25rem" },
-  pdfOverlayStep: { fontSize: "0.8125rem", color: "#6b7280" },
+  
   spinningIcon: { animation: "spin 1s linear infinite", marginBottom: "1rem" },
   spinningIconSmall: { animation: "spin 1s linear infinite" },
+  
+  // Skeleton Styles
   skeletonContainer: { background: "white", borderRadius: "1rem", padding: "2rem", boxShadow: "0 1px 3px rgba(0,0,0,.06)" },
   skeletonHeader: { display: "flex", justifyContent: "space-between", marginBottom: "2rem" },
   skeletonLine: { width: "160px", height: "20px", borderRadius: "6px", background: "linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)", backgroundSize: "200% 100%", animation: "skeleton 1.4s ease infinite" },
@@ -837,6 +905,7 @@ const styles = {
   skeletonColumn: { display: "flex", flexDirection: "column", gap: "0.75rem" },
   skeletonTable: { border: "1px solid #e2e8f0", borderRadius: "8px", overflow: "hidden" },
   skeletonTableHeader: { background: "#f8fafc", padding: "0.75rem 1rem", borderBottom: "1px solid #e2e8f0" },
+  
   globalStyles: `
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes skeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }

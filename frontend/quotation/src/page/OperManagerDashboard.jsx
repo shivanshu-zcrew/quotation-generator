@@ -793,6 +793,45 @@ export default function OpsDashboard({ onViewQuotation }) {
         }}>
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
           <NavBtn onClick={() => navigate('/home')} label="Home" />
+          <button 
+    onClick={() => navigate('/customers')}
+    className="adm-nav-btn" 
+    style={{
+      backgroundColor: '#e0e7ff',
+      color: '#4f46e5',
+      border: 'none',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.4rem'
+    }}
+  >
+    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+  </button>
+
+  <button 
+    onClick={() => navigate('/quotation/new')}
+    className="adm-nav-btn" 
+    style={{
+      backgroundColor: '#10b981',
+      color: 'white',
+      border: 'none',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.4rem'
+    }}
+  >
+    <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
+  </button>
           <button onClick={handleLogout} className="ops-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>

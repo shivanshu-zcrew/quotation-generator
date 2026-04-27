@@ -3,10 +3,11 @@ import { FileText, Clock, RefreshCw, CheckCircle, Award, Ban } from 'lucide-reac
 // Pagination
 export const PAGE_SIZE_OPTIONS = [10, 20, 50];
 export const DEBOUNCE_MS = 350;
-
+'pending'
 // Status Config
 export const STATUS_CONFIG = {
   pending: { bg: '#fef9c3', color: '#92400e', dot: '#f59e0b', label: 'Awaiting Ops Review' },
+  pending_admin: { bg: '#fef9c3', color: '#92400e', dot: '#f59e0b', label: 'Pending' },
   ops_approved: { bg: '#dbeafe', color: '#1e40af', dot: '#3b82f6', label: 'Forwarded to Admin' },
   ops_rejected: { bg: '#fee2e2', color: '#991b1b', dot: '#ef4444', label: 'Returned by Ops' },
   approved: { bg: '#dcfce7', color: '#166534', dot: '#22c55e', label: 'Approved' },
@@ -19,7 +20,7 @@ export const STATUS_CONFIG = {
 // Tab Config
 export const TAB_KEYS = {
   all: { label: 'All', Icon: FileText, statusFilter: null },
-  pending: { label: 'Pending', Icon: Clock, statusFilter: 'pending' },
+  pending: { label: 'Pending', Icon: Clock, statusFilter:['pending', 'pending_admin'] },
   in_review: { label: 'In Review', Icon: RefreshCw, statusFilter: 'ops_approved' },
   approved: { label: 'Approved', Icon: CheckCircle, statusFilter: 'approved' },
   awarded: { label: 'Awarded', Icon: Award, statusFilter: 'awarded' },

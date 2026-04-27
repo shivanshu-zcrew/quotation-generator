@@ -81,7 +81,7 @@ const styles = {
     overflow: 'hidden',
     borderRadius: '0.5rem',
     backgroundColor: '#f8fafc',
-    border: '2px solid #000',
+    // border: '2px solid #000',
   },
   headerImage: {
     width: '100%',

@@ -252,9 +252,24 @@ const quotationSchema = new mongoose.Schema(
     },
     createdBySnapshot: {
       name: String,
-      email: String
+      email: String,
+      role: String
     },
 
+    // Add these to your quotationSchema
+opsApprovedBySnapshot: {
+  name: String,
+  email: String,
+  role: String,
+  approvedAt: { type: Date, default: Date.now }
+},
+
+approvedBySnapshot: {
+  name: String,
+  email: String,
+  role: String,
+  approvedAt: { type: Date, default: Date.now }
+},
     // Ops review
     opsApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     opsApprovedAt: { type: Date },

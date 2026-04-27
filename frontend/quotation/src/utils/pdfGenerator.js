@@ -103,6 +103,19 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const currency = quotation.currency?.code || 'AED';
   const companySnapshot = quotation.companySnapshot || null;
 
+  const createdByName = quotation.createdBy?.name || quotation.createdBySnapshot?.name || '—';
+  const createdByEmail = quotation.createdBy?.email || quotation.createdBySnapshot?.email || '';
+  const createdByRole = quotation.createdBy?.role || quotation.createdBySnapshot?.role || 'user';
+  
+  const opsReviewedByName = quotation.opsApprovedBy?.name || '—';
+  const opsReviewedByEmail = quotation.opsApprovedBy?.email || '';
+  const opsReviewedAt = quotation.opsApprovedAt ? fmtDate(quotation.opsApprovedAt) : '—';
+  
+  const approvedByName = quotation.approvedBy?.name || '—';
+  const approvedByEmail = quotation.approvedBy?.email || '';
+  const approvedAt = quotation.approvedAt ? fmtDate(quotation.approvedAt) : '—';
+
+
   // Convert header image to base64
   const headerBase64 = await imageToBase64(headerImage);
   
@@ -152,7 +165,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         <div style="font-weight:600;font-size:11px;">${item.name}</div>
         ${item.description ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;line-height:1.3;">${item.description}</div>` : ''}
         ${imgs.length ? `<div style="margin-top:6px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
-          ${imgs.map(src => `<div style="width:100%;height:120px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;">
+          ${imgs.map(src => `<div style="width:100%;height:150px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;">
             <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
           </div>`).join('')}
         </div>` : ''}
@@ -199,16 +212,53 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const termsImagesHTML = buildTermsImagesHTML(termsImages);
 
   // Company footer
-  const companyInfo = companySnapshot;
-  const companyFooter = companyInfo ? `
+const companyInfo = companySnapshot;
+  const companyFooter = `
     <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
       <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
-      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo.name}</div>
+      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
     </div>
-  ` : `<div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
-    <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
-    <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">Mega Repairing Machinery Equipment LLC</div>
-  </div>`;
+    
+    <!-- Approval Chain Section -->
+    <div style="margin-top:12px;padding-top:16px;">
+      <table style="width:100%;border-collapse:collapse;font-size:10px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Prepared By (Requested)</th>
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Reviewed By</th>
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Approved By</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:8px 6px;vertical-align:top;">
+              <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
+               <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
+               <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
+            </td>
+            <td style="padding:8px 6px;vertical-align:top;">
+              ${opsReviewedByName !== '—' ? `
+                <div style="font-weight:600;color:#0f172a;">${opsReviewedByName}</div>
+                <div style="font-size:9px;color:#64748b;">${opsReviewedByEmail}</div>
+                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${opsReviewedAt}</div>
+              ` : `
+                <div style="color:#94a3b8;font-style:italic;">Not reviewed yet</div>
+              `}
+            </td>
+            <td style="padding:8px 6px;vertical-align:top;">
+              ${approvedByName !== '—' ? `
+                <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
+                <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
+                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
+              ` : `
+                <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
+              `}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
 
   // Build complete HTML
   return `<!DOCTYPE html>
@@ -227,7 +277,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 <body>
   <div class="container">
     <!-- Header Image -->
-    <div style="width:100%;height:140px;margin-bottom:24px;display:flex;align-items:center;justify-content:center;border:3px solid #000;border-radius:6px;background:#f8fafc;overflow:hidden;">
+    <div style="width:100%;height:140px;margin-bottom:24px;display:flex;align-items:center;justify-content:center;background:#f8fafc;overflow:hidden;">
       ${headerBase64 ? `<img src="${headerBase64}" style="width:100%;height:100%;object-fit:contain;padding:10px;" />` : `<div style="font-size:24px;font-weight:bold;">YOUR COMPANY LOGO</div>`}
     </div>
 

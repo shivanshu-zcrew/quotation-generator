@@ -32,10 +32,10 @@ const useMediaQuery = (query) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Token helpers — single source of truth for colours
+// Token helpers — matching AdminDashboard colors
 // ─────────────────────────────────────────────────────────────────────────────
 const C = {
-  bg:          '#f8fafc',
+  bg:          '#f1f5f9',
   surface:     '#ffffff',
   border:      '#e2e8f0',
   borderLight: '#f1f5f9',
@@ -53,6 +53,7 @@ const C = {
   red:         '#dc2626',
   redBg:       '#fee2e2',
   rowHover:    '#f8fafc',
+  topbarBg:    'rgb(15, 23, 42)',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -411,11 +412,6 @@ export default function UserQuotationStatsPage() {
     }
   }, [addToast]);
 
-  const handleSort = useCallback((field) => {
-    setSortBy(prev => { setSortOrder(prev === field ? (o => o === 'desc' ? 'asc' : 'desc') : () => 'desc'); return field; });
-  }, []);
-
-  // ── Sort state update helper (fixes closure in handleSort) ────────────────
   const handleSortField = (field) => {
     if (sortBy === field) {
       setSortOrder(o => o === 'desc' ? 'asc' : 'desc');
@@ -472,20 +468,64 @@ export default function UserQuotationStatsPage() {
       `}</style>
       <ToastContainer/>
 
-      {/* ── Page header ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-        <IconBtn variant="back" onClick={handleBack}>
+      {/* ── Page header with topbar style ── */}
+      <div style={{ 
+        backgroundColor: C.topbarBg, 
+        margin: '-1.5rem -2rem 1.5rem -2rem', 
+        padding: '1rem 2rem',
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '0.75rem', 
+        flexWrap: 'wrap',
+        position: 'sticky',
+        top: 0,
+        zIndex: 50,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.25)'
+      }}>
+        <button onClick={handleBack} style={{
+          backgroundColor: 'rgba(255,255,255,0.08)',
+          color: '#94a3b8',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          padding: '0.45rem 0.875rem',
+          fontSize: '0.8rem',
+          fontWeight: 600,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem'
+        }}>
           <ArrowLeft size={16}/> {selectedUser ? 'Back' : 'Dashboard'}
-        </IconBtn>
+        </button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 style={{ margin: 0, fontWeight: 800, color: C.text, fontSize: isMobile ? '1.2rem' : '1.5rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <h1 style={{ 
+            margin: 0, 
+            fontWeight: 800, 
+            color: 'white', 
+            fontSize: isMobile ? '1.2rem' : '1.5rem', 
+            letterSpacing: '-0.01em',
+            overflow: 'hidden', 
+            textOverflow: 'ellipsis', 
+            whiteSpace: 'nowrap' 
+          }}>
             {selectedUser ? `Quotations — ${selectedUser.name}` : 'User Quotation Statistics'}
           </h1>
         </div>
-        <IconBtn variant="ghost" onClick={fetchStats} title="Refresh"
-          style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '7px 10px' }}>
-          <RefreshCw size={17} color={C.textMid}/>
-        </IconBtn>
+        <button onClick={fetchStats} style={{
+          backgroundColor: 'rgba(255,255,255,0.08)',
+          color: '#94a3b8',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 8,
+          padding: '0.45rem 0.875rem',
+          fontSize: '0.8rem',
+          fontWeight: 600,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.4rem'
+        }}>
+          <RefreshCw size={14}/> Refresh
+        </button>
       </div>
 
       {!selectedUser ? (
@@ -500,7 +540,6 @@ export default function UserQuotationStatsPage() {
 
           {/* ── Toolbar: search + count ── */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            {/* Search */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: '0.5rem 0.75rem', flex: isMobile ? '1 1 100%' : '1 1 300px', maxWidth: isMobile ? '100%' : 380, transition: 'border-color 0.15s', boxSizing: 'border-box' }}
               onFocusCapture={e => e.currentTarget.style.borderColor = C.primary}
               onBlurCapture={e  => e.currentTarget.style.borderColor = C.border}>
@@ -516,7 +555,6 @@ export default function UserQuotationStatsPage() {
                 </button>
               )}
             </div>
-            {/* Result count */}
             {searchTerm && (
               <span style={{ fontSize: '0.78rem', color: C.textMuted, flexShrink: 0 }}>
                 {sortedStats.length} result{sortedStats.length !== 1 ? 's' : ''}
@@ -565,7 +603,6 @@ export default function UserQuotationStatsPage() {
                         <tr><td colSpan={8}><EmptyState message={searchTerm ? `No results for "${searchTerm}"` : 'No user data available'} icon={Users}/></td></tr>
                       ) : sortedStats.map(user => (
                         <tr key={user.userId} className="uqs-tr" style={{ cursor: 'pointer' }}>
-                          {/* User */}
                           <Td align="left">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                               <Avatar name={user.userName} size={34}/>
@@ -575,20 +612,12 @@ export default function UserQuotationStatsPage() {
                               </div>
                             </div>
                           </Td>
-                          {/* Quotation count */}
-                          <Td align="center">
-                            <span style={{ fontWeight: 700, color: C.text }}>{user.totalQuotations}</span>
-                          </Td>
-                          {/* Total value */}
-                          <Td align="right">
-                            <span style={{ fontWeight: 600, color: C.green }}>{fmtCurrency(user.totalValue, selectedCurrency)}</span>
-                          </Td>
-                          {/* Status counts */}
+                          <Td align="center"><span style={{ fontWeight: 700, color: C.text }}>{user.totalQuotations}</span></Td>
+                          <Td align="right"><span style={{ fontWeight: 600, color: C.green }}>{fmtCurrency(user.totalValue, selectedCurrency)}</span></Td>
                           <Td align="center"><CountBadge value={user.pending}  variant="pending"/></Td>
                           <Td align="center"><CountBadge value={user.approved} variant="approved"/></Td>
                           <Td align="center"><CountBadge value={user.awarded}  variant="awarded"/></Td>
                           <Td align="center"><CountBadge value={user.rejected} variant="rejected"/></Td>
-                          {/* Action */}
                           <Td align="center">
                             <IconBtn variant="view" onClick={() => fetchUserQuotations(user.userId, user.userName)}>
                               <Eye size={14}/> View
@@ -619,7 +648,6 @@ export default function UserQuotationStatsPage() {
             }
           </div>
         ) : (
-          /* Desktop quotations table */
           <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.borderLight}`, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

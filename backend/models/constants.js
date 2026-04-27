@@ -58,6 +58,7 @@ const UAE_EMIRATES = [
   const QUOTATION_STATUSES = {
     DRAFT: 'draft',
     PENDING: 'pending',
+    PENDING_ADMIN: 'pending_admin',
     OPS_APPROVED: 'ops_approved',
     OPS_REJECTED: 'ops_rejected',
     APPROVED: 'approved',

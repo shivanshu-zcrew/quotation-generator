@@ -59,28 +59,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  _browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-  });
-
   // _browser = await puppeteer.launch({
   //   headless: true,
+  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
+  //     '--no-zygote',
+  //     '--single-process',
   //   ],
   // });
+
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -707,6 +707,7 @@ exports.createQuotation = async (req, res) => {
     internalDocDescriptions
   } = req.body;
 
+  console.log(">>>>>>>>>>",queryDate);
   // ============================================================
   // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
   // ============================================================
@@ -740,15 +741,6 @@ exports.createQuotation = async (req, res) => {
       maxSizeKB: 400
     });
   }
-  
-  // console.log("📸 Compressed payload size estimate:", JSON.stringify({
-  //   ...req.body,
-  //   quotationImages: compressedQuotationImages,
-  //   termsImages: compressedTermsImages,
-  //   internalDocuments: compressedInternalDocuments
-  // }).length, "chars");
-  // ============================================================
- 
 
   if (!projectName) {
     return res.status(400).json({ message: 'Project Name is required' });
@@ -802,7 +794,7 @@ exports.createQuotation = async (req, res) => {
     console.error('Error getting exchange rates:', rateError.message);
   }
 
-   const processedItems = [];
+  const processedItems = [];
   
   for (let i = 0; i < validatedItems.length; i++) {
     const item = validatedItems[i];
@@ -810,7 +802,7 @@ exports.createQuotation = async (req, res) => {
     
     let imageUrls = [];
     
-     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
+    if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
        
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
@@ -835,7 +827,7 @@ exports.createQuotation = async (req, res) => {
       }
     }
     
-     if (item.images && Array.isArray(item.images)) {
+    if (item.images && Array.isArray(item.images)) {
       for (const img of item.images) {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
           try {
@@ -852,7 +844,7 @@ exports.createQuotation = async (req, res) => {
       }
     }
     
-     imageUrls = [...new Set(imageUrls)];
+    imageUrls = [...new Set(imageUrls)];
     
     console.log(`📸 Item ${i + 1}: Final ${imageUrls.length} images stored`);
     
@@ -879,7 +871,7 @@ exports.createQuotation = async (req, res) => {
   const discount = parseFloat(discountPercent) || 0;
   const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
-   let processedTermsImages = [];
+  let processedTermsImages = [];
   if (compressedTermsImages && compressedTermsImages.length > 0) {
     console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
     
@@ -924,7 +916,7 @@ exports.createQuotation = async (req, res) => {
 
   const quotationNumber = generateQuotationNumber(company.code);
 
-   let processedInternalDocs = [];
+  let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
     console.log(`📸 Processing ${compressedInternalDocuments.length} compressed internal documents`);
     processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
@@ -934,6 +926,16 @@ exports.createQuotation = async (req, res) => {
       internalDocDescriptions || []
     );
   }
+
+  // ============================================================
+  // ✅ STEP: DETERMINE STATUS BASED ON USER ROLE
+  // ============================================================
+  // If created by Admin, status = 'ops_approved' (skip Ops Manager approval)
+  // If created by regular user, status = 'pending' (needs Ops Manager approval)
+  const userRole = req.user?.role;
+  const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
+  
+  console.log(`📝 Creating quotation with status: ${initialStatus} (User role: ${userRole})`);
 
   const quotation = new Quotation({
     quotationNumber,
@@ -999,15 +1001,16 @@ exports.createQuotation = async (req, res) => {
     createdBy: req.user.id,
     createdBySnapshot: {
       name: req.user.name,
-      email: req.user.email
+      email: req.user.email,
+      role: req.user.role
     },
-    status: 'pending',
+    status: initialStatus,  
   });
 
   await quotation.save();
   const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
   
-   const originalSize = JSON.stringify(req.body).length;
+  const originalSize = JSON.stringify(req.body).length;
   const compressedSize = JSON.stringify({
     ...req.body,
     quotationImages: compressedQuotationImages,
@@ -1016,7 +1019,6 @@ exports.createQuotation = async (req, res) => {
   }).length;
   const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
   
- 
   res.status(201).json({
     success: true,
     message: 'Quotation created successfully',
@@ -1060,29 +1062,27 @@ exports.updateQuotation = async (req, res) => {
   // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
   // ============================================================
 
-   
-  
-   let compressedQuotationImages = quotationImages;
+  let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-     compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
+    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
       maxWidth: 800,
       quality: 70,
       maxSizeKB: 300
     });
   }
   
-   let compressedTermsImages = termsImages;
+  let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-     compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
+    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
       maxWidth: 600,
       quality: 65,
       maxSizeKB: 200
     });
   }
   
-   let compressedInternalDocuments = internalDocuments;
+  let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-     compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
+    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
       maxWidth: 1000,
       quality: 75,
       maxSizeKB: 400
@@ -1096,7 +1096,6 @@ exports.updateQuotation = async (req, res) => {
     internalDocuments: compressedInternalDocuments
   }).length;
   
- 
   if (!companyId) {
     return res.status(400).json({ message: 'Company ID is required' });
   }
@@ -1115,19 +1114,83 @@ exports.updateQuotation = async (req, res) => {
     }
 
     const isAdmin = req.user?.role === 'admin';
+    const isOpsManager = req.user?.role === 'ops_manager';
+    const isUser = req.user?.role === 'user';
+    
     let isCreator = false;
     if (existing.createdBy) {
       const creatorId = existing.createdBy._id || existing.createdBy;
       isCreator = creatorId.toString() === req.user?.id;
     }
 
-    if (!isAdmin && !isCreator) {
+    // Authorization check
+    if (!isAdmin && !isOpsManager && !isCreator) {
       return res.status(403).json({ message: 'Not authorized to update this quotation' });
     }
 
-    if (!isAdmin && !['pending', 'ops_rejected'].includes(existing.status)) {
+    // ============================================================
+    // ✅ STEP 2: DETERMINE NEW STATUS BASED ON WHO IS EDITING AND CURRENT STATUS
+    // ============================================================
+    
+    let newStatus = existing.status;
+    const currentStatus = existing.status;
+    
+    // Case 1: Admin editing ANY quotation (including their own)
+    if (isAdmin) {
+      // If quotation is already approved or awarded, don't change status
+      if (currentStatus === 'approved' || currentStatus === 'awarded' || currentStatus === 'not_awarded') {
+        newStatus = currentStatus;  // Keep as is (read-only effectively)
+      } 
+      // If admin edits a quotation in any review/rejected/pending state, move to pending_admin
+      else if (['pending', 'ops_approved', 'ops_rejected', 'rejected', 'draft'].includes(currentStatus)) {
+        newStatus = 'pending_admin';
+      } 
+      else {
+        newStatus = currentStatus;
+      }
+    }
+    
+    // Case 2: Ops Manager editing
+    else if (isOpsManager) {
+      // Ops manager can edit their own quotations or user quotations in pending/ops_rejected state
+      if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
+        newStatus = 'pending_admin';  // After edit, goes to admin for review
+      } 
+      // If editing an already ops_approved quotation, keep as ops_approved (admin needs to review)
+      else if (currentStatus === 'ops_approved') {
+        newStatus = 'ops_approved';  // Keeps same status, admin still needs to approve
+      }
+      else {
+        newStatus = currentStatus;
+      }
+    }
+    
+    // Case 3: User/Creator editing
+    else if (isCreator) {
+      // User can edit their own quotations in pending or ops_rejected state
+      if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
+        newStatus = 'pending';  // Goes back to ops manager for review
+      }
+      else if (currentStatus === 'rejected') {
+        newStatus = 'pending';  // Resubmit after admin rejection
+      }
+      else {
+        newStatus = currentStatus;
+      }
+    }
+
+    console.log('📝 Status update:', {
+      role: req.user?.role,
+      currentStatus: currentStatus,
+      newStatus: newStatus,
+      isCreator: isCreator
+    });
+
+    // Check if editing is allowed based on current status
+    const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
+    if (!isAdmin && !editableStatuses.includes(currentStatus)) {
       return res.status(400).json({ 
-        message: `Cannot update a quotation with status: ${existing.status}` 
+        message: `Cannot edit quotation with status: ${currentStatus}. Only quotations in pending or rejected status can be edited.` 
       });
     }
 
@@ -1157,7 +1220,8 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-     const processedItems = [];
+    // Process items
+    const processedItems = [];
     
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -1186,29 +1250,28 @@ exports.updateQuotation = async (req, res) => {
       
       let imagePaths = [];
       
-       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
-         
+      if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
           
           if (imageData && typeof imageData === 'string') {
-             if (imageData.startsWith('data:image')) {
+            if (imageData.startsWith('data:image')) {
               try {
-                 const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
+                const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
                 if (uploaded && uploaded.url) {
                   imagePaths.push(uploaded.url);
-                 }
+                }
               } catch (err) {
                 console.error(`❌ Upload failed:`, err.message);
               }
             }
-             else if (imageData.includes('cloudinary.com')) {
+            else if (imageData.includes('cloudinary.com')) {
               imagePaths.push(imageData);
-             }
+            }
           }
         }
       }
-       
+      
       if (item.imagePaths && Array.isArray(item.imagePaths)) {
         for (const img of item.imagePaths) {
           if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
@@ -1216,10 +1279,9 @@ exports.updateQuotation = async (req, res) => {
           }
         }
       }
-       
+      
       imagePaths = [...new Set(imagePaths)];
       
-       
       processedItems.push({
         itemId: itemDoc?._id || item.itemId,
         zohoItemId: itemDoc?.zohoId || item.zohoId || null,
@@ -1248,9 +1310,9 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-     let processedTermsImages = existing.termsImages || [];
+    // Process terms images
+    let processedTermsImages = existing.termsImages || [];
     if (compressedTermsImages && compressedTermsImages.length > 0) {
-       
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
         let imageBase64 = imageData;
@@ -1263,7 +1325,7 @@ exports.updateQuotation = async (req, res) => {
         
         if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
           try {
-             const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+            const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
             if (uploaded && uploaded.url) {
               processedTermsImages.push({
                 url: uploaded.url,
@@ -1271,7 +1333,7 @@ exports.updateQuotation = async (req, res) => {
                 fileName: fileName,
                 uploadedAt: new Date()
               });
-             }
+            }
           } catch (uploadError) {
             console.error('Failed to upload terms image:', uploadError.message);
           }
@@ -1294,11 +1356,12 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-     let newInternalDocs = [];
+    // Process internal documents
+    let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
       const validBase64Strings = compressedInternalDocuments.filter(doc => typeof doc === 'string' && doc.startsWith('data:'));
       if (validBase64Strings.length > 0) {
-         newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
+        newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
           validBase64Strings,
           existing.quotationNumber,
           req.user.id,
@@ -1307,8 +1370,7 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    const newStatus = (!isAdmin && existing.status === 'ops_rejected') ? 'pending' : existing.status;
-
+    // Clear rejection reasons if status changed
     const updateData = {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
@@ -1352,16 +1414,18 @@ exports.updateQuotation = async (req, res) => {
       status: newStatus,
     };
 
+    // Clear rejection reason when moving to pending or pending_admin
+    if (newStatus === 'pending' || newStatus === 'pending_admin') {
+      updateData.opsRejectionReason = '';
+      updateData.rejectionReason = '';
+    }
+
     if (currencyCode && currencyCode !== existing.currency?.code) {
       updateData['currency.code'] = currencyCode;
       updateData['currency.symbol'] = CURRENCY_OPTIONS[currencyCode]?.symbol || currencyCode;
       updateData['currency.name'] = CURRENCY_OPTIONS[currencyCode]?.name || currencyCode;
       updateData['currency.exchangeRate.rate'] = exchangeRate;
       updateData['currency.exchangeRate.fetchedAt'] = new Date();
-    }
-
-    if (newStatus === 'pending' && existing.status === 'ops_rejected') {
-      updateData.opsRejectionReason = '';
     }
 
     const updated = await Quotation.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
@@ -1379,7 +1443,7 @@ exports.updateQuotation = async (req, res) => {
       .populate('companyId', 'name code baseCurrency logo')
       .lean();
     
-     const originalSize = JSON.stringify(req.body).length;
+    const originalSize = JSON.stringify(req.body).length;
     const compressedSize = compressedPayloadSize;
     const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
      
@@ -1400,7 +1464,8 @@ exports.updateQuotation = async (req, res) => {
     });
 
   } catch (err) {
-     res.status(500).json({ 
+    console.error('Update error:', err);
+    res.status(500).json({ 
       success: false,
       message: 'Error updating quotation', 
       error: err.message 
@@ -1499,8 +1564,7 @@ exports.awardQuotation = async (req, res) => {
       });
     }
     
-    // STEP 2: Fetch customer with company filter
-    const customer = await Customer.findOne({ 
+     const customer = await Customer.findOne({ 
       _id: quotation.customerId, 
       companyId 
     }).lean();
@@ -1513,8 +1577,7 @@ exports.awardQuotation = async (req, res) => {
       });
     }
 
-    // STEP 3: Check permissions
-    if (quotation.createdBy._id.toString() !== req.user.id) {
+     if (quotation.createdBy._id.toString() !== req.user.id) {
       return res.status(403).json({ 
         success: false,
         message: 'Only the creator can mark this quotation as awarded' 
@@ -1528,13 +1591,11 @@ exports.awardQuotation = async (req, res) => {
       });
     }
 
-    // Set Zoho context for this company
-    if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
+     if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
       zohoBooksService.setCompany(quotation.companyId._id, quotation.companyId.zohoOrganizationId);
     }
 
-    // STEP 4: Get customer tax treatment and place of supply
-    const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
+     const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
     const customerPlaceOfSupply = customer?.placeOfSupply || 'Dubai';
     
     const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
@@ -1574,8 +1635,7 @@ exports.awardQuotation = async (req, res) => {
     console.log(`🏢 Company Zoho ID: ${companyZohoId}`);
     console.log(`💰 Tax IDs for this company:`, TAX_IDS);
     
-    // Determine tax settings based on rules
-    let taxRate = 0;
+     let taxRate = 0;
     let taxId = TAX_IDS['0%'];
     let taxTreatment = 'vat_not_registered';
     let placeOfSupplyCode = 'AE';
@@ -1820,7 +1880,7 @@ exports.awardQuotation = async (req, res) => {
           custom_body: quotation.notes || '',
           custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
           salesperson_name: quotation.ourContact || '',
-          notes: quotation.notes || '',
+          notes: awardNote || '',
           terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
           line_items: lineItemsWithDiscount,
           tax_treatment: taxTreatment,
@@ -2036,7 +2096,7 @@ exports.generatePDF = async (req, res) => {
       else req.continue();
     });
 
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 40000 });
 
     await page.evaluate(() =>
       Promise.all(

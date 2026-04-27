@@ -43,6 +43,7 @@ import {
 } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import UserQuotationStats from '../components/UserQuotationStats';
+import { SimpleLoadingOverlay } from '../components/LoadingOverlay';
 
 // Custom hook for responsive detection
 const useMediaQuery = (query) => {
@@ -116,10 +117,11 @@ const ExpiryBadge = React.memo(({ type }) => {
 });
 
 // Mobile Quotation Card for Admin
-const AdminQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
+const AdminQuotationCard = React.memo(({ quotation,onAward,isAwardin, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'ops_approved';
+  const canAward = quotation.status === 'approved';
   const canDelete = DELETABLE.has(quotation.status);
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
 
@@ -198,6 +200,18 @@ const AdminQuotationCard = React.memo(({ quotation, selectedCurrency, onView, on
           onClick={() => !isExporting && onDownload(quotation)} disabled={isExporting}
           icon={isExporting ? RefreshCw : Download} label={isExporting ? '…' : 'PDF'} size="small"/>
         
+        {canAward && (
+          <ActionBtn 
+            bg="#e9d5ff" 
+            color="#6b21a8" 
+            onClick={() => onAward(quotation)} 
+            icon={Award} 
+            label="Award" 
+            size="small"
+            disabled={isAwarding}
+          />
+        )}
+        
         {canDelete && (
           <ActionBtn bg="#fff1f2" color="#e11d48" onClick={() => onDelete(quotation._id)} 
             icon={Trash2} label="Del" size="small"/>
@@ -207,20 +221,7 @@ const AdminQuotationCard = React.memo(({ quotation, selectedCurrency, onView, on
   );
 });
 AdminQuotationCard.displayName = 'AdminQuotationCard';
-
-// ─────────────────────────────────────────────────────────────
-// Custom Hooks
-// ─────────────────────────────────────────────────────────────
-const useDebounce = (value, delay) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-
-  return debouncedValue;
-};
+ 
 
 const useTableData = (quotations, activeTab, search, sort) => {
   return useMemo(() => {
@@ -272,6 +273,10 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const isTablet = useMediaQuery('(min-width: 769px) and (max-width: 1024px)');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState('table');
+  const [refreshProgress, setRefreshProgress] = useState(0);
+const [refreshMessage, setRefreshMessage] = useState('');
+const [pdfProgress, setPdfProgress] = useState(0);
+const [pdfMessage, setPdfMessage] = useState('');
   
   // ── Store subscriptions ───────────────────────────────────
   const { quotations: companyQuotations, refresh: refreshCompanyQuotations } = useCompanyQuotations();
@@ -286,6 +291,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const clearError = useAppStore((s) => s.clearError);
   const fetchAllData = useAppStore((s) => s.fetchAllData);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
+
+  const awardQuotation = useAppStore((s) => s.awardQuotation);
   
   // ── Stats hook ────────────────────────────────────────────
   const { 
@@ -330,6 +337,13 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const [deleteModal, setDeleteModal] = useState({ open: false, id: null });
   const [actionLoadingIds, setActionLoadingIds] = useState({});
   const [showUserStats, setShowUserStats] = useState(false);
+  const [awardModal, setAwardModal] = useState({
+    open: false,
+    quotation: null,
+    busy: false,
+    awardNote: '',
+    awarded: null
+  });
 
   // Update limit on screen resize
   useEffect(() => {
@@ -424,24 +438,75 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   }, []);
 
   const handleRefresh = useCallback(async () => {
+    setRefreshProgress(10);
+    setRefreshMessage('Refreshing data...');
+    
+    const progressInterval = setInterval(() => {
+      setRefreshProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, 500);
+    
     try {
       await fetchAllData();
       refreshCompanyData?.();
       refreshCompanyQuotations();
+      setRefreshProgress(100);
+      setRefreshMessage('Complete!');
       addToast('Data refreshed', 'success');
+      
+      setTimeout(() => {
+        setRefreshProgress(0);
+        setRefreshMessage('');
+      }, 800);
     } catch (err) {
+      setRefreshProgress(0);
+      setRefreshMessage('');
       addToast(err.message || 'Refresh failed', 'error');
+    } finally {
+      clearInterval(progressInterval);
     }
   }, [fetchAllData, refreshCompanyData, refreshCompanyQuotations, addToast]);
 
   const handleDownload = useCallback(async (q) => {
     setExportingId(q._id);
+    setPdfProgress(10);
+    setPdfMessage('Preparing PDF...');
+    
+    const progressInterval = setInterval(() => {
+      setPdfProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, 800);
+    
     try {
+      setPdfProgress(40);
+      setPdfMessage('Processing images...');
+      
       await downloadQuotationPDF(q);
+      
+      setPdfProgress(100);
+      setPdfMessage('Complete!');
       addToast('PDF downloaded successfully!', 'success');
+      
+      setTimeout(() => {
+        setPdfProgress(0);
+        setPdfMessage('');
+      }, 800);
     } catch (err) {
+      setPdfProgress(0);
+      setPdfMessage('');
       addToast(`PDF failed: ${err.message}`, 'error');
     } finally {
+      clearInterval(progressInterval);
       setExportingId(null);
     }
   }, [addToast]);
@@ -652,12 +717,13 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   const renderTableRow = (q) => {
     const isExp = exportingId === q._id;
-    const canAct = q.status === 'ops_approved';
+    const canAct = q.status === 'ops_approved' || q.status == 'pending_admin';
+    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin');
     const canDelete = DELETABLE.has(q.status);
     const expired = isExpired(q.expiryDate);
     const expiring = !expired && isExpiringSoon(q.expiryDate);
     const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
-
+    // const createdByAdmin = q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin';
     return (
       <tr key={q._id} className="adm-row">
         <td style={styles.cell}>
@@ -697,6 +763,9 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           <StatusBadge status={q.status}/>
           <RejectionNote quotation={q}/>
         </td>
+        <td style={styles.cell}>
+           {q.createdBy.name}
+        </td>
         <td style={styles.totalCell}>
           {fmtCurrency(q.total, selectedCurrency)}
         </td>
@@ -719,7 +788,18 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             <ActionBtn bg={isExp ? '#f1f5f9' : '#f0fdf4'} color={isExp ? '#94a3b8' : '#166534'}
               onClick={() => !isExp && handleDownload(q)} disabled={isExp}
               icon={isExp ? RefreshCw : Download} label={isExp ? '…' : 'PDF'} title="Download PDF" size="small"/>
-            
+            {canAward && (
+            <ActionBtn 
+              bg="#e9d5ff" 
+              color="#6b21a8" 
+              onClick={() => handleAward.open(q)} 
+              icon={Award} 
+              label="Award" 
+              title="Mark as Awarded / Not Awarded"
+              size="small"
+              disabled={isActionLoading(q._id, 'award')}
+            />
+          )}
             {canDelete && (
               <ActionBtn bg="#fff1f2" color="#e11d48" onClick={() => handleDelete.open(q._id)} 
                 icon={Trash2} label="Del" title="Delete quotation" size="small"
@@ -730,6 +810,95 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       </tr>
     );
   };
+
+  const handleAward = {
+    open: useCallback((quotation) => {
+      console.log('🎯 Award button clicked!', quotation);
+      console.log('Quotation number:', quotation.quotationNumber);
+      console.log('Quotation ID:', quotation._id);
+      setAwardModal({
+        open: true,
+        quotation,
+        busy: false,
+        awardNote: '',
+        awarded: null
+      });
+    }, []),
+    
+    close: useCallback(() => {
+      setAwardModal({
+        open: false,
+        quotation: null,
+        busy: false,
+        awardNote: '',
+        awarded: null
+      });
+    }, []),
+    
+    confirm: useCallback(async (awarded, awardNote) => {
+      if (!awardModal.quotation) return;
+      
+      setAwardModal(prev => ({ ...prev, busy: true }));
+      
+      try {
+        const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
+        
+        if (result?.success) {
+          addToast(
+            awarded 
+              ? `🏆 "${awardModal.quotation.quotationNumber}" marked as Awarded!` 
+              : `"${awardModal.quotation.quotationNumber}" marked as Not Awarded.`,
+            "success"
+          );
+          
+          // Refresh the quotations list
+          refreshCompanyQuotations();
+          refreshStats();
+          handleAward.close();
+        } else {
+          addToast(result?.error || "Failed to update award status", "error");
+          setAwardModal(prev => ({ ...prev, busy: false }));
+        }
+      } catch (error) {
+        addToast(error.message || "Failed to update award status", "error");
+        setAwardModal(prev => ({ ...prev, busy: false }));
+      } finally {
+        setAwardModal(prev => ({ ...prev, busy: false }));
+      }
+    }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats])
+  };
+
+  const handleGoToCustomers = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('customers');
+    } else {
+      console.error('onNavigate prop is missing!');
+    }
+  }, [onNavigate]);
+
+  const handleCreateQuotation = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('addQuotation');
+    } else {
+      console.error('onNavigate prop is missing!');
+    }
+  }, [onNavigate]);
+
+  const handleUserStats = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('userStats');
+    } else {
+      console.error('onNavigate prop is missing!');
+    }
+  }, [onNavigate]);
+
+  const handleUsers = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('users');
+    } else {
+      console.error('onNavigate prop is missing!');
+    }
+  }, [onNavigate]);
 
   // ─────────────────────────────────────────────────────────
   // Main Render
@@ -769,7 +938,46 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         }}>
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
           <button 
- onClick={() => navigate('/admin/user-stats')} 
+    onClick={handleGoToCustomers}
+    className="adm-nav-btn" 
+    style={{
+      backgroundColor: '#e0e7ff',
+      color: '#4f46e5',
+      border: 'none',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.4rem'
+    }}
+  >
+    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+  </button>
+
+  <button 
+    onClick={handleCreateQuotation}
+    className="adm-nav-btn" 
+    style={{
+      backgroundColor: '#10b981',
+      color: 'white',
+      border: 'none',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.4rem'
+    }}
+  >
+    <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
+  </button>
+          <button 
+ onClick={handleUserStats}
   style={{
     backgroundColor: '#e0e7ff',
     color: '#4f46e5',
@@ -786,7 +994,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 >
   <Users size={isMobile ? 12 : 14} /> User Stats
 </button>
-          <NavBtn onClick={() => onNavigate('users')} label="Users" />
+          <NavBtn onClick={handleUsers}  label="Users" />
           <button onClick={handleLogout} className="adm-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
@@ -865,6 +1073,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                             isExporting={exportingId === q._id}
                             isApproving={isActionLoading(q._id, 'approve')}
                             isRejecting={isActionLoading(q._id, 'reject')}
+                            isAwarding={isActionLoading(q._id, 'award')} 
                           />
                         ))
                       )}
@@ -882,6 +1091,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                             <SortHeader label="Submitted" field="date" sort={sort} onSort={handleSort}/>
                             <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
                             <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Created by" field="createdby" sort={sort} onSort={handleSort}/>
                             <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
                             <th style={styles.actionsHeaderCell}>Actions</th>
                           </tr>
@@ -964,7 +1174,92 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         loading={isActionLoading(deleteModal.id, 'delete')}
       />
 
+{refreshProgress > 0 && (
+  <SimpleLoadingOverlay 
+    type="processing"
+    message={refreshMessage}
+  />
+)}
+
+{pdfProgress > 0 && (
+  <SimpleLoadingOverlay 
+    type="pdf"
+    message={pdfMessage}
+  />
+)}
  
+ {awardModal.open && awardModal.quotation && (
+  <div style={styles.modalOverlay}>
+    <div style={styles.modal}>
+      <div style={styles.modalHeader}>
+        <h3 style={styles.modalTitle}>
+          {awardModal.awarded === null ? 'Award Decision' : 
+           awardModal.awarded ? 'Confirm Award' : 'Confirm Not Awarded'}
+        </h3>
+        <button onClick={handleAward.close} style={styles.modalCloseBtn}>✕</button>
+      </div>
+      
+      <div style={styles.modalBody}>
+        <p style={styles.modalSubtitle}>
+          Quotation: <strong>{awardModal.quotation.quotationNumber}</strong>
+        </p>
+        
+        {awardModal.awarded === null ? (
+          // Step 1: Choose decision
+          <div style={styles.awardDecisionContainer}>
+            <button
+              onClick={() => setAwardModal(prev => ({ ...prev, awarded: true }))}
+              style={styles.awardYesBtn}
+            >
+              <Award size={20} /> 🏆 Won / Awarded
+            </button>
+            <button
+              onClick={() => setAwardModal(prev => ({ ...prev, awarded: false }))}
+              style={styles.awardNoBtn}
+            >
+              <X size={20} /> ✗ Not Awarded
+            </button>
+          </div>
+        ) : (
+          // Step 2: Add note and confirm
+          <>
+            <div style={styles.fieldWrapper}>
+              <label style={styles.label}>Award Note</label>
+              <textarea
+                value={awardModal.awardNote}
+                onChange={(e) => setAwardModal(prev => ({ ...prev, awardNote: e.target.value }))}
+                placeholder={awardModal.awarded 
+                  ? "Add award details (e.g., PO number, award date, amount)..." 
+                  : "Add reason for not being awarded..."}
+                rows={4}
+                style={styles.awardTextarea}
+                autoFocus
+              />
+            </div>
+            
+            <div style={styles.modalButtons}>
+              <button 
+                onClick={() => setAwardModal(prev => ({ ...prev, awarded: null, awardNote: '' }))}
+                style={styles.cancelBtn}
+                disabled={awardModal.busy}
+              >
+                Back
+              </button>
+              <button
+                onClick={() => handleAward.confirm(awardModal.awarded, awardModal.awardNote)}
+                style={awardModal.awarded ? styles.submitBtn : styles.dangerBtn}
+                disabled={awardModal.busy}
+              >
+                {awardModal.busy ? 'Processing...' : (awardModal.awarded ? 'Confirm Award' : 'Confirm Not Awarded')}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+
     </div>
   );
 }
@@ -1022,6 +1317,8 @@ const RejectModal = React.memo(({ open, reason, onReasonChange, onConfirm, onCan
     />
   </ConfirmModal>
 ));
+
+
 
 // ─────────────────────────────────────────────────────────────
 // Styles
@@ -1450,5 +1747,162 @@ const styles = {
     outline: 'none',
     boxSizing: 'border-box',
     fontFamily: 'inherit'
-  }
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backdropFilter: 'blur(4px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+
+  modal: {
+    backgroundColor: 'white',
+    borderRadius: '16px',
+    width: '90%',
+    maxWidth: '450px',
+    maxHeight: '90vh',
+    overflow: 'auto',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+  },
+  
+  modalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '1rem 1.5rem',
+    borderBottom: '1px solid #e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  
+  modalTitle: {
+    fontSize: '1.125rem',
+    fontWeight: 700,
+    color: '#0f172a',
+    margin: 0,
+  },
+  
+  modalCloseBtn: {
+    background: 'none',
+    border: 'none',
+    fontSize: '1.25rem',
+    cursor: 'pointer',
+    color: '#94a3b8',
+    padding: '0.25rem',
+    width: '32px',
+    height: '32px',
+    borderRadius: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  
+  modalBody: {
+    padding: '1.5rem',
+  },
+  
+  modalSubtitle: {
+    fontSize: '0.875rem',
+    color: '#64748b',
+    marginBottom: '1.5rem',
+    textAlign: 'center',
+  },
+  
+  modalButtons: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'flex-end',
+    marginTop: '1rem',
+  },
+  
+  awardDecisionContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem',
+    marginBottom: '1rem',
+  },
+  
+  awardYesBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.75rem',
+    padding: '1rem',
+    backgroundColor: '#d1fae5',
+    color: '#065f46',
+    border: '2px solid #6ee7b7',
+    borderRadius: '12px',
+    fontSize: '1rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  
+  awardNoBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.75rem',
+    padding: '1rem',
+    backgroundColor: '#fee2e2',
+    color: '#991b1b',
+    border: '2px solid #fecaca',
+    borderRadius: '12px',
+    fontSize: '1rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  
+  awardTextarea: {
+    width: '100%',
+    padding: '0.75rem',
+    border: '1px solid #e2e8f0',
+    borderRadius: '8px',
+    fontSize: '0.875rem',
+    resize: 'vertical',
+    outline: 'none',
+    boxSizing: 'border-box',
+    fontFamily: 'inherit',
+  },
+  
+  fieldWrapper: {
+    marginBottom: '1rem',
+  },
+  
+  label: {
+    display: 'block',
+    fontSize: '0.875rem',
+    fontWeight: 600,
+    color: '#334155',
+    marginBottom: '0.5rem',
+  },
+  
+  dangerBtn: {
+    padding: '0.5rem 1rem',
+    backgroundColor: '#ef4444',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    fontSize: '0.875rem',
+    fontWeight: 500,
+    cursor: 'pointer',
+  },
+  
+  submitBtn: {
+    padding: '0.5rem 1rem',
+    backgroundColor: '#10b981',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    fontSize: '0.875rem',
+    fontWeight: 500,
+    cursor: 'pointer',
+  },
 };

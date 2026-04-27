@@ -86,7 +86,7 @@ const UserManagementScreenWithBack = withBack(UserManagementScreen);
 // Screen navigation
 const ROUTE_MAP = {
   home: '/home', admin: '/admin', ops: '/ops', customers: '/customers',
-  items: '/items', addQuotation: '/quotation/new', users: '/admin/users',
+  items: '/items', addQuotation: '/quotation/new', users: '/admin/users',userStats: '/admin/user-stats'
 };
 
 function useScreenNavigate() {
@@ -185,9 +185,9 @@ function AppContent() {
           <Route path="/login" element={<GuestOnly><LoginRoute /></GuestOnly>} />
           <Route path="/register" element={<GuestOnly><RegisterRoute /></GuestOnly>} />
           <Route path="/home" element={<RequireCreator><HomeScreenRoute /></RequireCreator>} />
-          <Route path="/customers" element={<RequireCreator><CustomersRoute /></RequireCreator>} />
+          <Route path="/customers" element={<RequireAuth><CustomersRoute /></RequireAuth>} />
           <Route path="/items" element={<RequireCreator><ItemsRoute /></RequireCreator>} />
-          <Route path="/quotation/new" element={<RequireCreator><QuotationNewRoute /></RequireCreator>} />
+          <Route path="/quotation/new" element={<RequireAuth><QuotationNewRoute /></RequireAuth>} />
           <Route path="/quotation/:id" element={<RequireAuth><ViewQuotationRoute /></RequireAuth>} />
           <Route path="/ops" element={<RequireOpsManager><OpsDashboardRoute /></RequireOpsManager>} />
           <Route path="/admin" element={<RequireAdmin><AdminDashboardRoute /></RequireAdmin>} />

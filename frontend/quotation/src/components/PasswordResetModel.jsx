@@ -8,7 +8,7 @@ export function PasswordResetModal({
     onSuccess,
     loading,
   }) {
-    const [resetMethod, setResetMethod] = useState('direct'); // 'direct', 'email', or 'temp'
+    const [resetMethod, setResetMethod] = useState('direct');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -31,32 +31,32 @@ export function PasswordResetModal({
     };
    
     const handleSetPassword = async () => {
-        const e = validatePasswordForm();
-        if (Object.keys(e).length) {
-          setErrors(e);
-          return;
-        }
+      const e = validatePasswordForm();
+      if (Object.keys(e).length) {
+        setErrors(e);
+        return;
+      }
       
-        setActionLoading(true);
-        try {
-          const response = await authAPI.setUserPassword(user._id, {
-            newPassword: newPassword,
-          });
-          
-           if (response.data?.message || response.data?.user) {
-            onSuccess(`Password set for ${user.name}`);
-            handleClose();
-          } else {
-            throw new Error('Unexpected response format');
-          }
-        } catch (error) {
-          setErrors({
-            submit: error.response?.data?.message || error.message || 'Failed to set password',
-          });
-        } finally {
-          setActionLoading(false);
+      setActionLoading(true);
+      try {
+        const response = await authAPI.setUserPassword(user._id, {
+          newPassword: newPassword,
+        });
+        
+        if (response.data?.message || response.data?.user) {
+          onSuccess(`Password set for ${user.name}`);
+          handleClose();
+        } else {
+          throw new Error('Unexpected response format');
         }
-      };
+      } catch (error) {
+        setErrors({
+          submit: error.response?.data?.message || error.message || 'Failed to set password',
+        });
+      } finally {
+        setActionLoading(false);
+      }
+    };
    
     const handleSendResetEmail = async () => {
       setActionLoading(true);
@@ -153,7 +153,6 @@ export function PasswordResetModal({
                     icon: '🔒',
                     desc: 'Set a new password immediately'
                   },
-                   
                 ].map((method) => (
                   <button
                     key={method.key}
@@ -188,7 +187,7 @@ export function PasswordResetModal({
               </div>
             </div>
    
-            {/* Method 1: Direct Password Input */}
+            {/* Direct Password Input */}
             {resetMethod === 'direct' && (
               <>
                 <div style={styles.fieldWrapper}>
@@ -251,7 +250,7 @@ export function PasswordResetModal({
               </>
             )}
    
-            {/* Method 3: Temporary Password Display */}
+            {/* Temporary Password Display */}
             {resetMethod === 'temp' && tempPassword && (
               <div style={styles.tempPasswordContainer}>
                 <div style={styles.tempPasswordTitle}>
@@ -287,24 +286,6 @@ export function PasswordResetModal({
                 {actionLoading ? 'Setting...' : 'Set Password'}
               </button>
             )}
-            {resetMethod === 'email' && (
-              <button
-                onClick={handleSendResetEmail}
-                style={styles.submitBtn}
-                disabled={actionLoading}
-              >
-                {actionLoading ? 'Sending...' : 'Send Reset Email'}
-              </button>
-            )}
-            {resetMethod === 'temp' && (
-              <button
-                onClick={handleGenerateTempPassword}
-                style={styles.submitBtn}
-                disabled={actionLoading || tempPassword}
-              >
-                {actionLoading ? 'Generating...' : 'Generate Password'}
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -312,8 +293,12 @@ export function PasswordResetModal({
   }
 
 // ============================================================
-// STYLES
+// STYLES - Updated with rgb(15, 23, 42) as primary color
 // ============================================================
+
+const PRIMARY_COLOR = 'rgb(15, 23, 42)';
+const PRIMARY_DARK = '#0a0f1a';
+const ACCENT_COLOR = '#667eea';
 
 const styles = {
   // Modal Overlay
@@ -329,7 +314,6 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
-    animation: 'fadeIn 0.2s ease-out',
   },
   
   // Modal Container
@@ -341,17 +325,16 @@ const styles = {
     maxHeight: '90vh',
     overflow: 'auto',
     boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-    animation: 'slideUp 0.3s ease-out',
   },
   
-  // Header
+  // Header - Updated with PRIMARY_COLOR
   modalHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     padding: '20px 24px',
-    borderBottom: '1px solid #f0f0f0',
-    backgroundColor: '#f8f9fa',
+    borderBottom: `1px solid ${PRIMARY_DARK}`,
+    backgroundColor: PRIMARY_COLOR,
     borderRadius: '16px 16px 0 0',
   },
   
@@ -365,7 +348,7 @@ const styles = {
     width: '40px',
     height: '40px',
     borderRadius: '12px',
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    background: `linear-gradient(135deg, ${ACCENT_COLOR} 0%, #764ba2 100%)`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -376,25 +359,25 @@ const styles = {
     margin: 0,
     fontSize: '18px',
     fontWeight: '700',
-    color: '#1f2937',
+    color: 'white',
   },
   
   modalSubtitle: {
     margin: '4px 0 0',
     fontSize: '13px',
-    color: '#6b7280',
+    color: 'rgba(255, 255, 255, 0.7)',
   },
   
   closeBtn: {
-    background: 'none',
+    background: 'rgba(255, 255, 255, 0.1)',
     border: 'none',
-    cursor: 'pointer',
-    padding: '8px',
     borderRadius: '8px',
+    padding: '8px',
+    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#9ca3af',
+    color: '#94a3b8',
     transition: 'all 0.2s',
   },
   
@@ -402,7 +385,7 @@ const styles = {
   errorBanner: {
     margin: '16px 24px 0',
     padding: '12px 16px',
-    backgroundColor: '#fee2e2',
+    backgroundColor: '#fef2f2',
     border: '1px solid #fecaca',
     borderRadius: '10px',
     color: '#dc2626',
@@ -569,16 +552,16 @@ const styles = {
     justifyContent: 'flex-end',
     gap: '12px',
     padding: '16px 24px',
-    borderTop: '1px solid #f0f0f0',
-    backgroundColor: '#f8f9fa',
+    borderTop: '1px solid #e2e8f0',
+    backgroundColor: '#f8fafc',
     borderRadius: '0 0 16px 16px',
   },
   
   cancelBtn: {
     padding: '8px 16px',
     backgroundColor: 'white',
-    color: '#6b7280',
-    border: '1.5px solid #e5e7eb',
+    color: '#64748b',
+    border: '1.5px solid #e2e8f0',
     borderRadius: '10px',
     fontSize: '14px',
     fontWeight: '500',
@@ -588,7 +571,7 @@ const styles = {
   
   submitBtn: {
     padding: '8px 20px',
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    background: `linear-gradient(135deg, ${PRIMARY_COLOR} 0%, ${PRIMARY_DARK} 100%)`,
     color: 'white',
     border: 'none',
     borderRadius: '10px',
@@ -596,7 +579,7 @@ const styles = {
     fontWeight: '500',
     cursor: 'pointer',
     transition: 'all 0.2s',
-    boxShadow: '0 2px 4px rgba(102, 126, 234, 0.2)',
+    boxShadow: `0 2px 4px rgba(15, 23, 42, 0.2)`,
   },
 };
 
@@ -620,17 +603,26 @@ if (typeof document !== 'undefined') {
       }
     }
     
-    button:hover {
+    button:hover:not(:disabled) {
       transform: translateY(-1px);
+      opacity: 0.9;
     }
     
-    button:active {
+    button:active:not(:disabled) {
       transform: translateY(0);
     }
     
     input:focus {
-      border-color: #667eea !important;
+      border-color: ${ACCENT_COLOR} !important;
       box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    
+    .modal-overlay {
+      animation: fadeIn 0.2s ease-out;
+    }
+    
+    .modal-container {
+      animation: slideUp 0.3s ease-out;
     }
   `;
   document.head.appendChild(styleSheet);

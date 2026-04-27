@@ -62,6 +62,7 @@ import {
 } from "../utils/formatters";
 import { downloadQuotationPDF } from "../utils/pdfGenerator";
 import { htmlToSections, sectionsToHTML } from "../components/TermsCondition";
+import LoadingOverlay from "../components/LoadingOverlay";
 
 const useMediaQuery = (query) => {
   const [matches, setMatches] = useState(() => {
@@ -86,6 +87,14 @@ const useMediaQuery = (query) => {
 
 const STATUS_CONFIG = {
   pending: {
+    label: "Pending",
+    bg: "#fef3c7",
+    color: "#92400e",
+    borderColor: "#fde68a",
+    icon: "⏳",
+    description: "Awaiting submission",
+  },
+  pending_admin: {
     label: "Pending",
     bg: "#fef3c7",
     color: "#92400e",
@@ -248,6 +257,10 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const isTablet = useMediaQuery("(min-width: 769px) and (max-width: 1024px)");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState("table"); // 'table' or 'card'
+  const [saveProgress, setSaveProgress] = useState(0);
+const [saveStep, setSaveStep] = useState('');
+const [pdfProgress, setPdfProgress] = useState(0);
+const [pdfStep, setPdfStep] = useState('');
 
   const {
     quotations: companyQuotations,
@@ -486,10 +499,35 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const handleRefresh = useCallback(async () => {
     try {
+      setSaveProgress(10);
+      setSaveStep('Refreshing data...');
+      
+      const progressInterval = setInterval(() => {
+        setSaveProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 500);
+      
       await fetchAllData();
       refreshCompanyData?.();
+      
+      setSaveProgress(100);
+      setSaveStep('Complete!');
       addToast("Data refreshed", "success");
+      
+      setTimeout(() => {
+        setSaveProgress(0);
+        setSaveStep('');
+      }, 1000);
+      
+      clearInterval(progressInterval);
     } catch (err) {
+      setSaveProgress(0);
+      setSaveStep('');
       addToast(err.message || "Refresh failed", "error");
     }
   }, [fetchAllData, refreshCompanyData, addToast]);
@@ -520,18 +558,37 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const handleDownload = useCallback(
     async (q) => {
       setExportingId(q._id);
+      setPdfProgress(10);
+      setPdfStep('Preparing PDF...');
+      
+      const progressInterval = setInterval(() => {
+        setPdfProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 800);
+      
       try {
         const storeQuotations = useAppStore.getState().quotations;
         let completeQuotation = storeQuotations.find(
           (quot) => quot._id === q._id
         );
-
+  
         if (!completeQuotation) {
           completeQuotation = q;
         }
-
+  
+        setPdfProgress(40);
+        setPdfStep('Processing images...');
+        
         const pdfQuotation = await buildQuotationForPDF(completeQuotation);
-
+        
+        setPdfProgress(70);
+        setPdfStep('Generating PDF...');
+  
         console.log(
           "PDF Quotation termsImages count:",
           pdfQuotation.termsImages?.length
@@ -540,18 +597,31 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           "PDF Quotation termsAndConditions includes img:",
           pdfQuotation.termsAndConditions?.includes("<img")
         );
-
+  
         await downloadQuotationPDF(pdfQuotation);
+        
+        setPdfProgress(100);
+        setPdfStep('Complete!');
         addToast("PDF generated successfully!", "success");
+        
+        setTimeout(() => {
+          setPdfProgress(0);
+          setPdfStep('');
+        }, 1000);
+        
       } catch (err) {
         console.error("PDF generation error:", err);
+        setPdfProgress(0);
+        setPdfStep('');
         addToast(`PDF failed: ${err.message}`, "error");
       } finally {
+        clearInterval(progressInterval);
         setExportingId(null);
       }
     },
     [addToast, buildQuotationForPDF]
   );
+
   const confirmDelete = useCallback(async () => {
     const { quotation } = deleteModal;
     if (!quotation) return;
@@ -1816,7 +1886,21 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           )}
         </div>
       </div>
+ {saveProgress > 0 && (
+  <LoadingOverlay 
+    type="saving"
+    step={saveStep}
+    progress={saveProgress}
+  />
+)}
 
+{pdfProgress > 0 && (
+  <LoadingOverlay 
+    type="pdf"
+    step={pdfStep}
+    progress={pdfProgress}
+  />
+)}
       <QueryDateUpdater
         open={queryDateModal.open}
         onClose={() => setQueryDateModal({ open: false, quotation: null })}

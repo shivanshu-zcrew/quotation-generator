@@ -171,6 +171,14 @@ exports.opsApproveQuotation = async (req, res) => {
     quotation.opsApprovedBy = req.user.id;
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = '';
+    
+    // ✅ Store ops manager snapshot
+    quotation.opsApprovedBySnapshot = {
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role
+    };
+    
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
@@ -182,7 +190,6 @@ exports.opsApproveQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-     
     res.status(500).json({ message: 'Error approving quotation (ops)', error: error.message });
   }
 };
@@ -273,17 +280,33 @@ exports.approveQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id);
 
-    if (!quotation)
+    if (!quotation) {
       return res.status(404).json({ message: 'Quotation not found' });
+    }
 
-    if (quotation.status !== 'ops_approved')
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admin can approve quotation' });
+    }
+
+    const allowedStatuses = ['ops_approved', 'pending_admin'];
+
+    if (!allowedStatuses.includes(quotation.status)) {
       return res.status(400).json({
-        message: `Quotation must be ops-approved before admin approval. Current status: ${quotation.status}`,
+        message: `Quotation cannot be approved in current status: ${quotation.status}`,
       });
+    }
 
     quotation.status = 'approved';
     quotation.approvedBy = req.user.id;
     quotation.approvedAt = new Date();
+    
+    // ✅ Store admin approval snapshot
+    quotation.approvedBySnapshot = {
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role
+    };
+    
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
@@ -295,8 +318,10 @@ exports.approveQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-     
-    res.status(500).json({ message: 'Error approving quotation', error: error.message });
+    res.status(500).json({
+      message: 'Error approving quotation',
+      error: error.message,
+    });
   }
 };
 
@@ -314,7 +339,7 @@ exports.rejectQuotation = async (req, res) => {
     if (!quotation)
       return res.status(404).json({ message: 'Quotation not found' });
 
-    if (!['pending', 'ops_approved'].includes(quotation.status))
+    if (!['pending', 'ops_approved', 'pending_admin'].includes(quotation.status))
       return res.status(400).json({
         message: `Quotation cannot be rejected. Current status: ${quotation.status}`,
       });
