@@ -11,7 +11,7 @@ const app = express();
 // ── CORS Configuration ───────────────────────────────────────────────────
 const allowedOrigins = [
   'http://localhost:3000',
-  '',
+  'http://13.234.239.26',
 ];
 
 const corsOptions = {
@@ -58,7 +58,6 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
 app.use((req, res, next) => {
   console.log('➡️', req.method, req.url);
   next();

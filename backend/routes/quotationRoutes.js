@@ -45,18 +45,8 @@ router.get('/:id/internal-documents/:docId', quotationController.getInternalDocu
  */
 router.patch('/:id/internal-documents/:docId', quotationController.updateInternalDocumentDescription);
 
-/**
- * @route   DELETE /api/quotations/:id/internal-documents/:docId
- * @desc    Remove internal document
- * @access  Private (Creator only)
- */
 router.delete('/:id/internal-documents/:docId', quotationController.removeInternalDocument);
 
-/**
- * @route   GET /api/quotations/:id/internal-documents/:docId/download
- * @desc    Get internal document download URL
- * @access  Private (Internal team only)
- */
 router.get('/:id/internal-documents/:docId/download', quotationController.getInternalDocumentDownloadUrl);
 
 // =============================================================

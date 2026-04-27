@@ -1,7 +1,7 @@
 import React from "react";
 import { Plus, Trash2, Upload, X } from "lucide-react";
 
-const BASE_URL = "http://localhost:4000";
+const BASE_URL = "";
 
 export const newPoint = () => ({
   id: `pt-${Date.now()}-${Math.random()}`,

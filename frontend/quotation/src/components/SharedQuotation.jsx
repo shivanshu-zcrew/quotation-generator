@@ -8,7 +8,7 @@
 // // ─────────────────────────────────────────────────────────────
 // // Constants
 // // ─────────────────────────────────────────────────────────────
-// const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
+// const BASE_URL = process.env.REACT_APP_API_URL || "";
 // const ITEMS_PER_FIRST_PAGE = 8;
 // const MAX_IMAGE_SIZE_MB = 5;
 // const MAX_IMAGES_PER_ITEM = 6;

@@ -90,5 +90,5 @@ export const CSS_CLASSES = {
 };
 
 export const QUOTATION_NUMBER_FORMAT = 'QT-{yy}{mm}{dd}-{rn}';
-export const BASE_URL = "http://localhost:4000";
+export const BASE_URL = "";
 export const ITEMS_PER_FIRST_PAGE = 8;
