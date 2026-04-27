@@ -16,25 +16,29 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
+    // allow requests with no origin (like Postman, curl)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      return callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true,
-  optionsSuccessStatus: 200
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-company-id',
+    'X-Company-Id'
+  ],
+  exposedHeaders: ['x-company-id'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 };
-
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
+app.options('*', (req, res) => {
+  res.sendStatus(200);
+});
 // ── Body parsing middleware ──────────────────────────────────────────────
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
@@ -53,6 +57,11 @@ cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+app.use((req, res, next) => {
+  console.log('➡️', req.method, req.url);
+  next();
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────
