@@ -1306,10 +1306,14 @@ exports.updateQuotation = async (req, res) => {
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
     const discount = discountPercent !== undefined ? parseFloat(discountPercent) : (existing.discountPercent || 0);
     
-    const subtotal = processedItems.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
-    const taxAmount = (subtotal * tax) / 100;
-    const discountAmount = (subtotal * discount) / 100;
-    const total = subtotal + taxAmount - discountAmount;
+    const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
+
+    const {
+      subtotal,
+      taxAmount,
+      discountAmount,
+      total
+    } = totals;
     
     const subtotalInBaseCurrency = processedItems.reduce((sum, item) => sum + (item.totalPriceInBaseCurrency || 0), 0);
     const taxAmountInBaseCurrency = (subtotalInBaseCurrency * tax) / 100;
