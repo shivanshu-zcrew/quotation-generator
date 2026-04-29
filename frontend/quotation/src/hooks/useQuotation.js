@@ -44,31 +44,35 @@ export function useQuotation() {
   const [termsImages, setTermsImages] = useState([]);
   const originalQuotation = (quotations || []).find((q) => q._id === id) || fetchedQ;
   const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
-  // Calculations
-  const subtotal = useMemo(() =>
-    quotationItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0), 0),
-    [quotationItems]
-  );
 
-  const taxAmount = useMemo(() =>
-    (subtotal * (Number(quotationData.tax) || 0)) / 100,
-    [subtotal, quotationData.tax]
-  );
+  
+const round = (num) => Number((num || 0).toFixed(2));
 
-  const discountAmount = useMemo(() =>
-    (subtotal * (Number(quotationData.discount) || 0)) / 100,
-    [subtotal, quotationData.discount]
+// Calculations
+const subtotal = useMemo(() => {
+  return round(
+    quotationItems.reduce((s, i) => {
+      const qty = Number(i.quantity) || 0;
+      const price = Number(i.unitPrice) || 0;
+      return s + round(qty * price);  
+    }, 0)
   );
+}, [quotationItems]);
 
-  const grandTotal = useMemo(() =>
-    subtotal + taxAmount - discountAmount,
-    [subtotal, taxAmount, discountAmount]
-  );
+const taxPercent = Number(quotationData.tax) || 0;
+const discountPercent = Number(quotationData.discount) || 0;
 
-  const amountInWords = useMemo(() =>
-    numberToWords(grandTotal),
-    [grandTotal]
-  );
+ 
+const discountAmount = round((subtotal * discountPercent) / 100);
+const subtotalAfterDiscount = subtotal - discountAmount;
+
+const taxAmount = round((subtotalAfterDiscount * taxPercent) / 100);
+
+const grandTotal = round(subtotalAfterDiscount + taxAmount);
+
+const amountInWords = useMemo(() => {
+  return numberToWords(grandTotal);
+}, [grandTotal]);
 
   useEffect(() => {
     if (!(quotations || []).find((q) => q._id === id) && id) {

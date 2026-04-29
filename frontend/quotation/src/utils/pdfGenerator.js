@@ -145,11 +145,24 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   );
 
   // Calculate totals
-  const subtotal = itemsWithImages.reduce((s, i) => s + (i.quantity * i.unitPrice), 0);
-  const taxAmt = (subtotal * taxPercent) / 100;
-  const discAmt = (subtotal * discountPercent) / 100;
-  const grandTotal = subtotal + taxAmt - discAmt;
-  const amountInWords = numberToWords(grandTotal);
+  const subtotal = itemsWithImages.reduce(
+    (s, i) => s + ((i.quantity || 0) * (i.unitPrice || 0)),
+    0
+  );
+  
+  const tax = Number(taxPercent) || 0;
+  const discount = Number(discountPercent) || 0;
+  
+
+  const discAmt = (subtotal * discount) / 100;
+  const subtotalAfterDiscount = subtotal - discAmt;
+  const taxAmt = (subtotalAfterDiscount * tax) / 100;
+  const grandTotal = subtotalAfterDiscount + taxAmt ;
+  
+  // Optional: round to 2 decimals (recommended for currency)
+  const roundedTotal = Number(grandTotal.toFixed(2));
+  
+  const amountInWords = numberToWords(roundedTotal);
 
   // Split items for multi-page
   const firstPage = itemsWithImages.slice(0, ITEMS_PER_FIRST_PAGE);
