@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE = import.meta.env?.VITE_API_URL || "http://localhost/api";
+const API_BASE = import.meta.env?.VITE_API_URL || "http://localhost:4000/api";
 
 // Request Deduplication
 class RequestDeduplicator {
@@ -249,6 +249,12 @@ export const opsAPI = {
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/ops-approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/ops-reject`, data),
   getOpsStats: (params) => api.get("/admin/ops-dashboard", { params }),
+  getAllQuotations: (params) => {
+    const key = `/admin/quotations/ops-all?${JSON.stringify(params)}`;
+    return withCache(key, () => api.get("/admin/quotations/ops-all", { params }), { 
+      ttl: 1 * 60 * 1000  // Cache for 1 minute
+    });
+  },
 };
 
 // ==================== CUSTOMERS ====================

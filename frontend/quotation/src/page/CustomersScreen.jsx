@@ -8,6 +8,7 @@ import {
 import { useCustomers, usePaginatedCustomers, useCustomerSearch, useCustomerStats, useZohoSync } from '../hooks/customerHooks';
 import { customerAPI } from '../services/api';
 import { useCompanyCurrency } from '../components/CompanyCurrencySelector';
+import { useAppStore } from '../services/store';
 
 const PRIMARY_COLOR = '#0f172a';
 
@@ -348,7 +349,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const pagination = usePaginatedCustomers(1, effectiveCompanyId);
   const stats = useCustomerStats(effectiveCompanyId);
     const search = useCustomerSearch();
-   const { syncCustomers, syncing: isSyncing, error: syncError, getSyncStatus } = useZohoSync();
+    const { syncCustomers, syncing: isSyncing, error: syncError, getSyncStatus, progress: syncProgress } = useZohoSync();
   
   const [mode, setMode] = useState('browse');
   const [toast, setToast] = useState(null);
@@ -359,6 +360,11 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const [syncType, setSyncType] = useState(null);
   const [viewMode, setViewMode] = useState('card');
   const [showSyncOptions, setShowSyncOptions] = useState(false);
+  const addCustomerToStore = useAppStore((state) => state.addCustomer);
+const updateCustomerInStore = useAppStore((state) => state.updateCustomer);
+const deleteCustomerFromStore = useAppStore((state) => state.deleteCustomer);
+const fetchAllData = useAppStore((state) => state.fetchAllData);
+
 
   const currentCustomers = mode === 'search' ? search.customers : pagination.customers;
   const currentLoading = mode === 'search' ? search.loading : pagination.loading;
@@ -400,42 +406,150 @@ const handleSearch = useCallback((value) => {
   const handleSubmit = useCallback(async (formData) => {
     setIsSubmitting(true);
     try {
-      const response = editingCustomer 
-        ? await customerAPI.update(editingCustomer._id, formData) 
-        : await customerAPI.create(formData);
-      if (response.data?.success) {
-        handleCloseModal();
-        setToast({ message: editingCustomer ? 'Customer updated successfully' : 'Customer added successfully', type: 'success' });
-        pagination.refetch();
-        stats.refetch();
+      let result;
+      
+      if (editingCustomer) {
+        // UPDATE: Use optimistic update
+        const updatedCustomer = { ...editingCustomer, ...formData };
+        
+        // ✅ OPTIMISTIC UPDATE - Show change immediately
+        pagination.updateCustomerOptimistic(updatedCustomer);
+        
+        // Then make the API call
+        result = await updateCustomerInStore(editingCustomer._id, formData);
+        
+        if (result?.success) {
+          handleCloseModal();
+          setToast({ 
+            message: '✅ Customer updated successfully', 
+            type: 'success' 
+          });
+          
+          // ✅ SMART REFETCH - Only if needed
+          await Promise.all([
+            pagination.smartRefetch(true), // Force refresh with new data
+            stats?.smartRefetch?.(true),
+          ]);
+          
+          // Refresh main store
+          await fetchAllData();
+          
+        } else {
+          // Rollback optimistic update if failed
+          await pagination.smartRefetch(true);
+          setToast({ message: result?.error || 'Error updating customer', type: 'error' });
+        }
+        
       } else {
-        setToast({ message: response.data?.error || 'Error saving customer', type: 'error' });
+        // CREATE: Use optimistic add
+        const tempId = `temp-${Date.now()}`;
+        const tempCustomer = { ...formData, _id: tempId, createdAt: new Date().toISOString() };
+        
+        // ✅ OPTIMISTIC ADD - Show new customer immediately
+        pagination.addCustomerOptimistic(tempCustomer);
+        
+        // ✅ OPTIMISTIC STATS UPDATE
+        if (stats?.data) {
+          stats.updateStatsOptimistic({ 
+            totalCustomers: (stats.data.totalCustomers || 0) + 1,
+            activeCustomers: (stats.data.activeCustomers || 0) + 1,
+          });
+        }
+        
+        // Then make the API call
+        result = await addCustomerToStore(formData);
+        
+        if (result?.success) {
+          // ✅ REPLACE temp customer with real one
+          pagination.updateCustomerOptimistic(result.customer);
+          
+          handleCloseModal();
+          setToast({ 
+            message: '✅ Customer added successfully', 
+            type: 'success' 
+          });
+          
+          // ✅ SMART REFETCH - Verify with server
+          await Promise.all([
+            pagination.smartRefetch(true),
+            stats?.smartRefetch?.(true),
+          ]);
+          
+          // Refresh main store
+          await fetchAllData();
+          
+        } else {
+          // Rollback optimistic update if failed
+          await pagination.smartRefetch(true);
+          await stats?.smartRefetch?.(true);
+          setToast({ message: result?.error || 'Error adding customer', type: 'error' });
+        }
       }
+      
     } catch (error) { 
-      setToast({ message: error.response?.data?.message || 'Error saving customer', type: 'error' }); 
+      console.error('Submit error:', error);
+      
+      // Rollback on error
+      await pagination.smartRefetch(true);
+      await stats?.smartRefetch?.(true);
+      
+      setToast({ message: error?.response?.data?.message || error?.message || 'Error saving customer', type: 'error' }); 
     } finally { 
       setIsSubmitting(false); 
     }
-  }, [editingCustomer, pagination, stats, handleCloseModal]);
+  }, [editingCustomer, addCustomerToStore, updateCustomerInStore, pagination, stats, fetchAllData, handleCloseModal]);
+  
+
 
   const handleDelete = useCallback(async (customer) => {
     if (!window.confirm(`Delete "${customer.name}"? This action cannot be undone.`)) return;
+    
     setDeletingId(customer._id);
+    
     try {
+      // ✅ OPTIMISTIC DELETE - Hide customer immediately
+      pagination.deleteCustomerOptimistic(customer._id);
+      
+      // ✅ OPTIMISTIC STATS UPDATE
+      if (stats?.data) {
+        stats.updateStatsOptimistic({ 
+          totalCustomers: Math.max(0, (stats.data.totalCustomers || 1) - 1),
+          activeCustomers: Math.max(0, (stats.data.activeCustomers || 1) - 1),
+        });
+      }
+      
+      // Then make the API call
       const response = await customerAPI.delete(customer._id);
+      
       if (response.data?.success) { 
-        setToast({ message: 'Customer deleted successfully', type: 'success' }); 
-        pagination.refetch(); 
-        stats.refetch();
+        setToast({ message: '✅ Customer deleted successfully', type: 'success' }); 
+        
+        // ✅ SMART REFETCH - Verify with server
+        await Promise.all([
+          pagination.smartRefetch(true),
+          stats?.smartRefetch?.(true),
+        ]);
+        
       } else { 
+        // Rollback if failed
+        await pagination.smartRefetch(true);
+        await stats?.smartRefetch?.(true);
         setToast({ message: 'Error deleting customer', type: 'error' }); 
       }
+      
     } catch (error) { 
+      // Rollback on error
+      await pagination.smartRefetch(true);
+      await stats?.smartRefetch?.(true);
+      
+      console.error('Delete error:', error);
       setToast({ message: error.response?.data?.message || 'Error deleting customer', type: 'error' }); 
+      
     } finally { 
       setDeletingId(null); 
     }
   }, [pagination, stats]);
+
 
   const handleSync = useCallback(async (fullSync = false) => {
     setSyncType(fullSync ? 'full' : 'incremental');
@@ -454,25 +568,16 @@ const handleSearch = useCallback((value) => {
           type: 'success' 
         });
         
-        // Refresh pagination data
-        if (pagination && typeof pagination.refetch === 'function') {
-          await pagination.refetch();
-        }
+        // ✅ IMMEDIATE REFETCH after sync - Always force refresh
+        console.log('🔄 Syncing complete, refreshing data...');
         
-        // Refresh stats - try multiple approaches
-        if (stats) {
-          if (typeof stats.refetch === 'function') {
-            await stats.refetch();
-          } else if (typeof stats.fetchStats === 'function') {
-            await stats.fetchStats();
-          } else {
-            // Manual refresh
-            const response = await customerAPI.getStats();
-            if (response.data.success && typeof stats.setData === 'function') {
-              stats.setData(response.data.stats);
-            }
-          }
-        }
+        await Promise.all([
+          pagination.smartRefetch(true), // Force refresh
+          stats?.smartRefetch?.(true),
+        ]);
+        
+        // Also update main store
+        await fetchAllData();
         
       } else {
         setToast({ message: `❌ ${result.error || 'Sync failed'}`, type: 'error' });
@@ -485,7 +590,9 @@ const handleSearch = useCallback((value) => {
       setSyncType(null);
       setShowSyncOptions(false);
     }
-  },  [syncCustomers, pagination, stats, effectiveCompanyId]);  
+  },  [syncCustomers, pagination, stats, effectiveCompanyId, fetchAllData]);
+   
+
 
   const handleGetSyncStatus = useCallback(async () => {
     try {

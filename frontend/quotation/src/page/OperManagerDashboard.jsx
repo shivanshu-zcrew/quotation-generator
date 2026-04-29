@@ -1,4 +1,4 @@
-// screens/OpsDashboard.jsx (OPTIMIZED + RESPONSIVE)
+// screens/OpsDashboard.jsx (OPTIMIZED + RESPONSIVE - FIXED)
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -23,24 +23,19 @@ import {
   SortHeader,
   PaginationBar,
   SkeletonRow,
-  ConfirmModal
+  ConfirmModal,
 } from '../components/SharedComponents';
 
 // Import new components
 import CompactStatsCard from '../components/HomePageComponent/CompactStatsCard';
-import DesktopStatsGrid from '../components/HomePageComponent/DesktopStatsGrid';
-import QuotationCard from '../components/HomePageComponent/QuotationCard';
 import ViewToggle from '../components/HomePageComponent/ViewToggle';
 
 // Import utils
 import {
-  PAGE_SIZE_OPTIONS,
   DEBOUNCE_MS,
-  STATUS_CONFIG,
-  CURRENCY_SYMBOLS,
-  VALIDATION_MESSAGES
 } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
+import AwardModal from '../components/AwardModal';
 
 // Custom hook for responsive detection
 const useMediaQuery = (query) => {
@@ -68,9 +63,13 @@ const useMediaQuery = (query) => {
 // Constants
 // ─────────────────────────────────────────────────────────────
 const TAB_KEYS = {
-  pending:      { label: 'Pending Review',      Icon: Clock,  statusFilter: 'pending'      },
-  ops_approved: { label: 'Awaiting Admin',      Icon: Shield, statusFilter: 'ops_approved' },
-  ops_rejected: { label: 'Returned by Me',      Icon: Ban,    statusFilter: 'ops_rejected' },
+  all:          { label: 'All Quotations',        Icon: FileText, statusFilter: null }, 
+  pending:      { label: 'Pending Review',        Icon: Clock,    statusFilter: 'pending' },
+  ops_approved: { label: 'Awaiting Admin',        Icon: Shield,   statusFilter: 'ops_approved' },
+  ops_rejected: { label: 'Returned by Me',        Icon: Ban,      statusFilter: 'ops_rejected' },
+  rejected:     { label: 'Rejected by Admin',     Icon: XCircle,  statusFilter: 'rejected' },
+  approved:     { label: 'Approved',              Icon: CheckCircle, statusFilter: 'approved' },
+  awarded:      { label: 'Awarded',               Icon: Award,    statusFilter: 'awarded' },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -104,10 +103,12 @@ const ItemsBadge = React.memo(({ count }) => (
 ));
 
 // Mobile Quotation Card for Ops
-const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, isDownloading, isApproving, isRejecting }) => {
+const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, onAward, isDownloading, isApproving, isRejecting, isAwarding }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'pending';
+  // const canAward = quotation.status === 'approved'; 
+  const canAward = quotation.status === 'approved' && ( quotation.createdBy?.role === 'ops_manager' || quotation.createdBySnapshot?.role === 'ops_manager');
 
   return (
     <div style={{
@@ -193,6 +194,17 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
             />
           </>
         )}
+        {canAward && (
+          <ActionBtn 
+            bg="#e9d5ff" 
+            color="#6b21a8" 
+            onClick={() => onAward(quotation)} 
+            icon={Award} 
+            label="Award" 
+            size="small"
+            disabled={isAwarding}
+          />
+        )}
       </div>
     </div>
   );
@@ -202,21 +214,14 @@ OpsQuotationCard.displayName = 'OpsQuotationCard';
 // ─────────────────────────────────────────────────────────────
 // Custom Hooks
 // ─────────────────────────────────────────────────────────────
-const useDebounce = (value, delay) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-
-  return debouncedValue;
-};
-
 const useTableData = (quotations, activeTab, search, sort) => {
   return useMemo(() => {
     const { statusFilter } = TAB_KEYS[activeTab];
-    const tabFiltered = quotations.filter(q => q.status === statusFilter);
+    
+    // If statusFilter is null or 'all', show all quotations
+    const tabFiltered = !statusFilter || statusFilter === 'all' 
+      ? quotations 
+      : quotations.filter(q => q.status === statusFilter);
 
     const searchFiltered = !search.trim() ? tabFiltered :
       tabFiltered.filter(q => {
@@ -258,28 +263,30 @@ export default function OpsDashboard({ onViewQuotation }) {
   
   // Responsive hooks
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const isTablet = useMediaQuery('(min-width: 769px) and (max-width: 1024px)');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState('table');
   
+  // Award Modal State
+  const [awardModal, setAwardModal] = useState({
+    open: false,
+    quotation: null,
+    loading: false
+  });
+  
   // ── Store subscriptions ───────────────────────────────────
-  const { quotations: companyQuotations, refresh: refreshCompanyQuotations } = useCompanyQuotations();
+  const { quotations: companyQuotations, refresh: refreshCompanyQuotations, loading: quotationsLoading } = useCompanyQuotations();
   
   const user = useAppStore((s) => s.user);
-  const fetchAllData = useAppStore((s) => s.fetchAllData);
-  const quotations = useAppStore((s) => s.quotations);
+  const awardQuotation = useAppStore((s) => s.awardQuotation);
   const opsApproveQuotation = useAppStore((s) => s.opsApproveQuotation);
   const opsRejectQuotation = useAppStore((s) => s.opsRejectQuotation);
   const handleLogout = useAppStore((s) => s.handleLogout);
-  const loading = useAppStore((s) => s.loading);
-  const storeQuotations = useAppStore((s) => s.quotations);
   const loadError = useAppStore((s) => s.loadError);
   const clearError = useAppStore((s) => s.clearError);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
-
+  
   // ── Stats hook ────────────────────────────────────────────
   const { 
-    stats: opsStats, 
     loading: statsLoading, 
     refresh: refreshStats,
     totalQuotations,
@@ -291,7 +298,6 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Company & Currency ────────────────────────────────────
   const {
-    company: currentCompany,
     selectedCurrency,
     refreshCompanyData
   } = useCompanyCurrency();
@@ -302,7 +308,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const searchTimer = useRef(null);
 
   // ── Table state ───────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState('pending');
+  const [activeTab, setActiveTab] = useState('all');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(isMobile ? 10 : 20);
   const [searchInput, setSearchInput] = useState('');
@@ -312,7 +318,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
-
+ 
   // Update limit on screen resize
   useEffect(() => {
     setLimit(isMobile ? 10 : 20);
@@ -325,23 +331,31 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [isMobile]);
 
+  // Load initial data
+  useEffect(() => {
+    if (selectedCompany) {
+      refreshCompanyQuotations();
+      refreshStats();
+    }
+  }, [selectedCompany, refreshCompanyQuotations, refreshStats]);
+
   // ── Derived state ─────────────────────────────────────────
-  const hasFetched = !loading || storeQuotations.length > 0;
-  const isInitialLoading = loading && !hasFetched;
-  const isRefreshing = loading && hasFetched;
+  const hasFetched = !quotationsLoading && companyQuotations.length > 0;
+  const isInitialLoading = quotationsLoading && !hasFetched;
+  const isRefreshing = quotationsLoading && hasFetched;
 
   // ── Safe quotation array (filtered by selected company) ──
   const safeQ = useMemo(() => {
-    if (!Array.isArray(quotations)) return [];
-    if (!selectedCompany) return quotations;
+    if (!Array.isArray(companyQuotations)) return [];
+    if (!selectedCompany) return companyQuotations;
     
-    return quotations.filter(q => {
+    return companyQuotations.filter(q => {
       const match = q.companyId === selectedCompany || 
                     q.companyId?._id === selectedCompany ||
                     q.companyId?.toString() === selectedCompany?.toString();
       return match;
     });
-  }, [quotations, selectedCompany]);
+  }, [companyQuotations, selectedCompany]);
 
   // ── Table data management ─────────────────────────────────
   const { filtered: filteredQuotations, total: totalFiltered } = useTableData(safeQ, activeTab, search, sort);
@@ -356,9 +370,13 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Tab counts ────────────────────────────────────────────
   const tabCounts = useMemo(() => ({
+    all: safeQ.length,
     pending: safeQ.filter(q => q.status === 'pending').length,
     ops_approved: safeQ.filter(q => q.status === 'ops_approved').length,
     ops_rejected: safeQ.filter(q => q.status === 'ops_rejected').length,
+    rejected: safeQ.filter(q => q.status === 'rejected').length,
+    approved: safeQ.filter(q => q.status === 'approved').length,
+    awarded: safeQ.filter(q => q.status === 'awarded').length,
   }), [safeQ]);
 
   // ── Loading helpers ───────────────────────────────────────
@@ -404,15 +422,13 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   const handleRefresh = useCallback(async () => {
     try {
-      await fetchAllData();
-      refreshCompanyData?.();
-      refreshCompanyQuotations();
-      refreshStats();
+      await refreshCompanyQuotations();
+      await refreshStats();
       addToast('Data refreshed', 'success');
     } catch (err) {
       addToast(err.message || 'Refresh failed', 'error');
     }
-  }, [fetchAllData, refreshCompanyData, refreshCompanyQuotations, refreshStats, addToast]);
+  }, [refreshCompanyQuotations, refreshStats, addToast]);
 
   const handleApprove = useCallback(async (id) => {
     setOp(id, 'approve', true);
@@ -420,8 +436,8 @@ export default function OpsDashboard({ onViewQuotation }) {
       const result = await opsApproveQuotation(id);
       if (result?.success) {
         addToast('Quotation approved and forwarded to admin', 'success');
-        refreshCompanyQuotations();
-        refreshStats();
+        await refreshCompanyQuotations();
+        await refreshStats();
       } else {
         addToast(result?.error || 'Failed to approve quotation', 'error');
       }
@@ -447,8 +463,8 @@ export default function OpsDashboard({ onViewQuotation }) {
         if (result?.success) {
           addToast('Quotation rejected', 'success');
           handleReject.close();
-          refreshCompanyQuotations();
-          refreshStats();
+          await refreshCompanyQuotations();
+          await refreshStats();
         } else {
           addToast(result?.error || 'Failed to reject quotation', 'error');
         }
@@ -480,6 +496,58 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [onViewQuotation, navigate]);
 
+  const handleAwardOpen = useCallback((quotation) => {
+    console.log('🎯 Opening award modal for:', quotation.quotationNumber);
+    setAwardModal({
+      open: true,
+      quotation,
+      loading: false
+    });
+  }, []);
+  
+  const handleAwardClose = useCallback(() => {
+    console.log('🔴 Closing award modal');
+    setAwardModal({
+      open: false,
+      quotation: null,
+      loading: false
+    });
+  }, []);
+  
+  const handleAwardConfirm = useCallback(async (awarded, awardNote) => {
+    console.log('📝 Confirming award:', { awarded, awardNote, quotation: awardModal.quotation });
+    
+    if (!awardModal.quotation) {
+      console.error('No quotation in award modal');
+      return;
+    }
+    
+    setAwardModal(prev => ({ ...prev, loading: true }));
+    
+    try {
+      const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
+      console.log('Award result:', result);
+      
+      if (result?.success) {
+        addToast(
+          awarded 
+            ? `🏆 "${awardModal.quotation.quotationNumber}" marked as Awarded!` 
+            : `"${awardModal.quotation.quotationNumber}" marked as Not Awarded.`,
+          "success"
+        );
+        await refreshCompanyQuotations();
+        await refreshStats();
+        handleAwardClose();
+      } else {
+        addToast(result?.error || "Failed to update award status", "error");
+        setAwardModal(prev => ({ ...prev, loading: false }));
+      }
+    } catch (error) {
+      console.error('Award error:', error);
+      addToast(error.message || "Failed to update award status", "error");
+      setAwardModal(prev => ({ ...prev, loading: false }));
+    }
+  }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose]);
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
@@ -496,9 +564,13 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Tab configuration ─────────────────────────────────────
   const TABS = useMemo(() => [
-    { key: 'pending',      label: 'Pending Review',      Icon: Clock,  count: tabCounts.pending },
-    { key: 'ops_approved', label: 'Awaiting Admin',      Icon: Shield, count: tabCounts.ops_approved },
-    { key: 'ops_rejected', label: 'Returned by Me',      Icon: Ban,    count: tabCounts.ops_rejected },
+    { key: 'all',           label: 'All Quotations',     Icon: FileText,     count: tabCounts.all },
+    { key: 'pending',       label: 'Pending Review',     Icon: Clock,        count: tabCounts.pending },
+    { key: 'ops_approved',  label: 'Awaiting Admin',     Icon: Shield,       count: tabCounts.ops_approved },
+    { key: 'ops_rejected',  label: 'Returned by Me',     Icon: Ban,          count: tabCounts.ops_rejected },
+    { key: 'rejected',      label: 'Rejected by Admin',  Icon: XCircle,      count: tabCounts.rejected },
+    { key: 'approved',      label: 'Approved',           Icon: CheckCircle,  count: tabCounts.approved },
+    { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCounts.awarded },
   ], [tabCounts]);
 
   const NavBtn = React.memo(({ onClick, label, primary }) => (
@@ -620,8 +692,8 @@ export default function OpsDashboard({ onViewQuotation }) {
       </div>
 
       <div style={styles.headerActions}>
-        <button onClick={handleRefresh} disabled={loading} style={styles.refreshBtn}>
-          <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={loading ? styles.spin : {}}/>
+        <button onClick={handleRefresh} disabled={quotationsLoading} style={styles.refreshBtn}>
+          <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={quotationsLoading ? styles.spin : {}}/>
         </button>
         <div style={styles.searchBox}>
           <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
@@ -645,12 +717,18 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   const renderTableRow = (q) => {
     const isDownloading = downloadLoadingId === q._id;
-    const canAct = q.status === 'pending';
+    const canAct = q.status === 'pending';  
+    // const canAward = q.status === 'approved';
+    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
+
+    const isAdminRejected = q.status === 'rejected';
     const expired = isExpired(q.expiryDate);
     const expiring = !expired && isExpiringSoon(q.expiryDate);
-
+  
     return (
-      <tr key={q._id} className="ops-row">
+      <tr key={q._id} className="ops-row" style={{
+        backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
+      }}>
         <td style={styles.cell}>
           <div style={styles.quoteCell}>
             <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
@@ -674,18 +752,18 @@ export default function OpsDashboard({ onViewQuotation }) {
           }}>
             {fmtDate(q.expiryDate)}
           </span>
-         </td>
+        </td>
         <td style={styles.cell}>
           <StatusBadge status={q.status}/>
           <RejectionNote quotation={q}/>
-         </td>
+        </td>
         <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
         <td style={{ ...styles.cell, textAlign: 'center' }}>
           <ItemsBadge count={q.items?.length ?? 0} />
-         </td>
+        </td>
         <td style={styles.totalCell}>
           {fmtCurrency(q.total, selectedCurrency)}
-         </td>
+        </td>
         <td style={styles.actionsCell}>
           <div style={styles.actionsContainer}>
             <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
@@ -726,9 +804,21 @@ export default function OpsDashboard({ onViewQuotation }) {
                 />
               </>
             )}
+            {canAward && (
+              <ActionBtn 
+                bg="#e9d5ff" 
+                color="#6b21a8" 
+                onClick={() => handleAwardOpen(q)} 
+                icon={Award} 
+                label="Award" 
+                title="Mark as Awarded / Not Awarded"
+                size="small"
+                disabled={isOp(q._id, 'award')}
+              />
+            )}
           </div>
-         </td>
-       </tr>
+        </td>
+      </tr>
     );
   };
 
@@ -794,44 +884,44 @@ export default function OpsDashboard({ onViewQuotation }) {
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
           <NavBtn onClick={() => navigate('/home')} label="Home" />
           <button 
-    onClick={() => navigate('/customers')}
-    className="adm-nav-btn" 
-    style={{
-      backgroundColor: '#e0e7ff',
-      color: '#4f46e5',
-      border: 'none',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.4rem'
-    }}
-  >
-    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
-  </button>
+            onClick={() => navigate('/customers')}
+            className="adm-nav-btn" 
+            style={{
+              backgroundColor: '#e0e7ff',
+              color: '#4f46e5',
+              border: 'none',
+              borderRadius: 8,
+              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+              fontSize: isMobile ? '0.7rem' : '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem'
+            }}
+          >
+            <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+          </button>
 
-  <button 
-    onClick={() => navigate('/quotation/new')}
-    className="adm-nav-btn" 
-    style={{
-      backgroundColor: '#10b981',
-      color: 'white',
-      border: 'none',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.4rem'
-    }}
-  >
-    <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
-  </button>
+          <button 
+            onClick={() => navigate('/quotation/new')}
+            className="adm-nav-btn" 
+            style={{
+              backgroundColor: '#10b981',
+              color: 'white',
+              border: 'none',
+              borderRadius: 8,
+              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+              fontSize: isMobile ? '0.7rem' : '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem'
+            }}
+          >
+            <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
+          </button>
           <button onClick={handleLogout} className="ops-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
@@ -878,7 +968,7 @@ export default function OpsDashboard({ onViewQuotation }) {
               ) : (
                 <>
                   {(isMobile || viewMode === 'card') ? (
-                    // Card View - 2 columns on desktop, 1 on mobile
+                    // Card View
                     <div style={{ 
                       padding: isMobile ? '1rem' : '1.5rem',
                       display: 'grid',
@@ -900,9 +990,11 @@ export default function OpsDashboard({ onViewQuotation }) {
                             onApprove={handleApprove}
                             onReject={handleReject.open}
                             onDownload={handleDownload}
+                            onAward={handleAwardOpen}
                             isDownloading={downloadLoadingId === q._id}
                             isApproving={isOp(q._id, 'approve')}
                             isRejecting={isOp(q._id, 'reject')}
+                            isAwarding={isOp(q._id, 'award')} 
                           />
                         ))
                       )}
@@ -1006,6 +1098,15 @@ export default function OpsDashboard({ onViewQuotation }) {
           <p style={styles.rejectHint}>Reason is required to reject a quotation.</p>
         </ConfirmModal>
       )}
+      
+      {/* Award Modal */}
+      <AwardModal
+        open={awardModal.open}
+        quotation={awardModal.quotation}
+        onCancel={handleAwardClose}
+        onConfirm={handleAwardConfirm}
+        loading={awardModal.loading}
+      />
     </div>
   );
 }
@@ -1030,6 +1131,8 @@ const LoadingSkeleton = React.memo(({ isMobile }) => (
   </div>
 ));
 
+// Note: styles object is assumed to be defined elsewhere (in your styles file)
+// Make sure to import or define the styles object
 // ─────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────

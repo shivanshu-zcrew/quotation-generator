@@ -213,29 +213,35 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 
   // Company footer
 const companyInfo = companySnapshot;
-  const companyFooter = `
-    <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
-      <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
-      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
-    </div>
-    
-    <!-- Approval Chain Section -->
-    <div style="margin-top:12px;padding-top:16px;">
-      <table style="width:100%;border-collapse:collapse;font-size:10px;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Prepared By (Requested)</th>
+ const isCreatorAdmin = createdByRole === 'admin';
+const showReviewedBy = !isCreatorAdmin; // Only show Reviewed By if creator is NOT admin
+
+const companyFooter = `
+  <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
+    <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
+    <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
+  </div>
+  
+  <!-- Approval Chain Section -->
+  <div style="margin-top:12px;padding-top:16px;">
+    <table style="width:100%;border-collapse:collapse;font-size:10px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Prepared By (Requested)</th>
+          ${showReviewedBy ? `
             <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Reviewed By</th>
-            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Approved By</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="padding:8px 6px;vertical-align:top;">
-              <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
-               <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
-               <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
-            </td>
+          ` : ''}
+          <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Approved By</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding:8px 6px;vertical-align:top;">
+            <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
+            <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
+            <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
+          </td>
+          ${showReviewedBy ? `
             <td style="padding:8px 6px;vertical-align:top;">
               ${opsReviewedByName !== '—' ? `
                 <div style="font-weight:600;color:#0f172a;">${opsReviewedByName}</div>
@@ -245,20 +251,21 @@ const companyInfo = companySnapshot;
                 <div style="color:#94a3b8;font-style:italic;">Not reviewed yet</div>
               `}
             </td>
-            <td style="padding:8px 6px;vertical-align:top;">
-              ${approvedByName !== '—' ? `
-                <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
-                <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
-                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
-              ` : `
-                <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
-              `}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  `;
+          ` : ''}
+          <td style="padding:8px 6px;vertical-align:top;">
+            ${approvedByName !== '—' ? `
+              <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
+              <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
+              <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
+            ` : `
+              <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
+            `}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+`;
 
   // Build complete HTML
   return `<!DOCTYPE html>

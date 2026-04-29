@@ -128,6 +128,9 @@ export const useAdminStats = () => {
   const fetchAdminStats = useAppStore((s) => s.fetchAdminStats);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const refresh = useCallback(() => fetchAdminStats(selectedCompany), [fetchAdminStats, selectedCompany]);
+
+  console.log(">>>>>>><<<<<<<<",adminStats);
+
   return {
     stats: adminStats, loading: statsLoading, refresh,
     totalQuotations: adminStats?.stats?.totalQuotations || 0,
@@ -139,12 +142,13 @@ export const useAdminStats = () => {
     awardedValue: adminStats?.stats?.awardedValue || 0,
     conversionRate: adminStats?.stats?.conversionRate?.rate || 0,
     rejected: adminStats?.stats?.rejected || 0,
-    conversionDetails: adminStats?.stats?.conversionRate || { approvedCount: 0, awardedCount: 0, notAwardedCount: 0, totalDecided: 0, rate: 0 },
+    conversionDetails: adminStats?.stats?.conversionRate || 0,
     statusCounts: adminStats?.stats?.statusCounts || {},
     totalApprovedValue: adminStats?.stats?.totalRevenue || 0,
     totalAwardedValue: adminStats?.stats?.awardedValue || 0,
   };
 };
+
 
 export const useOpsStats = () => {
   const [stats, setStats] = useState(null);

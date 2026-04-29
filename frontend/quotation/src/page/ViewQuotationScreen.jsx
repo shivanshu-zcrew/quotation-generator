@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Download, Edit2, Save, X, ArrowLeft, Loader, AlertCircle } from "lucide-react";
+import React, { useEffect, useState } from 'react';
+import { Download, Edit2, Save, X, ArrowLeft, Loader, AlertCircle, AlertTriangle } from "lucide-react";
 import { useQuotation } from '../hooks/useQuotation';
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
@@ -42,6 +42,86 @@ const QuotationSkeleton = () => (
   </div>
 );
 
+// Rejection/Return Reason Banner Component
+const ReasonBanner = ({ quotation }) => {
+  const opsRejectionReason = quotation?.opsRejectionReason;
+  const adminRejectionReason = quotation?.rejectionReason;
+  const status = quotation?.status;
+  
+  // Check if there's a rejection reason
+  const hasOpsRejection = opsRejectionReason && opsRejectionReason.trim();
+  const hasAdminRejection = adminRejectionReason && adminRejectionReason.trim();
+  
+  if (!hasOpsRejection && !hasAdminRejection) return null;
+  
+  let reason = '';
+  let title = '';
+  let bgColor = '';
+  let borderColor = '';
+  let icon = null;
+  
+  if (status === 'ops_rejected' && hasOpsRejection) {
+    reason = opsRejectionReason;
+    title = 'Returned by Operations Manager';
+    bgColor = '#fef2f2';
+    borderColor = '#fecaca';
+    icon = <AlertTriangle size={18} color="#dc2626" />;
+  } else if (status === 'rejected' && hasAdminRejection) {
+    reason = adminRejectionReason;
+    title = 'Rejected by Admin';
+    bgColor = '#fef2f2';
+    borderColor = '#fecaca';
+    icon = <AlertTriangle size={18} color="#dc2626" />;
+  } else if (hasOpsRejection) {
+    reason = opsRejectionReason;
+    title = 'Return Reason';
+    bgColor = '#fffbeb';
+    borderColor = '#fde68a';
+    icon = <AlertCircle size={18} color="#d97706" />;
+  } else if (hasAdminRejection) {
+    reason = adminRejectionReason;
+    title = 'Rejection Reason';
+    bgColor = '#fffbeb';
+    borderColor = '#fde68a';
+    icon = <AlertCircle size={18} color="#d97706" />;
+  }
+  
+  if (!reason) return null;
+  
+  return (
+    <div style={{
+      backgroundColor: bgColor,
+      border: `1px solid ${borderColor}`,
+      borderRadius: '0.75rem',
+      padding: '1rem 1.25rem',
+      marginBottom: '1.5rem',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '0.75rem'
+    }}>
+      <div style={{ flexShrink: 0 }}>{icon}</div>
+      <div style={{ flex: 1 }}>
+        <div style={{
+          fontWeight: 700,
+          fontSize: '0.875rem',
+          color: status === 'ops_rejected' || status === 'rejected' ? '#991b1b' : '#92400e',
+          marginBottom: '0.25rem'
+        }}>
+          {title}
+        </div>
+        <div style={{
+          fontSize: '0.875rem',
+          color: '#374151',
+          lineHeight: 1.5
+        }}>
+          {reason}
+        </div>
+      </div>
+     
+    </div>
+  );
+};
+
 export default function ViewQuotationScreen() {
   const {
     isEditing, setIsEditing, isSaving, isExporting, setIsExporting, editingImgId, setEditingImgId,
@@ -77,6 +157,13 @@ export default function ViewQuotationScreen() {
     return true;
   };
   
+  useEffect(() => {
+    if (originalQuotation?.status) {
+      console.log('📊 Quotation status changed to:', originalQuotation.status);
+      // Force re-render of status badge
+    }
+  }, [originalQuotation?.status]);
+
   // Enhanced save handler with progress tracking
   const handleSaveWithProgress = async () => {
     setSaveProgress(10);
@@ -176,11 +263,17 @@ export default function ViewQuotationScreen() {
     if (status === 'awarded') return 'Awarded';
     if (status === 'rejected') return 'Rejected';
     if (status === 'pending') return 'Pending';
+    if (status === 'ops_rejected') return 'Returned';
+    if (status === 'ops_approved') return 'In Review';
     return status || 'Draft';
   };
 
   const isApproved = originalQuotation?.status === 'approved' || originalQuotation?.status === 'awarded';
   const showEditButton = canEdit();
+
+  // Check if quotation is in rejected/returned state
+  const isRejected = originalQuotation?.status === 'rejected';
+  const isOpsRejected = originalQuotation?.status === 'ops_rejected';
 
   return (
     <div style={styles.container}>
@@ -213,8 +306,8 @@ export default function ViewQuotationScreen() {
               <div style={styles.statusContainer}>
                 <span style={{
                   ...styles.statusBadge,
-                  backgroundColor: isApproved ? '#d1fae5' : '#fef3c7',
-                  color: isApproved ? '#065f46' : '#92400e'
+                  backgroundColor: isApproved ? '#d1fae5' : (isRejected || isOpsRejected ? '#fee2e2' : '#fef3c7'),
+                  color: isApproved ? '#065f46' : (isRejected || isOpsRejected ? '#991b1b' : '#92400e')
                 }}>
                   Status: {getStatusText()}
                 </span>
@@ -255,6 +348,9 @@ export default function ViewQuotationScreen() {
             </button>
           </div>
         </div>
+
+        {/* ✅ Rejection/Return Reason Banner - Displayed at the top */}
+        <ReasonBanner quotation={originalQuotation} />
 
         {isEditing && (
           <div style={styles.editModeBanner}>

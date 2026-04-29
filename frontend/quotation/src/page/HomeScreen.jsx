@@ -1790,7 +1790,7 @@ const [pdfStep, setPdfStep] = useState('');
                                         label="View"
                                         title="View quotation"
                                       />
-                                      {!["awarded", "not_awarded"].includes(
+                                      {/* {!["awarded", "not_awarded"].includes(
                                         q.status
                                       ) && (
                                         <ActionBtn
@@ -1816,7 +1816,7 @@ const [pdfStep, setPdfStep] = useState('');
                                               : "Set follow-up date"
                                           }
                                         />
-                                      )}
+                                      )} */}
                                       <ActionBtn
                                         bg={isExp ? "#f1f5f9" : "#f0fdf4"}
                                         color={isExp ? "#94a3b8" : "#166534"}

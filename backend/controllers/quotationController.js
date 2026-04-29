@@ -59,28 +59,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  _browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-  });
-
   // _browser = await puppeteer.launch({
   //   headless: true,
+  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
+  //     '--no-zygote',
+  //     '--single-process',
   //   ],
   // });
+
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -707,11 +707,49 @@ exports.createQuotation = async (req, res) => {
     internalDocDescriptions
   } = req.body;
 
-  console.log(">>>>>>>>>>",queryDate);
-  // ============================================================
-  // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
-  // ============================================================
-   
+  if (!projectName) {
+    return res.status(400).json({ message: 'Project Name is required' });
+  }
+  if (!companyId) {
+    return res.status(400).json({ message: 'Company selection is required' });
+  }
+
+  const company = await Company.findById(companyId);
+  if (!company) {
+    return res.status(400).json({ message: 'Invalid company selected' });
+  }
+
+  const customerDoc = await Customer.findOne({ _id: customerId, companyId: company._id }).lean();
+  if (!customerDoc) {
+    return res.status(404).json({ message: 'Customer not found for this company' });
+  }
+  
+
+  const validatedItems = [];
+  for (const item of items) {
+    let itemDoc = null;
+    
+    if (mongoose.Types.ObjectId.isValid(item.itemId)) {
+      itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc && item.zohoId) {
+      itemDoc = await Item.findOne({ zohoId: item.zohoId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc && item.itemId) {
+      itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
+    }
+    
+    if (!itemDoc) {
+      return res.status(404).json({ 
+        message: `Item not found: ${item.name || item.itemId || item.zohoId}`
+      });
+    }
+    
+    validatedItems.push({ ...item, itemDoc });
+  }
+    
   // Compress quotation images (item images)
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
@@ -742,47 +780,6 @@ exports.createQuotation = async (req, res) => {
     });
   }
 
-  if (!projectName) {
-    return res.status(400).json({ message: 'Project Name is required' });
-  }
-  if (!companyId) {
-    return res.status(400).json({ message: 'Company selection is required' });
-  }
-
-  const company = await Company.findById(companyId);
-  if (!company) {
-    return res.status(400).json({ message: 'Invalid company selected' });
-  }
-
-  const customerDoc = await Customer.findOne({ _id: customerId, companyId: company._id }).lean();
-  if (!customerDoc) {
-    return res.status(404).json({ message: 'Customer not found for this company' });
-  }
-
-  const validatedItems = [];
-  for (const item of items) {
-    let itemDoc = null;
-    
-    if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-      itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc && item.zohoId) {
-      itemDoc = await Item.findOne({ zohoId: item.zohoId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc && item.itemId) {
-      itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc) {
-      return res.status(404).json({ 
-        message: `Item not found: ${item.name || item.itemId || item.zohoId}`
-      });
-    }
-    
-    validatedItems.push({ ...item, itemDoc });
-  }
 
   let exchangeRate = 1;
   const targetCurrency = currencyCode || company.baseCurrency;
@@ -1155,7 +1152,14 @@ exports.updateQuotation = async (req, res) => {
       // Ops manager can edit their own quotations or user quotations in pending/ops_rejected state
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
         newStatus = 'pending_admin';  // After edit, goes to admin for review
-      } 
+      }
+      // ✅ NEW: If creator is Ops Manager and quotation was rejected by admin, move to pending (ops review)
+      else if (currentStatus === 'rejected' && isCreator) {
+        // Ops Manager created this quotation and admin rejected it
+        // When Ops Manager revises, it goes back to pending for ops review
+        newStatus = 'pending';
+        console.log('🔄 Ops Manager revising admin-rejected quotation - moving to pending for ops review');
+      }
       // If editing an already ops_approved quotation, keep as ops_approved (admin needs to review)
       else if (currentStatus === 'ops_approved') {
         newStatus = 'ops_approved';  // Keeps same status, admin still needs to approve
@@ -1183,14 +1187,16 @@ exports.updateQuotation = async (req, res) => {
       role: req.user?.role,
       currentStatus: currentStatus,
       newStatus: newStatus,
-      isCreator: isCreator
+      isCreator: isCreator,
+      isOpsManager: isOpsManager
     });
 
     // Check if editing is allowed based on current status
+    // ✅ Allow editing for rejected status when creator is Ops Manager
     const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
     if (!isAdmin && !editableStatuses.includes(currentStatus)) {
       return res.status(400).json({ 
-        message: `Cannot edit quotation with status: ${currentStatus}. Only quotations in pending or rejected status can be edited.` 
+        message: `Cannot edit quotation with status: ${currentStatus}. Only quotations in pending, rejected, or returned status can be edited.` 
       });
     }
 
@@ -1414,10 +1420,15 @@ exports.updateQuotation = async (req, res) => {
       status: newStatus,
     };
 
-    // Clear rejection reason when moving to pending or pending_admin
+    // Clear rejection reasons when moving to pending or pending_admin
     if (newStatus === 'pending' || newStatus === 'pending_admin') {
       updateData.opsRejectionReason = '';
       updateData.rejectionReason = '';
+      // Clear approval fields when resubmitting
+      updateData.opsApprovedBy = null;
+      updateData.opsApprovedAt = null;
+      updateData.approvedBy = null;
+      updateData.approvedAt = null;
     }
 
     if (currencyCode && currencyCode !== existing.currency?.code) {
@@ -2595,3 +2606,4 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
     });
   }
 };
+

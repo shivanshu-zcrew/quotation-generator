@@ -12,6 +12,7 @@ import { numberToWords } from '../utils/numberToWords';
 import { newSection, htmlToSections, sectionsToHTML, sectionsToHTMLWithoutImages } from '../components/TermsCondition';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
+import { ALLOWED_IMAGE_TYPES, MAX_IMAGES_PER_ITEM, MAX_IMAGE_SIZE_MB } from '../utils/constants';
 
 export function useQuotation() {
   const { id } = useParams();
@@ -42,7 +43,7 @@ export function useQuotation() {
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
   const [termsImages, setTermsImages] = useState([]);
   const originalQuotation = (quotations || []).find((q) => q._id === id) || fetchedQ;
-
+  const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
   // Calculations
   const subtotal = useMemo(() =>
     quotationItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0), 0),
@@ -308,15 +309,102 @@ export function useQuotation() {
     }));
   }, [items]);
 
+ 
   const handleImageUpload = useCallback((e, itemId) => {
-    Array.from(e.target.files || []).forEach((file) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+  
+    // ✅ Get current images count (existing + new)
+    const existingItem = quotationItems.find(item => item.id === itemId);
+    const existingImageCount = existingItem?.imagePaths?.length || 0;
+    const newImageCount = (newImages[itemId] || []).length;
+    const currentTotalImages = existingImageCount + newImageCount;
+    
+    // Calculate available slots
+    const availableSlots = MAX_IMAGES_PER_ITEM - currentTotalImages;
+    
+    console.log(`📸 Item ${itemId}: Existing: ${existingImageCount}, New: ${newImageCount}, Total: ${currentTotalImages}, Slots: ${availableSlots}`);
+  
+    if (availableSlots <= 0) {
+      showSnack(`Maximum ${MAX_IMAGES_PER_ITEM} images allowed per item. You already have ${currentTotalImages} image(s).`, 'error');
+      e.target.value = "";
+      return;
+    }
+  
+    // Process only up to available slots
+    const toProcess = files.slice(0, availableSlots);
+  
+    if (files.length > availableSlots) {
+      showSnack(`Only ${availableSlots} slot(s) left — first ${availableSlots} of ${files.length} will be added.`, 'warning');
+    }
+  
+    // Validate each file
+    const validFiles = [];
+    const errors = [];
+  
+    for (const file of toProcess) {
+      // Validate type
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        errors.push(`"${file.name}" is not a supported image type.`);
+        continue;
+      }
+  
+      // Validate size
+      if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+        errors.push(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
+        continue;
+      }
+  
+      validFiles.push(file);
+    }
+  
+    // Show validation errors if any
+    if (errors.length > 0) {
+      errors.forEach(err => showSnack(err, 'error'));
+    }
+  
+    if (validFiles.length === 0) {
+      e.target.value = "";
+      return;
+    }
+  
+    // Process valid files
+    let processedCount = 0;
+    
+    validFiles.forEach((file) => {
       const reader = new FileReader();
-      reader.onload = () =>
-        setNewImages((prev) => ({ ...prev, [itemId]: [...(prev[itemId] || []), reader.result] }));
+  
+      reader.onload = () => {
+        setNewImages((prev) => ({
+          ...prev,
+          [itemId]: [...(prev[itemId] || []), {
+            preview: reader.result,
+            file: file,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            id: `${Date.now()}-${Math.random()}`
+          }],
+        }));
+        
+        processedCount++;
+        
+        // When all files are processed, show success message
+        if (processedCount === validFiles.length) {
+          showSnack(`${validFiles.length} image(s) added to item.`, 'success');
+        }
+      };
+  
+      reader.onerror = () => {
+        showSnack(`Failed to read file: ${file.name}`, 'error');
+      };
+  
       reader.readAsDataURL(file);
     });
+  
     setEditingImgId(null);
-  }, []);
+    e.target.value = ""; // reset input
+  }, [quotationItems, newImages, showSnack]);
 
   const removeNewImage = useCallback((itemId, idx) =>
     setNewImages((prev) => {
@@ -473,7 +561,7 @@ export function useQuotation() {
 
   const handleSave = useCallback(async () => {
     if (!validateBeforeSave()) return;
-
+  
     setIsSaving(true);
     try {
       const quotationImages = {};
@@ -497,7 +585,7 @@ export function useQuotation() {
           quotationImages[index] = allImages;
         }
       });
-
+  
       const documentData = [
         ...internalDocuments.map(doc => ({
           fileName: doc.fileName,
@@ -515,19 +603,19 @@ export function useQuotation() {
           description: doc.description || '',
         }))
       ];
-
+  
       const taxValue = parseFloat(quotationData.tax) || 0;
       const discountValue = parseFloat(quotationData.discount) || 0;
       const termsImagesData = extractTermsImagesFromSections(tcSections);
       const termsHTMLWithoutImages = sectionsToHTMLWithoutImages(tcSections);
-
+  
       const formattedItems = quotationItems.map((qi) => ({
         itemId: qi.itemId,
         quantity: Number(qi.quantity) || 1,
         unitPrice: Number(qi.unitPrice) || 0,
         description: qi.description || "",
       }));
-
+  
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
         projectName: quotationData.projectName,
@@ -556,21 +644,46 @@ export function useQuotation() {
           .filter(doc => doc.fileData)
           .map(doc => doc.description || '')
       };
-
+  
+      // ✅ Get the current user role to know what status to expect
+      const userRole = useAppStore.getState().user?.role;
+      console.log('📝 Saving quotation. User role:', userRole);
+      console.log('📝 Current status before save:', originalQuotation?.status);
+  
       const result = await updateQuotation(originalQuotation._id, payload);
-
+  
+      console.log('📝 Save result:', result);
+  
       if (result?.success) {
+        // ✅ Get the updated quotation from the result
+        const updatedQuotation = result.quotation;
+        
+        if (updatedQuotation) {
+          console.log('📝 Updated quotation status:', updatedQuotation.status);
+          
+          // ✅ Update the local state with the new status
+          setQuotationData(prev => ({
+            ...prev,
+            status: updatedQuotation.status
+          }));
+          
+          // ✅ Also update the fetchedQ state
+          setFetchedQ(updatedQuotation);
+        }
+        
         setSnackbar({ show: true, message: "Quotation updated successfully!", type: 'success' });
         setIsEditing(false);
         setEditingImgId(null);
         setNewImages({});
         setNewDocuments([]);
         setFieldErrors({});
-
+  
+        // ✅ Refresh the quotation data from API to ensure consistency
         const refreshed = await quotationAPI.getById(id);
-        setFetchedQ(refreshed.data);
-        
         if (refreshed.data) {
+          console.log('📝 Refreshed quotation status:', refreshed.data.status);
+          setFetchedQ(refreshed.data);
+          
           const parsedData = parseQuotationData(refreshed.data);
           delete parsedData.termsImage;
           setQuotationData(parsedData);
@@ -581,6 +694,12 @@ export function useQuotation() {
           setTcSections(sections);
           
           setInternalDocuments(parseInternalDocuments(refreshed.data.internalDocuments));
+          
+          // ✅ Force a refresh of the store's quotations list
+          const store = useAppStore.getState();
+          if (store.refetchQuotations) {
+            await store.refetchQuotations();
+          }
         }
       } else {
         setSnackbar({ show: true, message: result?.error || "Failed to update quotation", type: 'error' });

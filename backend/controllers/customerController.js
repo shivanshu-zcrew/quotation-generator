@@ -132,6 +132,8 @@ async function addZohoDataToBatch(customers) {
 // ─────────────────────────────────────────────────────────────────────────
 // CREATE CUSTOMER
 // ─────────────────────────────────────────────────────────────────────────
+// In your customerController.js - REPLACE the createCustomer function
+
 exports.createCustomer = async (req, res) => {
   try {
     const {
@@ -148,7 +150,7 @@ exports.createCustomer = async (req, res) => {
       defaultCurrency = 'AED'
     } = req.body;
 
-    // Get company from request (assuming you have selectedCompany middleware)
+    // Get company from request
     const companyId = req.headers['x-company-id'] || req.body.companyId;
     if (!companyId) {
       return res.status(400).json({ success: false, message: 'Company ID is required' });
@@ -157,6 +159,19 @@ exports.createCustomer = async (req, res) => {
     const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    // Debug: Log company Zoho info
+    console.log('🔍 Company Zoho Info:', {
+      companyId: company._id,
+      companyName: company.name,
+      zohoOrganizationId: company.zohoOrganizationId,
+      hasZohoId: !!company.zohoOrganizationId
+    });
+
+    // Validate Zoho configuration before proceeding
+    if (!company.zohoOrganizationId) {
+      console.warn('⚠️ Company has no Zoho Organization ID - Zoho sync will be skipped');
     }
 
     const validation = validateCustomerData({ name, email });
@@ -198,43 +213,84 @@ exports.createCustomer = async (req, res) => {
     const savedCustomer = await customer.save();
     const customerObj = savedCustomer.getFormattedData();
 
-    // Sync with Zoho - set company context first
-    zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
-    
-    try {
-      const zohoContactData = {
-        name: savedCustomer.name,
-        email: savedCustomer.email,
-        phone: savedCustomer.phone,
-        address: savedCustomer.address,
-        companyName: savedCustomer.companyName,
-        website: savedCustomer.website,
-        taxTreatment: savedCustomer.taxTreatment,
-        placeOfSupply: savedCustomer.placeOfSupply,
-        currencyCode: savedCustomer.defaultCurrency.code
-      };
+    // DEBUG: Log before Zoho sync
+    console.log('📝 Customer saved locally:', {
+      customerId: savedCustomer._id,
+      name: savedCustomer.name,
+      email: savedCustomer.email,
+      zohoId: savedCustomer.zohoId
+    });
 
-      if ((savedCustomer.taxTreatment === 'vat_registered' || savedCustomer.taxTreatment === 'gcc_vat_registered')
-          && savedCustomer.taxRegistrationNumber) {
-        zohoContactData.taxRegistrationNumber = savedCustomer.taxRegistrationNumber;
-      }
+    // Only attempt Zoho sync if company has Zoho Organization ID
+    if (company.zohoOrganizationId) {
+      // Set company context for Zoho
+      zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+      
+      // DEBUG: Verify service context was set
+      console.log('🔧 Zoho Service Context Set:', {
+        companyId: company._id,
+        orgId: company.zohoOrganizationId,
+        currentContext: zohoBooksService.getCurrentContext?.() || 'No context getter'
+      });
+      
+      try {
+        // Build Zoho contact data with proper structure
+        const zohoContactData = {
+          name: savedCustomer.name,
+          email: savedCustomer.email,
+          phone: savedCustomer.phone,
+          address: savedCustomer.address,
+          companyName: savedCustomer.companyName || savedCustomer.name,
+          website: savedCustomer.website,
+          taxTreatment: savedCustomer.taxTreatment,
+          placeOfSupply: savedCustomer.placeOfSupply,
+          currencyCode: savedCustomer.defaultCurrency.code,
+          taxRegistrationNumber: savedCustomer.taxRegistrationNumber
+        };
 
-      const zohoResult = await zohoBooksService.createContact(zohoContactData);
+        console.log('📤 Sending to Zoho:', JSON.stringify(zohoContactData, null, 2));
+        
+        const zohoResult = await zohoBooksService.createContact(zohoContactData);
 
-      if (zohoResult?.success) {
-        savedCustomer.zohoId = zohoResult.zohoId;
-        savedCustomer.zohoSynced = true;
-        savedCustomer.zohoSyncDate = new Date();
+        console.log('📥 Zoho Response:', JSON.stringify(zohoResult, null, 2));
+
+        if (zohoResult?.success && zohoResult.zohoId) {
+          // Update customer with Zoho ID
+          savedCustomer.zohoId = zohoResult.zohoId;
+          savedCustomer.zohoSynced = true;
+          savedCustomer.zohoSyncDate = new Date();
+          await savedCustomer.save();
+
+          customerObj.zohoId = zohoResult.zohoId;
+          customerObj.zohoSynced = true;
+          customerObj.zohoData = zohoResult.contact;
+          
+          console.log('✅ Customer synced to Zoho successfully. Zoho ID:', zohoResult.zohoId);
+        } else {
+          const errorMsg = zohoResult?.error || 'Unknown Zoho error';
+          console.error('❌ Zoho sync failed:', errorMsg);
+          customerObj.zohoSyncError = `Failed to sync with Zoho: ${errorMsg}`;
+          
+          // Store error in database for debugging
+          savedCustomer.zohoSyncError = errorMsg;
+          savedCustomer.zohoSynced = false;
+          await savedCustomer.save();
+        }
+      } catch (zohoError) {
+        console.error('❌ Exception during Zoho sync:', {
+          message: zohoError.message,
+          stack: zohoError.stack,
+          response: zohoError.response?.data
+        });
+        customerObj.zohoSyncError = `Failed to sync with Zoho: ${zohoError.message}`;
+        
+        savedCustomer.zohoSyncError = zohoError.message;
+        savedCustomer.zohoSynced = false;
         await savedCustomer.save();
-
-        customerObj.zohoId = zohoResult.zohoId;
-        customerObj.zohoSynced = true;
-        customerObj.zohoData = zohoResult.contact;
-      } else if (zohoResult?.error) {
-        customerObj.zohoSyncError = `Failed to sync with Zoho: ${zohoResult.error}`;
       }
-    } catch (zohoError) {
-      customerObj.zohoSyncError = 'Failed to sync with Zoho';
+    } else {
+      console.warn('⚠️ Skipping Zoho sync - Company has no Zoho Organization ID');
+      customerObj.zohoSyncWarning = 'Zoho sync skipped: Company not configured with Zoho Organization ID';
     }
 
     // Clear cache
@@ -252,7 +308,8 @@ exports.createCustomer = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error creating customer',
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };

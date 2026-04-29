@@ -33,10 +33,11 @@ export default function ValidatedInput({
       const result = validator(newValue);
       setError(result.error);
       
-      // Immediately pass valid values to parent
+      // ✅ ONLY pass valid values to parent
       if (result.isValid) {
         onChange(newValue);
       }
+      // ✅ If invalid, DO NOT call onChange - prevent parent from updating with invalid value
     } else {
       onChange(newValue);
     }
@@ -52,11 +53,43 @@ export default function ValidatedInput({
       const result = validator(newValue);
       setError(result.error);
       
-      // Always pass the value to parent on blur (parent should handle validation)
+      // ✅ On blur, if value is invalid, attempt to sanitize or set to default
+      if (!result.isValid) {
+        // For percentage fields, clamp between 0-100
+        if (props.placeholder === '0' || newValue.includes('%')) {
+          let sanitized = parseFloat(newValue);
+          if (isNaN(sanitized)) sanitized = 0;
+          sanitized = Math.min(Math.max(sanitized, 0), 100);
+          setInputValue(sanitized.toString());
+          onChange(sanitized);
+        } else {
+          // For other fields, just pass original (parent should handle)
+          onChange(newValue);
+        }
+      } else {
+        onChange(newValue);
+      }
+    } else {
       onChange(newValue);
     }
     
     if (onBlur) onBlur(e);
+  };
+
+  // ✅ Helper to handle step increment/decrement
+  const handleStep = (direction) => {
+    let currentValue = parseFloat(inputValue);
+    if (isNaN(currentValue)) currentValue = 0;
+    
+    const stepValue = parseFloat(step) || 1;
+    let newValue = direction === 'up' ? currentValue + stepValue : currentValue - stepValue;
+    
+    // Clamp between min and max if provided
+    if (min !== undefined && newValue < min) newValue = min;
+    if (max !== undefined && newValue > max) newValue = max;
+    
+    setInputValue(newValue.toString());
+    onChange(newValue);
   };
 
   const inputStyles = {
@@ -67,17 +100,20 @@ export default function ValidatedInput({
   };
 
   return (
-    <div style={{ width: '100%' }}>
-      <input
-        type={type === 'number' ? 'text' : type}
-        value={inputValue}
-        onChange={handleChange}
-        onBlur={handleBlur}
-        style={inputStyles}
-        inputMode={type === 'number' ? 'numeric' : 'text'}
-        pattern={type === 'number' ? '[0-9]*' : undefined}
-        {...props}
-      />
+    <div style={{ width: '100%', position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <input
+          type={type === 'number' ? 'text' : type}
+          value={inputValue}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          style={inputStyles}
+          inputMode={type === 'number' ? 'numeric' : 'text'}
+          pattern={type === 'number' ? '[0-9]*' : undefined}
+          {...props}
+        />
+  
+      </div>
       {error && touched && (
         <div style={{
           color: '#ef4444',

@@ -145,9 +145,75 @@ exports.getOpsPendingQuotations = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-     
     res.status(500).json({ 
       message: 'Error fetching pending quotations', 
+      error: error.message 
+    });
+  }
+};
+
+// @desc  Get ALL quotations relevant to Ops Manager (pending, ops_approved, ops_rejected, rejected, approved, awarded)
+// @route GET /api/admin/quotations/ops-all
+exports.getAllOpsQuotations = async (req, res) => {
+  try {
+    const { status, search, fromDate, toDate } = req.query;
+    
+    // Build query - Ops can see all quotations except 'draft' maybe
+    const query = {
+      status: { 
+        $in: ['pending', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] 
+      }
+    };
+    
+    // Apply status filter if provided
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    
+    // Apply search filter
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { quotationNumber: searchRegex },
+        { 'customerSnapshot.name': searchRegex },
+        { 'customerId.name': searchRegex },
+        { projectName: searchRegex }
+      ];
+    }
+    
+    // Apply date filters
+    if (fromDate || toDate) {
+      query.createdAt = {};
+      if (fromDate) query.createdAt.$gte = new Date(fromDate);
+      if (toDate) query.createdAt.$lte = new Date(toDate);
+    }
+    
+    const quotations = await fullPopulate(
+      Quotation.find(query).sort({ createdAt: -1 })
+    ).lean();
+
+    const sanitizedQuotations = quotations.map(sanitizeQuotation);
+    
+    // Calculate counts for tabs
+    const counts = {
+      all: sanitizedQuotations.length,
+      pending: sanitizedQuotations.filter(q => q.status === 'pending').length,
+      ops_approved: sanitizedQuotations.filter(q => q.status === 'ops_approved').length,
+      ops_rejected: sanitizedQuotations.filter(q => q.status === 'ops_rejected').length,
+      rejected: sanitizedQuotations.filter(q => q.status === 'rejected').length,
+      approved: sanitizedQuotations.filter(q => q.status === 'approved').length,
+      awarded: sanitizedQuotations.filter(q => q.status === 'awarded').length,
+    };
+    
+    res.json({
+      success: true,
+      quotations: sanitizedQuotations,
+      counts,
+      total: sanitizedQuotations.length
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      message: 'Error fetching quotations', 
       error: error.message 
     });
   }
@@ -172,7 +238,7 @@ exports.opsApproveQuotation = async (req, res) => {
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = '';
     
-    // ✅ Store ops manager snapshot
+    // Store ops manager snapshot
     quotation.opsApprovedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
@@ -228,25 +294,27 @@ exports.opsRejectQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
-     
     res.status(500).json({ message: 'Error rejecting quotation (ops)', error: error.message });
   }
 };
 
-// @desc  Get ops review history
+// @desc  Get ops review history (ops_approved, ops_rejected, and rejected by admin)
 // @route GET /api/admin/quotations/ops-history
 exports.getOpsReviewHistory = async (req, res) => {
   try {
     const quotations = await fullPopulate(
       Quotation.find({
-        status: { $in: ['ops_approved', 'ops_rejected'] }
+        status: { $in: ['ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded'] }
       }).sort({ updatedAt: -1 })
     ).lean();
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
-    res.json(sanitizedQuotations);
+    res.json({
+      success: true,
+      quotations: sanitizedQuotations,
+      total: sanitizedQuotations.length
+    });
   } catch (error) {
-     
     res.status(500).json({
       message: 'Error fetching ops review history',
       error: error.message

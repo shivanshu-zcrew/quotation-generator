@@ -954,9 +954,7 @@ export default function QuotationLayout({
 
   const { items: storeItems, getItemOptions, isLoaded } = useItemStore();
   
-  console.log('LEFT_FIELDS:', LEFT_FIELDS.map(f => f[1]));
-console.log('quotationData keys:', Object.keys(quotationData));
-console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
+ 
 
   useEffect(() => {
     if (isLoaded && storeItems.length > 0) {

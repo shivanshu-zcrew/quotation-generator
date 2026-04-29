@@ -234,45 +234,49 @@ export const useAppStore = create(
         },
 
         // ==================== OPTIMIZED QUOTATIONS ====================
-        fetchQuotationsForCompany: async (companyId) => {
-          const { user } = get();
-          if (!user || !companyId) return;
-          set({ loading: true, loadError: null });
-          try {
-            const params = { companyId };
-            let quotationsData = [];
-            
-            if (user.role === 'admin') {
-              const r = await adminAPI.getAllQuotations(params);
-              quotationsData = r?.data?.data || r?.data || [];
-            } else if (user.role === 'ops_manager') {
-              const [pendingRes, historyRes] = await Promise.all([
-                opsAPI.getPendingQuotations(params).catch(() => ({ data: { data: [] } })),
-                opsAPI.getReviewHistory(params).catch(() => ({ data: { data: [] } })),
-              ]);
-              quotationsData = [
-                ...(pendingRes?.data?.data || pendingRes?.data || []),
-                ...(historyRes?.data?.data || historyRes?.data || []),
-              ];
-            } else {
-              const r = await quotationAPI.getMyQuotations(params);
-              quotationsData = r?.data?.data || r?.data || [];
-            }
-            
-            batchUpdate(set, [
-              ['quotations', quotationsData],
-              ['loading', false],
-              ['lastError', null]
-            ]);
-            return { success: true, quotations: quotationsData };
-          } catch (error) {
-            batchUpdate(set, [
-              ['loading', false],
-              ['lastError', AppError.from(error)]
-            ]);
-            return { success: false, error: getErrorMessage(error) };
-          }
-        },
+ 
+fetchQuotationsForCompany: async (companyId) => {
+  const { user } = get();
+  if (!user || !companyId) return;
+  set({ loading: true, loadError: null });
+  try {
+    const params = { companyId };
+    let quotationsData = [];
+    
+    if (user.role === 'admin') {
+      const r = await adminAPI.getAllQuotations(params);
+      quotationsData = r?.data?.data || r?.data || [];
+    } else if (user.role === 'ops_manager') {
+      // ✅ Use getAllQuotations API - fetches ALL statuses including rejected
+      const r = await opsAPI.getAllQuotations(params);
+      quotationsData = r?.data?.quotations || r?.data?.data || [];
+      
+      console.log('📊 Ops Manager fetch - Total quotations:', quotationsData.length);
+      console.log('Status breakdown:', {
+        pending: quotationsData.filter(q => q.status === 'pending').length,
+        ops_approved: quotationsData.filter(q => q.status === 'ops_approved').length,
+        ops_rejected: quotationsData.filter(q => q.status === 'ops_rejected').length,
+        rejected: quotationsData.filter(q => q.status === 'rejected').length,
+      });
+    } else {
+      const r = await quotationAPI.getMyQuotations(params);
+      quotationsData = r?.data?.data || r?.data || [];
+    }
+    
+    batchUpdate(set, [
+      ['quotations', quotationsData],
+      ['loading', false],
+      ['lastError', null]
+    ]);
+    return { success: true, quotations: quotationsData };
+  } catch (error) {
+    batchUpdate(set, [
+      ['loading', false],
+      ['lastError', AppError.from(error)]
+    ]);
+    return { success: false, error: getErrorMessage(error) };
+  }
+},
 
         // ==================== OPTIMIZED: Debounced Refresh ====================
         refreshItems: async (forceRefresh = false) => {
@@ -757,55 +761,62 @@ export const useAppStore = create(
         invalidateQuotations: () => {
           set(state => ({ quotationsVersion: state.quotationsVersion + 1 }));
         },
-
- refetchQuotations: async () => {
-  const { selectedCompany, user } = get();
-  if (!user || !selectedCompany) return { success: false };
-  
-   set({ loading: true });
-  
-  try {
-    const params = { 
-      companyId: selectedCompany,
-      _t: Date.now() 
-    };
-    let quotationsData = [];
-    
-    if (user.role === 'admin') {
-      const r = await adminAPI.getAllQuotations(params);
-      quotationsData = r?.data?.data || r?.data || [];
-    } else if (user.role === 'ops_manager') {
-      const [pendingRes, historyRes] = await Promise.all([
-        opsAPI.getPendingQuotations(params).catch(() => ({ data: { data: [] } })),
-        opsAPI.getReviewHistory(params).catch(() => ({ data: { data: [] } })),
-      ]);
-      quotationsData = [
-        ...(pendingRes?.data?.data || pendingRes?.data || []),
-        ...(historyRes?.data?.data || historyRes?.data || []),
-      ];
-    } else {
-      const r = await quotationAPI.getMyQuotations(params);
-      quotationsData = r?.data?.data || r?.data || [];
-    }
-     
-    const currentQuotations = get().quotations;
-     
-    set(state => ({ 
-      quotations: quotationsData,
-      quotationsVersion: state.quotationsVersion + 1,
-      loading: false,
-      lastError: null
-    }));
-    
-    return { success: true, data: quotationsData };
-  } catch (error) {
-     set({ 
-      loading: false, 
-      lastError: AppError.from(error) 
-    });
-    return { success: false, error: getErrorMessage(error) };
-  }
-},
+        refetchQuotations: async () => {
+          const { selectedCompany, user } = get();
+          if (!user || !selectedCompany) return { success: false };
+          
+          set({ loading: true });
+          
+          try {
+            const params = { 
+              companyId: selectedCompany,
+              _t: Date.now() 
+            };
+            let quotationsData = [];
+            
+            if (user.role === 'admin') {
+              const r = await adminAPI.getAllQuotations(params);
+              quotationsData = r?.data?.data || r?.data || [];
+            } else if (user.role === 'ops_manager') {
+              // ✅ Use getAllQuotations if available (fetches all statuses)
+              const r = await opsAPI.getAllQuotations?.(params);
+              if (r?.data?.success !== false) {
+                quotationsData = r?.data?.quotations || r?.data?.data || [];
+              }              
+              // ✅ Fallback to individual calls if getAllQuotations not available
+              if (!quotationsData.length) {
+                const [pendingRes, historyRes] = await Promise.all([
+                  opsAPI.getPendingQuotations(params).catch(() => ({ data: { data: [] } })),
+                  opsAPI.getReviewHistory(params).catch(() => ({ data: { data: [] } })),
+                ]);
+                quotationsData = [
+                  ...(pendingRes?.data?.data || pendingRes?.data || []),
+                  ...(historyRes?.data?.data || historyRes?.data || []),
+                ];
+              }
+            } else {
+              const r = await quotationAPI.getMyQuotations(params);
+              quotationsData = r?.data?.data || r?.data || [];
+            }
+             
+            console.log('📊 Refetch quotations - Final count:', quotationsData.length);
+            
+            set(state => ({ 
+              quotations: quotationsData,
+              quotationsVersion: state.quotationsVersion + 1,
+              loading: false,
+              lastError: null
+            }));
+            
+            return { success: true, data: quotationsData };
+          } catch (error) {
+            set({ 
+              loading: false, 
+              lastError: AppError.from(error) 
+            });
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
 
        addQuotation: async (data) => {
   set(s => ({ operationInProgress: { ...s.operationInProgress, addQuotation: true } }));
@@ -846,9 +857,21 @@ updateQuotation: async (id, data) => {
     const result = await quotationAPI.update(id, data);
     
     if (result?.data?.success) {
-     
+      const updatedQuotation = result?.data?.quotation;
+      console.log('📝 UpdateQuotation - New status:', updatedQuotation?.status);
+      
+      // ✅ First update the store optimistically
+      set(state => ({
+        quotations: state.quotations.map(q => 
+          q._id === id ? { ...q, ...updatedQuotation } : q
+        ),
+        quotationsVersion: state.quotationsVersion + 1,
+      }));
+      
+      // ✅ Then refetch to ensure consistency
       await get().refetchQuotations();
-      return { success: true, quotation: result?.data?.quotation };
+      
+      return { success: true, quotation: updatedQuotation };
     }
     throw new Error(result?.data?.message || 'Failed to update quotation');
   } catch (error) {
@@ -1059,6 +1082,76 @@ approveQuotation: async (id) => {
           }
         },
 
+        fetchAllOpsQuotations: async (params = {}) => {
+          if (get().user?.role !== 'ops_manager') return { success: false, error: 'Unauthorized' };
+          
+          set({ loading: true, loadError: null });
+          try {
+            const requestParams = {
+              companyId: params.companyId || get().selectedCompany,
+              status: params.status,
+              search: params.search,
+              fromDate: params.fromDate,
+              toDate: params.toDate
+            };
+            
+            const response = await opsAPI.getAllQuotations(requestParams);
+            
+            batchUpdate(set, [
+              ['quotations', response.data.quotations || []],
+              ['opsQuotationsCounts', response.data.counts || {}],
+              ['loading', false],
+              ['lastError', null]
+            ]);
+            
+            return { 
+              success: true, 
+              quotations: response.data.quotations,
+              counts: response.data.counts,
+              total: response.data.total 
+            };
+          } catch (error) {
+            batchUpdate(set, [
+              ['loading', false],
+              ['lastError', AppError.from(error)]
+            ]);
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
+        
+        // ✅ NEW: Refresh Ops quotations (bypass cache)
+        refreshOpsQuotations: async (params = {}) => {
+          if (get().user?.role !== 'ops_manager') return { success: false, error: 'Unauthorized' };
+          
+          set({ loading: true });
+          try {
+            const requestParams = {
+              companyId: params.companyId || get().selectedCompany,
+              status: params.status,
+              search: params.search,
+              _t: Date.now() // Bypass cache
+            };
+            
+            const response = await opsAPI.getAllQuotations(requestParams);
+            
+            batchUpdate(set, [
+              ['quotations', response.data.quotations || []],
+              ['opsQuotationsCounts', response.data.counts || {}],
+              ['loading', false],
+              ['lastError', null]
+            ]);
+            
+            return { success: true, quotations: response.data.quotations, counts: response.data.counts };
+          } catch (error) {
+            batchUpdate(set, [
+              ['loading', false],
+              ['lastError', AppError.from(error)]
+            ]);
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
+
+        
         clearError: () => set({ lastError: null }),
         isOperationInProgress: (key) => get().operationInProgress[key] === true,
 
@@ -1206,9 +1299,8 @@ approveQuotation: async (id) => {
 
 // ==================== OPTIMIZED HOOKS ====================
 import { useMemo, useEffect, useCallback, useRef } from 'react';
-
- export const useCompanyQuotations = () => {
-   const quotations = useAppStore((state) => state.quotations);
+export const useCompanyQuotations = () => {
+  const quotations = useAppStore((state) => state.quotations);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
   const loading = useAppStore((state) => state.loading);
   const quotationsVersion = useAppStore((state) => state.quotationsVersion);
@@ -1216,11 +1308,16 @@ import { useMemo, useEffect, useCallback, useRef } from 'react';
 
   const filteredQuotations = useMemo(() => {
     if (!selectedCompany) return [];
-    return quotations.filter(q => {
+    
+    // ✅ FIX: Ensure quotations is an array
+    const quotationsArray = Array.isArray(quotations) ? quotations : [];
+    
+    return quotationsArray.filter(q => {
       const qCompanyId = q.companyId?._id || q.companyId;
       return qCompanyId === selectedCompany;
     });
-  }, [quotations, selectedCompany, quotationsVersion]);  
+  }, [quotations, selectedCompany, quotationsVersion]);
+  
   const refresh = useCallback(async () => {
     if (selectedCompany) {
       const result = await refetchQuotations();
@@ -1237,7 +1334,6 @@ import { useMemo, useEffect, useCallback, useRef } from 'react';
     version: quotationsVersion,
   };
 };
-
 export const useDocuments = (quotationId) => {
   const { currentDocuments, documentLoading, fetchDocuments, uploadDocuments,
     updateDocumentDescription, deleteDocument, downloadDocument, clearCurrentDocuments } = useAppStore();

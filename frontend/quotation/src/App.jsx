@@ -186,7 +186,7 @@ function AppContent() {
           <Route path="/register" element={<GuestOnly><RegisterRoute /></GuestOnly>} />
           <Route path="/home" element={<RequireCreator><HomeScreenRoute /></RequireCreator>} />
           <Route path="/customers" element={<RequireAuth><CustomersRoute /></RequireAuth>} />
-          <Route path="/items" element={<RequireCreator><ItemsRoute /></RequireCreator>} />
+          <Route path="/items" element={<RequireAuth><ItemsRoute /></RequireAuth>} />
           <Route path="/quotation/new" element={<RequireAuth><QuotationNewRoute /></RequireAuth>} />
           <Route path="/quotation/:id" element={<RequireAuth><ViewQuotationRoute /></RequireAuth>} />
           <Route path="/ops" element={<RequireOpsManager><OpsDashboardRoute /></RequireOpsManager>} />

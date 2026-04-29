@@ -145,7 +145,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     termsImage: initialQuotationData?.termsImage || null,
     currency: initialQuotationData?.currency || getCurrencyObject(selectedCurrency),
     queryDate: initialQuotationData?.queryDate || ""   
-    
+
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [headerErrors, setHeaderErrors] = useState({});
@@ -369,9 +369,8 @@ const totalImageCount = useMemo(() => {
       showSnack(`Max ${MAX_IMAGES_PER_ITEM} images per item.`);
       return;
     }
-    
-    const toProcess = files.slice(0, slots);
-    if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} added.`);
+     const toProcess = files.slice(0, slots);
+    if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
     
     let processed = 0;
     toProcess.forEach(file => {
@@ -495,7 +494,7 @@ const totalImageCount = useMemo(() => {
         customerCountry: customer.country || "UAE",
         date: quotationData.date,
         expiryDate: quotationData.expiryDate,
-        projectName: quotationData.projectName?.trim() || "test",
+        projectName: quotationData.projectName?.trim(),
         ourRef: quotationData.ourRef?.trim() || "",
         ourContact: quotationData.ourContact?.trim() || "",
         salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",

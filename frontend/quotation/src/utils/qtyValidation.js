@@ -15,18 +15,31 @@ export const validatePrice = (value) => {
   return { isValid: true, error: null };
 };
 
-export const validatePercentage = (value) => {
-  if (typeof value === 'number') {
-    return value >= 0 && value <= 100 
-      ? { isValid: true } 
-      : { isValid: false, error: 'Percentage must be between 0 and 100' };
+ export const validatePercentage = (value) => {
+   if (value === null || value === undefined || value === '') {
+    return { isValid: true, error: null };
   }
-  if (!value && value !== 0) return { isValid: true };
-  const cleaned = value.toString().replace(/^0+/, '') || '0';
-  const num = Number(cleaned);
-  if (isNaN(num)) return { isValid: false, error: 'Must be a valid number' };
-  if (num < 0 || num > 100) return { isValid: false, error: 'Percentage must be between 0 and 100' };
-  return { isValid: true };
+  
+   let num;
+  if (typeof value === 'number') {
+    num = value;
+  } else {
+     const cleaned = value.toString().replace(/[^0-9.-]/g, '');
+    num = parseFloat(cleaned);
+  }
+  
+   if (isNaN(num)) {
+    return { isValid: false, error: 'Please enter a valid number' };
+  }
+  
+   if (num < 0) {
+    return { isValid: false, error: 'Percentage cannot be negative' };
+  }
+  if (num > 100) {
+    return { isValid: false, error: 'Percentage cannot exceed 100' };
+  }
+  
+  return { isValid: true, error: null };
 };
 
 export const validateDate = (startDate, endDate) => {

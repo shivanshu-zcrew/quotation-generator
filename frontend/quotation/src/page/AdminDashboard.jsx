@@ -310,7 +310,7 @@ const [pdfMessage, setPdfMessage] = useState('');
     conversionDetails, 
     totalAwardedValue
   } = useAdminStats();
-
+ 
   // ── Company & Currency ────────────────────────────────────
   const {
     company: currentCompany,
@@ -644,9 +644,10 @@ const [pdfMessage, setPdfMessage] = useState('');
         </div>
 
         <div style={styles.statsRow2}>
-          <StatCard label="Conversion Rate" value={`${conversionRate}%`} accent="#f59e0b" 
+          <StatCard label="Conversion Rate" value={`${conversionDetails}%`} accent="#f59e0b" 
             iconBg="#fef3c7" iconColor="#f59e0b" Icon={TrendingUp} loading={statsLoading} 
-            sub={`${conversionDetails.awardedCount} of ${conversionDetails.totalDecided} approved`} />
+            // sub={`${awarded} of ${awarded + notAwarded} awarded`} 
+            />
           <StatCard label="Rejected by Admin" value={rejected} accent="#ec4899" 
             iconBg="#fce7f3" iconColor="#ec4899" Icon={Ban} loading={statsLoading} sub="Rejected quotations" />
           <StatCard label="Total Customers" value={customers.length} accent="#8b5cf6" 
@@ -875,6 +876,13 @@ const [pdfMessage, setPdfMessage] = useState('');
       console.error('onNavigate prop is missing!');
     }
   }, [onNavigate]);
+  const handleGoToItems = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('items');
+    } else {
+      console.error('onNavigate prop is missing!');
+    }
+  }, [onNavigate]);
 
   const handleCreateQuotation = useCallback(() => {
     if (onNavigate) {
@@ -955,6 +963,25 @@ const [pdfMessage, setPdfMessage] = useState('');
     }}
   >
     <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+  </button>
+  <button 
+    onClick={handleGoToItems}
+    className="adm-nav-btn" 
+    style={{
+      backgroundColor: '#e0e7ff',
+      color: '#4f46e5',
+      border: 'none',
+      borderRadius: 8,
+      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+      fontSize: isMobile ? '0.7rem' : '0.8rem',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.4rem'
+    }}
+  >
+    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
   </button>
 
   <button 
