@@ -1151,7 +1151,7 @@ exports.updateQuotation = async (req, res) => {
     else if (isOpsManager) {
       // Ops manager can edit their own quotations or user quotations in pending/ops_rejected state
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
-        newStatus = 'pending_admin';  // After edit, goes to admin for review
+        newStatus = 'ops_approved';  // After edit, goes to admin for review
       }
       // ✅ NEW: If creator is Ops Manager and quotation was rejected by admin, move to pending (ops review)
       else if (currentStatus === 'rejected' && isCreator) {
