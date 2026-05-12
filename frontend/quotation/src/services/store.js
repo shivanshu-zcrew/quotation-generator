@@ -32,6 +32,13 @@ const debounce = (fn, delay) => {
   };
 };
 
+const debouncedFetchCustomers = debounce((filters) => {
+  get().fetchFilteredCustomers(filters, { page: 1 });
+}, 400);
+const debouncedFetch = debounce((filters, pagination = { page: 1 }) => {
+  get().fetchFilteredCustomers(filters, pagination);
+}, 450);
+
 export class AppError extends Error {
   constructor(message, statusCode = null, originalError = null) {
     super(message);
@@ -92,6 +99,23 @@ export const useAppStore = create(
         currencyOptions: [],
         customerStats: null,
         quotationsVersion: 0,
+        customerFilters: {
+          status: 'all',
+          taxStatus: 'all',
+          placeOfSupply: 'all',
+          hasTRN: 'all',
+          search: '',
+          minQuotations: null,
+          maxQuotations: null,
+          minTotalValue: null,
+          maxTotalValue: null,
+          createdFrom: null,
+          createdTo: null,
+          lastActivityFrom: null,
+          lastActivityTo: null,
+          zohoSyncStatus: 'all',
+           customersPagination: null,
+        },
 
         // ==================== OPTIMIZED AUTH ====================
         handleLogin: async (email, password) => {
@@ -104,7 +128,7 @@ export const useAppStore = create(
             if (!token || !userData.role) throw new Error('Invalid response');
             const user = {
               _id: userData._id || userData.id,
-              name: userData.name, email: userData.email,
+              name: userData.name, email: userData.email, phone: userData.phone, 
               role: userData.role, token,
             };
             localStorage.setItem('token', token);
@@ -307,120 +331,179 @@ fetchQuotationsForCompany: async (companyId) => {
         }, 500),
 
         // ==================== OPTIMIZED: Customer Stats with Cache ====================
-        fetchCustomerStats: async (forceRefresh = false) => {
-          const { customerStats, operationInProgress } = get();
-          if (operationInProgress.fetchCustomerStats && !forceRefresh) {
-            return { success: true, stats: customerStats };
-          }
-          
-          set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: true } }));
-          try {
-            const res = await customerAPI.getStats();
-            if (res.data.success) {
-              const statsData = res.data.stats || res.data;
-              batchUpdate(set, [
-                ['customerStats', statsData],
-                ['lastError', null]
-              ]);
-              return { success: true, stats: statsData };
-            }
-            throw new Error(res.data.message || 'Failed to fetch stats');
-          } catch (error) {
-            set({ lastError: AppError.from(error) });
-            return { success: false, error: getErrorMessage(error) };
-          } finally {
-            set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: false } }));
-          }
-        },
+fetchCustomerStats: async (appliedFilters = null, forceRefresh = false) => {
+  const { selectedCompany } = get();
+  if (!selectedCompany) {
+    console.warn("No company selected for stats");
+    return { success: false, error: 'No company selected' };
+  }
+
+  // Prevent multiple simultaneous calls
+  if (get().operationInProgress.fetchCustomerStats) {
+    return { success: false, error: 'Already fetching stats' };
+  }
+
+  set(s => ({
+    operationInProgress: { ...s.operationInProgress, fetchCustomerStats: true }
+  }));
+
+  console.log("Fetching stats with filters:", appliedFilters);
+
+  try {
+    const params = { companyId: selectedCompany };
+
+    if (appliedFilters) {
+      if (appliedFilters.status && appliedFilters.status !== 'all') 
+        params.status = appliedFilters.status;
+
+      if (appliedFilters.taxStatus && appliedFilters.taxStatus !== 'all') 
+        params.taxStatus = appliedFilters.taxStatus;
+
+      if (appliedFilters.placeOfSupply && appliedFilters.placeOfSupply !== 'all') 
+        params.placeOfSupply = appliedFilters.placeOfSupply;
+
+      if (appliedFilters.hasTRN && appliedFilters.hasTRN !== 'all') 
+        params.hasTRN = appliedFilters.hasTRN;
+
+      if (appliedFilters.search?.trim()) 
+        params.search = appliedFilters.search.trim();
+
+      // Add zohoSyncStatus if you use it in future
+      if (appliedFilters.zohoSyncStatus && appliedFilters.zohoSyncStatus !== 'all') 
+        params.zohoSyncStatus = appliedFilters.zohoSyncStatus;
+    }
+
+    const res = await customerAPI.getStats(params);
+
+    if (res.data?.success) {
+      const statsData = res.data.stats || res.data;
+      
+      set({
+        customerStats: statsData,
+        lastError: null
+      });
+
+      return { success: true, stats: statsData };
+    }
+
+    throw new Error(res.data?.message || 'Failed to fetch stats');
+
+  } catch (error) {
+    console.error("Stats fetch error:", error);
+    const errorMsg = getErrorMessage(error);
+    
+    set({ lastError: AppError.from(error) });
+    
+    return { success: false, error: errorMsg };
+  } finally {
+    set(s => ({
+      operationInProgress: { ...s.operationInProgress, fetchCustomerStats: false }
+    }));
+  }
+},
 
         // ==================== OPTIMIZED: Batch CRUD Operations ====================
-        addCustomer: async (data) => {
-          set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: true } }));
-          try {
-            const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
-            const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
-            if (!trnValidation.valid) throw new Error(trnValidation.error);
-            const res = await customerAPI.create({ ...data, companyId: get().selectedCompany });
-            const newCustomer = extractResponseData(res);
-            
-            // Optimistic update with rollback
-            const previousCustomers = get().customers;
-            set(s => ({ customers: [...s.customers, newCustomer], lastError: null }));
-            
-            try {
-              await get().fetchCustomerStats(true);
-              return { success: true, customer: newCustomer };
-            } catch (statsError) {
-              // Rollback if stats update fails
-              set({ customers: previousCustomers });
-              throw statsError;
-            }
-          } catch (error) {
-            set({ lastError: AppError.from(error) });
-            return { success: false, error: getErrorMessage(error) };
-          } finally {
-            set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: false } }));
-          }
-        },
+addCustomer: async (data) => {
+  set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: true } }));
+  try {
+    const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
+    const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
+    if (!trnValidation.valid) throw new Error(trnValidation.error);
+    const res = await customerAPI.create({ ...data, companyId: get().selectedCompany });
+    const newCustomer = extractResponseData(res);
+    
+    // Optimistic update with rollback
+    const previousCustomers = get().customers;
+    set(s => ({ customers: [...s.customers, newCustomer], lastError: null }));
+    
+    // ✅ Clear customer cache after add
+    customerAPI.clearCustomerCache();
+    
+    try {
+      await get().fetchCustomerStats(true);
+      return { success: true, customer: newCustomer };
+    } catch (statsError) {
+      // Rollback if stats update fails
+      set({ customers: previousCustomers });
+      throw statsError;
+    }
+  } catch (error) {
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  } finally {
+    set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: false } }));
+  }
+},
 
-        updateCustomer: async (id, data) => {
-          set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
-          try {
-            if (data.taxTreatment || data.taxRegistrationNumber) {
-              const existing = get().customers.find(c => c._id === id);
-              const taxTreatment = data.taxTreatment || existing?.taxTreatment;
-              const trn = data.taxRegistrationNumber !== undefined ? data.taxRegistrationNumber : existing?.taxRegistrationNumber;
-              const validation = get().validateTrn(trn, taxTreatment);
-              if (!validation.valid) throw new Error(validation.error);
-            }
-            
-            // Optimistic update
-            const previousCustomers = get().customers;
-            const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
-            set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
-            
-            try {
-              const res = await customerAPI.update(id, data);
-              const finalCustomer = extractResponseData(res);
-              set(s => ({ customers: s.customers.map(c => c._id === id ? finalCustomer : c) }));
-              get().fetchCustomerStats(true);
-              return { success: true, customer: finalCustomer };
-            } catch (error) {
-              // Rollback on failure
-              set({ customers: previousCustomers });
-              throw error;
-            }
-          } catch (error) {
-            set({ lastError: AppError.from(error) });
-            return { success: false, error: getErrorMessage(error) };
-          } finally {
-            set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: false } }));
-          }
-        },
+updateCustomer: async (id, data) => {
+  set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
+  try {
+    if (data.taxTreatment || data.taxRegistrationNumber) {
+      const existing = get().customers.find(c => c._id === id);
+      const taxTreatment = data.taxTreatment || existing?.taxTreatment;
+      const trn = data.taxRegistrationNumber !== undefined ? data.taxRegistrationNumber : existing?.taxRegistrationNumber;
+      const validation = get().validateTrn(trn, taxTreatment);
+      if (!validation.valid) throw new Error(validation.error);
+    }
+    
+    // Optimistic update
+    const previousCustomers = get().customers;
+    const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
+    set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
+    
+    try {
+      const res = await customerAPI.update(id, data);
+      const finalCustomer = extractResponseData(res);
+      set(s => ({ customers: s.customers.map(c => c._id === id ? finalCustomer : c) }));
+      
+      // ✅ Clear customer cache after update
+      customerAPI.clearCustomerCache();
+      
+      get().fetchCustomerStats(true);
+      return { success: true, customer: finalCustomer };
+    } catch (error) {
+      // Rollback on failure
+      set({ customers: previousCustomers });
+      throw error;
+    }
+  } catch (error) {
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: getErrorMessage(error) };
+  } finally {
+    set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: false } }));
+  }
+},
 
-        deleteCustomer: async (id) => {
-          set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: true } }));
-          try {
-            const previousCustomers = get().customers;
-            set(s => ({ customers: s.customers.filter(c => c._id !== id), lastError: null }));
-            
-            try {
-              await customerAPI.delete(id);
-              get().fetchCustomerStats(true);
-              return { success: true };
-            } catch (error) {
-              set({ customers: previousCustomers });
-              throw error;
-            }
-          } catch (error) {
-            set({ lastError: AppError.from(error) });
-            return { success: false, error: getErrorMessage(error) };
-          } finally {
-            set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: false } }));
-          }
-        },
+deleteCustomer: async (id) => {
+  set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: true } }));
+  try {
+     const response = await customerAPI.delete(id);
+    
+     if (response.data?.success === true) {
+       set(s => ({ customers: s.customers.filter(c => c._id !== id), lastError: null }));
+      
+       if (customerAPI.clearCustomerCache) {
+        customerAPI.clearCustomerCache();
+      }
+      
+      await get().fetchCustomerStats(true);
+      return { success: true };
+    } else {
+       const errorMsg = response.data?.message || 'Failed to delete customer';
+      set({ lastError: AppError.from(new Error(errorMsg)) });
+      return { success: false, error: errorMsg };
+    }
+  } catch (error) {
+     const errorMessage = error.response?.data?.message || error.message || 'Failed to delete customer';
+    set({ lastError: AppError.from(error) });
+    return { success: false, error: errorMessage };
+  } finally {
+    set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: false } }));
+  }
+},
 
         // ==================== OPTIMIZED: Sync with Progress ====================
+
         syncCustomersFromZoho: async (fullSync = false) => {
           const { operationInProgress } = get();
           if (operationInProgress.syncCustomers) {
@@ -434,6 +517,10 @@ fetchQuotationsForCompany: async (companyId) => {
               batchUpdate(set, [
                 ['lastError', null]
               ]);
+              
+              // ✅ Clear customer cache after sync
+              customerAPI.clearCustomerCache();
+              
               await get().fetchCustomerStats(true);
               await get().fetchAllData();
               return { success: true, stats: response.data.stats };
@@ -651,68 +738,213 @@ fetchQuotationsForCompany: async (companyId) => {
 
         clearCurrentDocuments: () => set({ currentDocuments: [] }),
 
-        fetchAllData: async () => {
-          const { user } = get();
-          if (!user) {
-            set({ customers: [], items: [], quotations: [], opsReviewHistory: [], companies: [], exchangeRates: null, loading: false, initialized: true });
-            return;
-          }
-          set({ loading: true, loadError: null });
-          try {
-            const selectedCompanyId = get().selectedCompany;
-            const params = selectedCompanyId ? { companyId: selectedCompanyId } : {};
+ fetchAllData: async (skipCache = false) => {
+  const { user } = get();
+  if (!user) {
+    set({ customers: [], items: [], quotations: [], opsReviewHistory: [], companies: [], exchangeRates: null, loading: false, initialized: true });
+    return;
+  }
+  set({ loading: true, loadError: null });
+  try {
+    const selectedCompanyId = get().selectedCompany;
+    const params = { companyId: selectedCompanyId };
+    
+    // ✅ Use skipCache for initial load or refresh
+    const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
+      customerAPI.getAll(params, { skipCache }).catch(() => ({ data: [] })),
+      itemAPI.getAll(params).catch(() => ({ data: [] })),
+      companyAPI.getAll().catch(() => ({ data: { companies: [] } })),
+      exchangeRateAPI.getRates().catch(() => ({ data: null })),
+      exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
+      customerAPI.getGccCountries().catch(() => ({ data: [] })),
+      customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
+      customerAPI.getCurrencies().catch(() => ({ data: [] })),
+    ]);
 
-            const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
-              customerAPI.getAll(params).catch(() => ({ data: [] })),
-              itemAPI.getAll(params).catch(() => ({ data: [] })),
-              companyAPI.getAll().catch(() => ({ data: { companies: [] } })),
-              exchangeRateAPI.getRates().catch(() => ({ data: null })),
-              exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
-              customerAPI.getGccCountries().catch(() => ({ data: [] })),
-              customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
-              customerAPI.getCurrencies().catch(() => ({ data: [] })),
-            ]);
+    const parseData = (d) => (Array.isArray(d) ? d : d?.data ?? []);
+    const companies = companiesRes.data?.companies || [];
+    
+    batchUpdate(set, [
+      ['customers', parseData(customersRes.data)],
+      ['items', parseData(itemsRes.data)],
+      ['companies', companies],
+      ['exchangeRates', ratesRes.data],
+      ['supportedCurrencies', currenciesRes.data?.currencies || null],
+      ['gccCountries', gccRes.data || []],
+      ['taxTreatments', taxRes.data || []],
+      ['currencyOptions', currencyOptsRes.data || []],
+      ['loadError', null],
+      ['lastError', null],
+      ['initialized', true]
+    ]);
 
-            const parseData = (d) => (Array.isArray(d) ? d : d?.data ?? []);
-            const companies = companiesRes.data?.companies || [];
-            
-            batchUpdate(set, [
-              ['customers', parseData(customersRes.data)],
-              ['items', parseData(itemsRes.data)],
-              ['companies', companies],
-              ['exchangeRates', ratesRes.data],
-              ['supportedCurrencies', currenciesRes.data?.currencies || null],
-              ['gccCountries', gccRes.data || []],
-              ['taxTreatments', taxRes.data || []],
-              ['currencyOptions', currencyOptsRes.data || []],
-              ['loadError', null],
-              ['lastError', null],
-              ['initialized', true]
-            ]);
+    if (companies.length > 0 && !get().selectedCompany) {
+      const defaultId = companies[0]._id;
+      persistSelectedCompany(defaultId);
+      set({ selectedCompany: defaultId });
+      const company = companies.find(c => c._id === defaultId);
+      if (company?.baseCurrency) {
+        localStorage.setItem('selectedCurrency', company.baseCurrency);
+        set({ selectedCurrency: company.baseCurrency });
+      }
+      await get().fetchQuotationsForCompany(defaultId);
+    } else if (get().selectedCompany) {
+      await get().fetchQuotationsForCompany(get().selectedCompany);
+    }
+  } catch (error) {
+    batchUpdate(set, [
+      ['loadError', getErrorMessage(error)],
+      ['lastError', AppError.from(error)],
+      ['initialized', true]
+    ]);
+  } finally {
+    set(s => s.loading ? { loading: false } : {});
+  }
+},
 
-            if (companies.length > 0 && !get().selectedCompany) {
-              const defaultId = companies[0]._id;
-              persistSelectedCompany(defaultId);
-              set({ selectedCompany: defaultId });
-              const company = companies.find(c => c._id === defaultId);
-              if (company?.baseCurrency) {
-                localStorage.setItem('selectedCurrency', company.baseCurrency);
-                set({ selectedCurrency: company.baseCurrency });
-              }
-              await get().fetchQuotationsForCompany(defaultId);
-            } else if (get().selectedCompany) {
-              await get().fetchQuotationsForCompany(get().selectedCompany);
-            }
-          } catch (error) {
-            batchUpdate(set, [
-              ['loadError', getErrorMessage(error)],
-              ['lastError', AppError.from(error)],
-              ['initialized', true]
-            ]);
-          } finally {
-            set(s => s.loading ? { loading: false } : {});
-          }
-        },
+// In store.js - Replace the existing ones
+
+fetchFilteredCustomers: async (filters = {}, paginationOptions = {}) => {
+  const { selectedCompany } = get();
+  if (!selectedCompany) return { success: false, error: 'No company selected' };
+
+  set(s => ({ 
+    operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: true },
+    loading: true 
+  }));
+
+  try {
+    const params = {
+      companyId: selectedCompany,
+      page: paginationOptions.page || 1,
+      limit: paginationOptions.limit || 20,
+      sortBy: paginationOptions.sortBy || 'name',
+      sortOrder: paginationOptions.sortOrder || 'asc',
+      ...filters
+    };
+
+    // Clean invalid values
+    Object.keys(params).forEach(key => {
+      if (params[key] === 'all' || params[key] === null || params[key] === undefined || params[key] === '') {
+        delete params[key];
+      }
+    });
+
+    const hasActiveFilters = Object.values(filters).some(v => 
+      v && v !== 'all' && v !== ''
+    );
+
+    const response = await customerAPI.getAll(params, { 
+      skipCache: !!params.search || Object.keys(filters).length > 2  
+    });
+
+    
+    if (response.data?.success !== false) {
+      const customersData = response.data?.data || [];
+      const paginationData = response.data?.pagination || null;
+
+      batchUpdate(set, [
+        ['customers', customersData],
+        ['customersPagination', paginationData],
+        ['loading', false],
+        ['lastError', null]
+      ]);
+
+      return { success: true, customers: customersData, pagination: paginationData };
+    }
+
+    throw new Error(response.data?.message || 'Failed to fetch customers');
+  } catch (error) {
+    batchUpdate(set, [
+      ['loading', false],
+      ['lastError', AppError.from(error)]
+    ]);
+    return { success: false, error: getErrorMessage(error) };
+  } finally {
+    set(s => ({ 
+      operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: false } 
+    }));
+  }
+},
+
+setCustomerFilters: (newFilters) => {
+  set(state => {
+    const updated = { 
+      ...state.customerFilters, 
+      ...newFilters 
+    };
+
+    // Preserve sort if not explicitly changed
+    if (newFilters.sortBy === undefined) {
+      updated.sortBy = state.customerFilters.sortBy || 'createdAt';
+      updated.sortOrder = state.customerFilters.sortOrder || 'desc';
+    }
+
+    return {
+      customerFilters: updated,
+      customersPagination: null   // Reset pagination when filters change
+    };
+  });
+
+  debouncedFetch({ ...get().customerFilters, ...newFilters });
+},
+
+resetCustomerFilters: () => {
+  const defaultFilters = {
+    status: 'all',
+    taxStatus: 'all',
+    placeOfSupply: 'all',
+    hasTRN: 'all',
+    search: '',
+    sortBy: 'createdAt',
+    sortOrder: 'desc',
+    minQuotations: null,
+    maxQuotations: null,
+    minTotalValue: null,
+    maxTotalValue: null,
+    zohoSyncStatus: 'all',
+  };
+
+  set({
+    customerFilters: defaultFilters,
+    customersPagination: null
+  });
+
+  get().fetchFilteredCustomers(defaultFilters, { page: 1 });
+},
+
+
+setCustomerFilters: (filters) => {
+  set(state => ({ 
+    customerFilters: { ...state.customerFilters, ...filters },
+    customersPagination: null
+  }));
+  // Auto fetch when filters change
+  get().fetchFilteredCustomers({ ...get().customerFilters, ...filters });
+},
+
+resetCustomerFilters: () => {
+  set({
+    customerFilters: {
+      status: 'all',
+      taxStatus: 'all',
+      placeOfSupply: 'all',
+      hasTRN: 'all',
+      search: '',
+      minQuotations: null,
+      maxQuotations: null,
+      minTotalValue: null,
+      maxTotalValue: null,
+      createdFrom: null,
+      createdTo: null,
+      lastActivityFrom: null,
+      lastActivityTo: null,
+      zohoSyncStatus: 'all'
+    },
+    customersPagination: null
+  });
+  get().fetchFilteredCustomers({});
+},
 
         addItem: async (data) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, addItem: true } }));
@@ -1290,6 +1522,7 @@ approveQuotation: async (id) => {
           taxTreatments: state.taxTreatments,
           currencyOptions: state.currencyOptions,
           customerStats: state.customerStats,
+          customerFilters: state.customerFilters,
         }),
       }
     ),
@@ -1425,20 +1658,35 @@ export const useCustomerStatsWithCompany = () => {
   const selectedCompany = useAppStore(s => s.selectedCompany);
   const fetchCustomerStats = useAppStore(s => s.fetchCustomerStats);
   const loading = useAppStore(s => s.operationInProgress.fetchCustomerStats);
+  const customerFilters = useAppStore(s => s.customerFilters);
+  const fetchFilteredCustomers = useAppStore(s => s.fetchFilteredCustomers);
+  const setCustomerFilters = useAppStore(s => s.setCustomerFilters);
+  const resetCustomerFilters = useAppStore(s => s.resetCustomerFilters);
+  const customers = useAppStore(s => s.customers);
+  const customersPagination = useAppStore(s => s.customersPagination);
 
   useEffect(() => {
-    if (selectedCompany) fetchCustomerStats();
-  }, [selectedCompany, fetchCustomerStats]);
+    if (selectedCompany) {
+      fetchCustomerStats();
+      fetchFilteredCustomers(customerFilters);
+    }
+  }, [selectedCompany, fetchCustomerStats, fetchFilteredCustomers, customerFilters]);
 
   return {
     stats: customerStats,
+    customers,
+    customersPagination,
     loading: loading === true,
     refetch: fetchCustomerStats,
+    refetchCustomers: () => fetchFilteredCustomers(customerFilters),
     totalCustomers: customerStats?.totalCustomers || 0,
     activeCustomers: customerStats?.activeCustomers || 0,
     vatRegistered: customerStats?.vatRegistered || 0,
     nonVatRegistered: customerStats?.nonVatRegistered || 0,
     synced: customerStats?.synced || 0,
     unsynced: customerStats?.unsynced || 0,
+    customerFilters,
+    setCustomerFilters,
+    resetCustomerFilters,
   };
 };

@@ -20,6 +20,8 @@ import {
   Trash2,
   Menu,
   FileText,
+  Users,
+  ShoppingCart,
 } from "lucide-react";
 
 import {
@@ -797,103 +799,155 @@ const [pdfStep, setPdfStep] = useState('');
 
       {/* Header */}
       <div
+  style={{
+    backgroundColor: "#0f172a",
+    padding: isMobile ? "0.75rem 1rem" : "0 2rem",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 60,
+    position: "sticky",
+    top: 0,
+    zIndex: 50,
+    boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+    flexWrap: "wrap",
+    gap: "0.75rem",
+  }}
+>
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      width: isMobile ? "100%" : "auto",
+    }}
+  >
+    <div>
+      <div
         style={{
-          backgroundColor: "#0f172a",
-          padding: isMobile ? "0.75rem 1rem" : "0 2rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          minHeight: 60,
-          position: "sticky",
-          top: 0,
-          zIndex: 50,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-          flexWrap: "wrap",
-          gap: "0.75rem",
+          fontSize: isMobile ? "1rem" : "1.0625rem",
+          fontWeight: 800,
+          color: "white",
+          letterSpacing: "-0.01em",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            width: isMobile ? "100%" : "auto",
-          }}
-        >
-          <div>
-            <div
-              style={{
-                fontSize: isMobile ? "1rem" : "1.0625rem",
-                fontWeight: 800,
-                color: "white",
-                letterSpacing: "-0.01em",
-              }}
-            >
-              📋 My Dashboard
-            </div>
-            {!isMobile && <CompanyCurrencyDisplay />}
-          </div>
-          {isMobile && (
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              style={{
-                background: "rgba(255,255,255,0.1)",
-                border: "none",
-                borderRadius: 8,
-                padding: "0.4rem 0.7rem",
-                color: "white",
-                cursor: "pointer",
-              }}
-            >
-              <Menu size={20} />
-            </button>
-          )}
-        </div>
-
-        {isMobile && <CompanyCurrencyDisplay />}
-
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-            ...(isMobile && !mobileMenuOpen
-              ? { display: "none" }
-              : { display: "flex" }),
-            width: isMobile ? "100%" : "auto",
-            justifyContent: isMobile ? "center" : "flex-end",
-          }}
-        >
-          <CompanyCurrencySelector variant="compact" />
-          <NavBtn onClick={() => onNavigate("customers")} label="Customers" />
-          <NavBtn onClick={() => onNavigate("items")} label="Items" />
-          <NavBtn
-            onClick={() => onNavigate("addQuotation")}
-            label={isMobile ? "+" : "+ New Quotation"}
-            primary
-          />
-          <button
-            onClick={handleLogout}
-            style={{
-              backgroundColor: "rgba(255,255,255,0.08)",
-              color: "#94a3b8",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 8,
-              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
-              fontSize: isMobile ? "0.7rem" : "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.4rem",
-              fontFamily: "inherit",
-            }}
-          >
-            <LogOut size={isMobile ? 12 : 15} /> {!isMobile && "Logout"}
-          </button>
-        </div>
+        📋 My Dashboard
       </div>
+      {!isMobile && <CompanyCurrencyDisplay />}
+    </div>
+    {isMobile && (
+      <button
+        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+        style={{
+          background: "rgba(255,255,255,0.1)",
+          border: "none",
+          borderRadius: 8,
+          padding: "0.4rem 0.7rem",
+          color: "white",
+          cursor: "pointer",
+        }}
+      >
+        <Menu size={20} />
+      </button>
+    )}
+  </div>
+
+  {isMobile && <CompanyCurrencyDisplay />}
+
+  <div
+    style={{
+      display: "flex",
+      gap: "0.5rem",
+      alignItems: "center",
+      flexWrap: "wrap",
+      ...(isMobile && !mobileMenuOpen
+        ? { display: "none" }
+        : { display: "flex" }),
+      width: isMobile ? "100%" : "auto",
+      justifyContent: isMobile ? "center" : "flex-end",
+    }}
+  >
+    <CompanyCurrencySelector variant="compact" />
+    
+    {/* ✅ Always show labels on all devices - made responsive */}
+    <button
+      onClick={() => onNavigate("customers")}
+      style={{
+        backgroundColor: "#e0e7ff",
+        color: "#4f46e5",
+        border: "none",
+        borderRadius: 8,
+        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+        fontSize: isMobile ? "0.7rem" : "0.8rem",
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+      }}
+    >
+      <Users size={isMobile ? 12 : 14} /> Customers
+    </button>
+    
+    <button
+      onClick={() => onNavigate("items")}
+      style={{
+        backgroundColor: "#e0e7ff",
+        color: "#4f46e5",
+        border: "none",
+        borderRadius: 8,
+        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+        fontSize: isMobile ? "0.7rem" : "0.8rem",
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+      }}
+    >
+      <ShoppingCart size={isMobile ? 12 : 14} /> Items
+    </button>
+
+    <button
+      onClick={() => onNavigate("addQuotation")}
+      style={{
+        backgroundColor: "#10b981",
+        color: "white",
+        border: "none",
+        borderRadius: 8,
+        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+        fontSize: isMobile ? "0.7rem" : "0.8rem",
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+      }}
+    >
+      <FileText size={isMobile ? 12 : 14} /> {isMobile ? "New" : "New Quotation"}
+    </button>
+    
+    <button
+      onClick={handleLogout}
+      style={{
+        backgroundColor: "rgba(255,255,255,0.08)",
+        color: "#94a3b8",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 8,
+        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
+        fontSize: isMobile ? "0.7rem" : "0.8rem",
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.4rem",
+        fontFamily: "inherit",
+      }}
+    >
+      <LogOut size={isMobile ? 12 : 15} /> Logout
+    </button>
+  </div>
+</div>
 
       {/* Main Content */}
       <div

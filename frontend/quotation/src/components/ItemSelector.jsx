@@ -1,6 +1,6 @@
-// components/ItemSelector.jsx (Fixed Infinite Scroll)
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { Search, X, Package, Check, Loader2, RefreshCw, Grid, List, Tag, DollarSign, AlertCircle } from 'lucide-react';
+// components/ItemSelector.jsx
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Search, X, Package, Check, Loader2, RefreshCw, Grid, List, Tag, DollarSign, AlertCircle, Box, Wrench } from 'lucide-react';
 import { itemAPI } from '../services/api';
 import { fmtCurrency } from '../utils/formatters';
 
@@ -59,13 +59,16 @@ const InfiniteItemSelector = ({
   const [toast, setToast] = useState(null);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   
+  // Product type filter
+  const [productType, setProductType] = useState('all');
+  const [filterCounts, setFilterCounts] = useState({ goods: 0, service: 0 });
+  
   const loaderRef = useRef();
   const searchTimeoutRef = useRef();
   const abortControllerRef = useRef();
   const pollIntervalRef = useRef();
   const isMountedRef = useRef(true);
 
-  // Set mounted flag
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -75,34 +78,29 @@ const InfiniteItemSelector = ({
     };
   }, []);
 
-  // Reset when modal opens or company changes
+  // Reset when modal opens
   useEffect(() => {
     if (isOpen) {
-      console.log('📦 ItemSelector opened for company:', companyId);
-      // Reset all state
-      setItems([]);
-      setCurrentPage(1);
-      setHasMore(true);
-      setSearchTerm('');
-      setSearchInputValue('');
-      setTotalItems(0);
-      setInitialLoadDone(false);
-      setLoading(true);
-      
-      // Fetch first page
-      fetchItems(1, false, '', true);
+      resetAndFetch();
     }
   }, [isOpen, companyId]);
 
-  useEffect(() => {
-    setSelectedIds(new Set(selectedItems.map(i => i.itemId)));
-  }, [selectedItems]);
+  const resetAndFetch = () => {
+    setItems([]);
+    setCurrentPage(1);
+    setHasMore(true);
+    setSearchTerm('');
+    setSearchInputValue('');
+    setTotalItems(0);
+    setInitialLoadDone(false);
+    setProductType('all');
+    setLoading(true);
+    fetchItems(1, false, '', 'all');
+  };
 
-  const fetchItems = useCallback(async (pageNum = 1, append = false, searchQuery = '', isRefresh = false) => {
-    // Don't fetch if already loading and not a refresh
-    if ((loading || loadingMore) && !isRefresh) return;
+  const fetchItems = useCallback(async (pageNum = 1, append = false, searchQuery = '', typeFilter = null) => {
+    if ((loading || loadingMore) && !append) return;
     
-    // Cancel previous request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -119,16 +117,22 @@ const InfiniteItemSelector = ({
       const params = {
         page: pageNum,
         limit: 50,
-        search: searchQuery,
         sortBy: 'name',
         sortOrder: 'asc'
       };
       
+      if (searchQuery) {
+        params.search = searchQuery;
+      }
+      
+      const currentFilter = typeFilter !== null ? typeFilter : productType;
+      if (currentFilter && currentFilter !== 'all') {
+        params.product_type = currentFilter;
+      }
+      
       if (companyId) {
         params.companyId = companyId;
       }
-      
-      console.log(`📡 Fetching page ${pageNum} with search: "${searchQuery}"`);
       
       const response = await itemAPI.getAll(params, { signal: abortControllerRef.current.signal });
       
@@ -138,34 +142,31 @@ const InfiniteItemSelector = ({
         let newItems = response.data.data || [];
         const pagination = response.data.pagination;
         
-        // Filter out non-sellable items
         newItems = newItems.filter(item => item.can_be_sold !== false);
         
         const hasNextPage = pagination?.hasNextPage || false;
-        const total = pagination?.totalItems || 0;
         
-        console.log(`✅ Page ${pageNum} loaded: ${newItems.length} items, hasMore: ${hasNextPage}`);
+        const goodsCount = newItems.filter(item => item.product_type === 'goods').length;
+        const serviceCount = newItems.filter(item => item.product_type === 'service').length;
         
-        setItems(prev => append ? [...prev, ...newItems] : newItems);
+        setFilterCounts({ goods: goodsCount, service: serviceCount });
+        
+        if (append) {
+          setItems(prev => [...prev, ...newItems]);
+        } else {
+          setItems(newItems);
+        }
         setHasMore(hasNextPage);
-        setTotalItems(total);
+        setTotalItems(pagination?.totalItems || 0);
         setCurrentPage(pageNum);
         
         if (!append) {
           setInitialLoadDone(true);
         }
-      } else {
-        console.error('API returned unsuccessful:', response.data);
       }
     } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('Request cancelled');
-        return;
-      }
-      console.error('Error fetching items:', error);
-      if (isMountedRef.current) {
-        setToast({ message: 'Failed to load items', type: 'error' });
-        setTimeout(() => setToast(null), 3000);
+      if (error.name !== 'AbortError') {
+        console.error('Error fetching items:', error);
       }
     } finally {
       if (isMountedRef.current) {
@@ -173,9 +174,23 @@ const InfiniteItemSelector = ({
         setLoadingMore(false);
       }
     }
-  }, [companyId]);
+  }, [companyId, productType, loading, loadingMore]);
 
-  // Handle search with debounce
+  const handleProductTypeChange = useCallback((type) => {
+    setProductType(type);
+    setCurrentPage(1);
+    setItems([]);
+    setHasMore(true);
+    setInitialLoadDone(false);
+    setLoading(true);
+    
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    fetchItems(1, false, searchTerm, type);
+  }, [fetchItems, searchTerm]);
+
   const handleSearch = useCallback((value) => {
     setSearchInputValue(value);
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
@@ -193,9 +208,9 @@ const InfiniteItemSelector = ({
         abortControllerRef.current.abort();
       }
       
-      fetchItems(1, false, trimmedValue);
+      fetchItems(1, false, trimmedValue, productType);
     }, 500);
-  }, [fetchItems]);
+  }, [fetchItems, productType]);
 
   const handleClearSearch = useCallback(() => {
     setSearchInputValue('');
@@ -210,48 +225,29 @@ const InfiniteItemSelector = ({
       abortControllerRef.current.abort();
     }
     
-    fetchItems(1, false, '');
-  }, [fetchItems]);
+    fetchItems(1, false, '', productType);
+  }, [fetchItems, productType]);
 
-  // Load more items when scrolled to bottom
   const loadMoreItems = useCallback(() => {
-    if (!hasMore || loadingMore || loading || !initialLoadDone) {
-      console.log('🚫 Cannot load more:', { hasMore, loadingMore, loading, initialLoadDone });
-      return;
-    }
-    
+    if (!hasMore || loadingMore || loading || !initialLoadDone) return;
     const nextPage = currentPage + 1;
-    console.log(`📜 Loading more items: page ${nextPage}`);
-    fetchItems(nextPage, true, searchTerm);
-  }, [hasMore, loadingMore, loading, initialLoadDone, currentPage, searchTerm, fetchItems]);
+    fetchItems(nextPage, true, searchTerm, productType);
+  }, [hasMore, loadingMore, loading, initialLoadDone, currentPage, searchTerm, productType, fetchItems]);
 
-  // Setup intersection observer for infinite scroll
   useEffect(() => {
     if (!loaderRef.current || !hasMore || loadingMore || loading || !initialLoadDone) return;
     
     const observer = new IntersectionObserver(
       (entries) => {
-        const target = entries[0];
-        if (target.isIntersecting && hasMore && !loadingMore && !loading && initialLoadDone) {
-          console.log('🔍 Intersection triggered - loading more');
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !loading && initialLoadDone) {
           loadMoreItems();
         }
       },
-      { 
-        threshold: 0.1,
-        rootMargin: '200px' // Increased margin to trigger earlier
-      }
+      { threshold: 0.1, rootMargin: '200px' }
     );
     
-    const currentLoader = loaderRef.current;
-    observer.observe(currentLoader);
-    
-    return () => {
-      if (currentLoader) {
-        observer.unobserve(currentLoader);
-      }
-      observer.disconnect();
-    };
+    observer.observe(loaderRef.current);
+    return () => observer.disconnect();
   }, [hasMore, loadingMore, loading, initialLoadDone, loadMoreItems]);
 
   const handleToggle = useCallback((itemId) => {
@@ -272,11 +268,7 @@ const InfiniteItemSelector = ({
       if (existing) return existing;
       
       const item = items.find(i => i._id === itemId);
-      
-      if (!item) {
-        console.warn(`Item not found with ID: ${itemId}`);
-        return null;
-      }
+      if (!item) return null;
       
       return {
         id: `item-${Date.now()}-${Math.random()}-${itemId}`,
@@ -309,7 +301,6 @@ const InfiniteItemSelector = ({
       };
     }).filter(item => item !== null);
     
-    console.log('📦 Items from modal:', newItems.length);
     onSelect(newItems);
     onClose();
   }, [selectedIds, selectedItems, items, onSelect, onClose]);
@@ -320,24 +311,16 @@ const InfiniteItemSelector = ({
     setToast({ message: 'Syncing items from Zoho...', type: 'info' });
     
     try {
-      const response = await itemAPI.syncItems(companyId);
+      const response = await itemAPI.syncItems();
       if (response.data.success) {
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = setInterval(async () => {
           try {
-            const statusRes = await itemAPI.getSyncStatus(companyId);
+            const statusRes = await itemAPI.getSyncStatus();
             if (!statusRes.data.status.isSyncing) {
               clearInterval(pollIntervalRef.current);
               setIsSyncing(false);
-              // Refresh items
-              setItems([]);
-              setCurrentPage(1);
-              setHasMore(true);
-              setSearchTerm('');
-              setSearchInputValue('');
-              setInitialLoadDone(false);
-              setLoading(true);
-              fetchItems(1, false, '', true);
+              resetAndFetch();
               
               const result = statusRes.data.status.lastSyncResult;
               setToast({ 
@@ -345,39 +328,23 @@ const InfiniteItemSelector = ({
                 type: 'success' 
               });
               onSyncComplete?.(result);
-              setTimeout(() => setToast(null), 3000);
             }
           } catch (error) {
             clearInterval(pollIntervalRef.current);
             setIsSyncing(false);
             setToast({ message: '❌ Sync failed', type: 'error' });
-            setTimeout(() => setToast(null), 3000);
           }
         }, 2000);
-        
-        setTimeout(() => {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            if (isSyncing) {
-              setIsSyncing(false);
-              setToast({ message: '❌ Sync timeout after 60 seconds', type: 'error' });
-              setTimeout(() => setToast(null), 3000);
-            }
-          }
-        }, 60000);
       } else {
         setIsSyncing(false);
         setToast({ message: '❌ Sync failed to start', type: 'error' });
-        setTimeout(() => setToast(null), 3000);
       }
     } catch (error) {
       setIsSyncing(false);
       setToast({ message: '❌ Sync failed', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
     }
-  }, [isSyncing, onSyncComplete, companyId, fetchItems]);
+  }, [isSyncing, onSyncComplete]);
 
-  // Add animation styles
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
@@ -425,11 +392,33 @@ const InfiniteItemSelector = ({
               )}
             </div>
             
+            {/* Product Type Filter Buttons */}
+            <div style={styles.filterContainer}>
+              <button
+                onClick={() => handleProductTypeChange('all')}
+                style={{ ...styles.filterBtn, ...(productType === 'all' ? styles.filterBtnActive : {}) }}
+              >
+                <Package size={14} /> All Types
+              </button>
+              <button
+                onClick={() => handleProductTypeChange('goods')}
+                style={{ ...styles.filterBtn, ...(productType === 'goods' ? styles.filterBtnActive : {}) }}
+              >
+                <Box size={14} /> Goods  
+              </button>
+              <button
+                onClick={() => handleProductTypeChange('service')}
+                style={{ ...styles.filterBtn, ...(productType === 'service' ? styles.filterBtnActive : {}) }}
+              >
+                <Wrench size={14} /> Services  
+              </button>
+            </div>
+            
             <div style={styles.statsBar}>
               <div style={styles.statsLeft}>
                 <span style={styles.statsText}>
                   {totalItems > 0 
-                    ? `Showing ${items.length}` 
+                    ? `Showing ${items.length} items` 
                     : loading ? 'Loading...' : 'No sellable items found'}
                 </span>
               </div>
@@ -472,6 +461,10 @@ const InfiniteItemSelector = ({
                 <div style={viewMode === 'grid' ? styles.itemsGrid : styles.itemsList}>
                   {items.map((item) => {
                     const isSelected = selectedIds.has(item._id);
+                    const isGoods = item.product_type === 'goods';
+                    const itemTypeColor = isGoods ? '#10b981' : '#3b82f6';
+                    const itemTypeBg = isGoods ? '#d1fae5' : '#dbeafe';
+                    
                     return viewMode === 'grid' ? (
                       <div 
                         key={item._id} 
@@ -484,10 +477,18 @@ const InfiniteItemSelector = ({
                           </div>
                         </div>
                         <div style={styles.itemIcon}>
-                          <Package size={20} color={PRIMARY_COLOR} />
+                          {isGoods ? <Box size={20} color={PRIMARY_COLOR} /> : <Wrench size={20} color={PRIMARY_COLOR} />}
                         </div>
                         <div style={styles.itemContent}>
                           <h3 style={styles.itemName}>{item.name}</h3>
+                          <span style={{ 
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            padding: '2px 8px', borderRadius: '12px', fontSize: '0.6rem', 
+                            fontWeight: 600, background: itemTypeBg, color: itemTypeColor, marginBottom: '6px'
+                          }}>
+                            {isGoods ? <Box size={10} /> : <Wrench size={10} />}
+                            {isGoods ? 'Goods' : 'Service'}
+                          </span>
                           {item.sku && (
                             <p style={styles.itemSku}>
                               <Tag size={10} /> SKU: {item.sku}
@@ -517,7 +518,15 @@ const InfiniteItemSelector = ({
                         </div>
                         <div style={styles.listItemContent}>
                           <div style={styles.listItemMain}>
-                            <h3 style={styles.listItemName}>{item.name}</h3>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <h3 style={styles.listItemName}>{item.name}</h3>
+                              <span style={{ 
+                                padding: '2px 8px', borderRadius: '12px', fontSize: '0.6rem', 
+                                fontWeight: 600, background: itemTypeBg, color: itemTypeColor
+                              }}>
+                                {isGoods ? 'Goods' : 'Service'}
+                              </span>
+                            </div>
                             {item.sku && (
                               <span style={styles.listItemSku}>SKU: {item.sku}</span>
                             )}
@@ -694,11 +703,37 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center'
   },
+  filterContainer: {
+    display: 'flex',
+    gap: '0.5rem',
+    marginTop: '0.75rem',
+    marginBottom: '0.75rem',
+    flexWrap: 'wrap'
+  },
+  filterBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '0.4rem 0.9rem',
+    borderRadius: '20px',
+    border: '1.5px solid #e2e8f0',
+    background: 'white',
+    fontSize: '0.75rem',
+    fontWeight: '500',
+    cursor: 'pointer',
+    color: '#475569',
+    transition: 'all 0.2s'
+  },
+  filterBtnActive: {
+    background: PRIMARY_COLOR,
+    borderColor: PRIMARY_COLOR,
+    color: 'white'
+  },
   statsBar: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: '0.75rem'
+    marginTop: '0.5rem'
   },
   statsLeft: {
     display: 'flex',

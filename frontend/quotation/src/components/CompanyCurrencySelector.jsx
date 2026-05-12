@@ -120,7 +120,7 @@ export const CompanyCurrencySelector = memo(({
           ))}
         </select>
         
-        <select 
+        {/* <select 
           value={selectedCurrency} 
           onChange={handleCurrencyChange} 
           disabled={disabled}
@@ -139,9 +139,9 @@ export const CompanyCurrencySelector = memo(({
           {acceptedCurrencies.map(code => (
             <option key={code} value={code} style={{ color: '#0f172a' }}>{code}</option>
           ))}
-        </select>
+        </select> */}
         
-        <button 
+        {/* <button 
           onClick={handleRefreshRates} 
           disabled={isRefreshing}
           style={{
@@ -159,7 +159,7 @@ export const CompanyCurrencySelector = memo(({
           title="Refresh rates"
         >
           <RefreshCw size={12} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
-        </button>
+        </button> */}
       </div>
     );
   }
@@ -233,7 +233,7 @@ export const CompanyCurrencySelector = memo(({
           ))}
         </select>
         
-        <select 
+        {/* <select 
           value={selectedCurrency} 
           onChange={handleCurrencyChange} 
           disabled={disabled} 
@@ -243,16 +243,16 @@ export const CompanyCurrencySelector = memo(({
           {acceptedCurrencies.map(code => (
             <option key={code} value={code}>{CURRENCY_METADATA[code]?.flag} {code}</option>
           ))}
-        </select>
+        </select> */}
         
-        <button 
+        {/* <button 
           onClick={handleRefreshRates} 
           disabled={isRefreshing} 
           style={styles.compactRefreshBtn} 
           title="Refresh rates"
         >
           <RefreshCw size={12} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
-        </button>
+        </button> */}
       </div>
     );
   }

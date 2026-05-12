@@ -98,7 +98,7 @@ const QuotationCard = React.memo(({
       {/* Actions */}
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
         <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        {!['awarded', 'not_awarded'].includes(quotation.status) && (
+        {/* {!['awarded', 'not_awarded'].includes(quotation.status) && (
           <ActionBtn 
             bg={quotation.queryDate ? '#fef3c7' : '#f1f5f9'} 
             color={quotation.queryDate ? '#92400e' : '#64748b'} 
@@ -107,7 +107,7 @@ const QuotationCard = React.memo(({
             label="Follow-up" 
             size="small" 
           />
-        )}
+        )} */}
         <ActionBtn 
           bg={isExporting ? '#f1f5f9' : '#f0fdf4'} 
           color={isExporting ? '#94a3b8' : '#166534'} 

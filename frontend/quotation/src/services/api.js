@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE = import.meta.env?.VITE_API_URL || "/api";
+const API_BASE = import.meta.env?.VITE_API_URL || "http://localhost:4000/api";
 
 // Request Deduplication
 class RequestDeduplicator {
@@ -65,6 +65,7 @@ const withRetry = async (requestFn, options = {}) => {
 
 // Response Cache
 class ApiCache {
+  
   constructor(defaultTtl = 5 * 60 * 1000) {
     this.cache = new Map();
     this.defaultTtl = defaultTtl;
@@ -145,6 +146,7 @@ class RequestQueue {
   }
 }
 
+
 const deduplicator = new RequestDeduplicator();
 const apiCache = new ApiCache();
 const syncQueue = new RequestQueue();
@@ -206,6 +208,33 @@ api.interceptors.response.use(
   }
 );
 
+
+const customerCache = new Map();
+const CUSTOMER_CACHE_TTL = 60000;
+
+
+const getCachedCustomers = (cacheKey) => {
+  const cached = customerCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CUSTOMER_CACHE_TTL) {
+    console.log('📦 Returning cached customers for key:', cacheKey);
+    return cached.data;
+  }
+  return null;
+};
+
+const setCachedCustomers = (cacheKey, data) => {
+  customerCache.set(cacheKey, {
+    data,
+    timestamp: Date.now()
+  });
+  console.log('💾 Cached customers for key:', cacheKey);
+};
+
+const clearCustomerCache = () => {
+  customerCache.clear();
+  console.log('🧹 Customer cache cleared');
+};
+
 // Cancel tokens
 export const createCancelToken = () => {
   const source = axios.CancelToken.source();
@@ -218,6 +247,7 @@ export const authAPI = {
   register: (data) => api.post("/auth/register", data),
   login: (data) => api.post("/auth/login", data),
   getMe: () => api.get("/auth/me"),
+  updateUser: (userId, userData) => api.put(`/auth/users/${userId}`, userData), 
   updateDetails: (data) => api.put("/auth/updatedetails", data),
   updatePassword: (data) => api.put("/auth/updatepassword", data),
   getAllUsers: () => api.get("/auth/users"),
@@ -240,6 +270,13 @@ export const adminAPI = {
   getAdminStats: (params) => api.get("/admin/dashboard", { params }),
   getUserQuotationStats: () => api.get("/admin/user-stats"),
   getQuotationsByUser: (userId) => api.get(`/admin/user-quotations/${userId}`),
+  exportQuotationsToExcel: (params) => {
+    return api.get("/admin/export-excel", { 
+      params,
+      responseType: 'blob',
+      timeout: 120000 
+    });
+  },
 };
 
 // ==================== OPS MANAGER ====================
@@ -259,12 +296,42 @@ export const opsAPI = {
 
 // ==================== CUSTOMERS ====================
 export const customerAPI = {
-  getAll: (params) => {
-    const key = `/customers?${JSON.stringify(params)}`;
-    return withCache(key, () => withRetry(() => api.get("/customers", { params })), {
-      ttl: 2 * 60 * 1000
+  getAll: async (params, options = {}) => {
+    const { skipCache = false } = options;
+    
+    // Create cache key from params
+    const cacheKey = JSON.stringify({ 
+      ...params, 
+      companyId: params?.companyId 
     });
+    
+    console.log('🔍 GET /customers with params:', params);
+    
+    // Check cache first (unless skipCache is true)
+    if (!skipCache) {
+      const cachedData = getCachedCustomers(cacheKey);
+      if (cachedData) {
+        return { data: cachedData, source: 'cache' };
+      }
+    }
+    
+    // Fetch from API
+    console.log('🌐 Fetching fresh customers from API');
+    const response = await withRetry(() => api.get("/customers", { params }));
+    
+    // Cache the response (only if not skipCache)
+    if (!skipCache && response.data) {
+      setCachedCustomers(cacheKey, response.data);
+    }
+    
+    return response;
   },
+  
+  // Add this method to clear cache
+  clearCustomerCache: () => {
+    clearCustomerCache();
+  },
+  
   create: (data) => api.post("/customers", data),
   getById: (id) => {
     const key = `/customers/${id}`;
@@ -336,6 +403,9 @@ export const itemAPI = {
     return response;
   },
   syncItems: () => syncQueue.add(() => api.post("/items/sync")),
+  getSyncProgress: () => {
+    return api.get("/items/sync/progress");
+  },
   getSyncStatus: () => api.get("/items/sync/status"),
   getAllWithRefresh: (params, forceRefresh = false) => {
     const key = `/items?${JSON.stringify(params)}`;

@@ -24,19 +24,7 @@ const PAGINATION_CACHE_TTL = 300;
 // HELPER FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────
 
-function validatePaginationParams(query) {
-  let page = parseInt(query.page, 10) || 1;
-  let limit = parseInt(query.limit, 10) || DEFAULT_PAGE_SIZE;
-  const search = query.search ? String(query.search).trim() : '';
-  const sortBy = query.sortBy || 'createdAt';
-  const sortOrder = query.sortOrder === 'asc' ? 1 : -1;
-
-  if (page < 1) page = 1;
-  if (limit < MIN_PAGE_SIZE) limit = MIN_PAGE_SIZE;
-  if (limit > MAX_PAGE_SIZE) limit = MAX_PAGE_SIZE;
-
-  return { page, limit, skip: (page - 1) * limit, search, sortBy, sortOrder };
-}
+ 
 
 function validateCustomerData(customer) {
   if (!customer || typeof customer !== 'object') {
@@ -97,43 +85,11 @@ function buildCurrencyObject(currencyCode) {
   };
 }
 
-async function addZohoDataToBatch(customers) {
-  const results = [];
-
-  for (const customer of customers) {
-    const customerObj = customer.toObject ? customer.toObject() : customer;
-
-    if (!customer.zohoId) {
-      results.push(customerObj);
-      continue;
-    }
-
-    try {
-      const zohoResult = await zohoBooksService.getContact(customer.zohoId);
-
-      if (zohoResult?.success && zohoResult.contact) {
-        customerObj.zohoData = zohoResult.contact;
-        customerObj.zohoSynced = true;
-      } else if (zohoResult?.error) {
-        customerObj.zohoError = zohoResult.error;
-        console.warn(`Zoho fetch failed for ${customer.email}: ${zohoResult.error}`);
-      }
-    } catch (error) {
-      customerObj.zohoError = error.message;
-       
-    }
-
-    results.push(customerObj);
-  }
-
-  return results;
-}
-
+ 
 // ─────────────────────────────────────────────────────────────────────────
 // CREATE CUSTOMER
 // ─────────────────────────────────────────────────────────────────────────
-// In your customerController.js - REPLACE the createCustomer function
-
+ 
 exports.createCustomer = async (req, res) => {
   try {
     const {
@@ -146,156 +102,139 @@ exports.createCustomer = async (req, res) => {
       notes,
       taxTreatment = 'non_vat_registered',
       taxRegistrationNumber = '',
-      placeOfSupply = 'United Arab Emirates (UAE)',
-      defaultCurrency = 'AED'
+      placeOfSupply = 'Dubai',
+      defaultCurrency = 'AED',
+      contactPersons = [],
+      mainContactSalutation = 'Mr.'
     } = req.body;
 
-    // Get company from request
     const companyId = req.headers['x-company-id'] || req.body.companyId;
-    if (!companyId) {
-      return res.status(400).json({ success: false, message: 'Company ID is required' });
+
+    if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
+    if (!name?.trim() || name.trim().length < 3) {
+      return res.status(400).json({ success: false, message: 'Customer name must be at least 3 characters' });
     }
 
     const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(404).json({ success: false, message: 'Company not found' });
-    }
-
-    // Debug: Log company Zoho info
-    console.log('🔍 Company Zoho Info:', {
-      companyId: company._id,
-      companyName: company.name,
-      zohoOrganizationId: company.zohoOrganizationId,
-      hasZohoId: !!company.zohoOrganizationId
-    });
-
-    // Validate Zoho configuration before proceeding
-    if (!company.zohoOrganizationId) {
-      console.warn('⚠️ Company has no Zoho Organization ID - Zoho sync will be skipped');
-    }
-
-    const validation = validateCustomerData({ name, email });
-    if (!validation.valid) {
-      return res.status(400).json({ success: false, message: validation.error });
-    }
+    if (!company) return res.status(404).json({ success: false, message: 'Company not found' });
 
     const taxErrors = validateTaxData(taxTreatment, taxRegistrationNumber, placeOfSupply);
     if (taxErrors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tax validation error',
-        errors: taxErrors
+      return res.status(400).json({ success: false, message: taxErrors[0] });
+    }
+
+    // ====================== BUILD CONTACT PERSONS ======================
+    const allContactPersons = [];
+
+    // Main Contact
+    allContactPersons.push({
+      salutation: mainContactSalutation || 'Mr.',
+      firstName: name.trim(),
+      lastName: '',
+      email: email ? email.trim().toLowerCase() : '',
+      workPhone: phone ? phone.trim() : '',
+      mobile: '',
+      designation: '',
+      department: '',
+      isPrimaryContact: true,
+      notes: notes ? notes.trim() : ''
+    });
+
+    // Additional Contacts
+    if (Array.isArray(contactPersons)) {
+      contactPersons.forEach(cp => {
+        if (cp.firstName?.trim()) {
+          allContactPersons.push({
+            salutation: cp.salutation || '',
+            firstName: cp.firstName.trim(),
+            lastName: cp.lastName?.trim() || '',
+            email: cp.email ? cp.email.trim().toLowerCase() : '',
+            workPhone: cp.workPhone?.trim() || cp.phone?.trim() || '',
+            mobile: cp.mobile?.trim() || '',
+            designation: cp.designation?.trim() || '',
+            department: cp.department?.trim() || '',
+            isPrimaryContact: false,
+            notes: cp.notes?.trim() || ''
+          });
+        }
       });
     }
 
-    const currencyError = validateCurrency(defaultCurrency);
-    if (currencyError) {
-      return res.status(400).json({ success: false, message: currencyError });
-    }
-
+    // ====================== CREATE IN MONGODB (Temporarily) ======================
     const customer = new Customer({
       companyId: company._id,
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
+      name: name.trim().toUpperCase(),
+      email: email ? email.trim().toLowerCase() : null,
       phone: phone ? phone.trim() : '',
       address: address ? address.trim() : '',
-      companyName: companyName ? companyName.trim() : '',
+      companyName: companyName ? companyName.trim() : name.trim(),
       website: website ? website.trim() : '',
       notes: notes ? notes.trim() : '',
       taxTreatment,
-      taxRegistrationNumber: (taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered')
-        ? taxRegistrationNumber.trim()
-        : '',
+      taxRegistrationNumber: (taxTreatment.includes('vat_registered') && taxRegistrationNumber) ? taxRegistrationNumber.trim() : '',
       placeOfSupply,
-      defaultCurrency: buildCurrencyObject(defaultCurrency)
+      defaultCurrency: buildCurrencyObject(defaultCurrency),
+      contactPersons: allContactPersons
     });
 
     const savedCustomer = await customer.save();
-    const customerObj = savedCustomer.getFormattedData();
+    let customerObj = savedCustomer.getFormattedData?.() || savedCustomer.toObject();
 
-    // DEBUG: Log before Zoho sync
-    console.log('📝 Customer saved locally:', {
-      customerId: savedCustomer._id,
-      name: savedCustomer.name,
-      email: savedCustomer.email,
-      zohoId: savedCustomer.zohoId
-    });
-
-    // Only attempt Zoho sync if company has Zoho Organization ID
+    // ====================== ZOHO SYNC ======================
+    let zohoSuccess = false;
     if (company.zohoOrganizationId) {
-      // Set company context for Zoho
-      zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
-      
-      // DEBUG: Verify service context was set
-      console.log('🔧 Zoho Service Context Set:', {
-        companyId: company._id,
-        orgId: company.zohoOrganizationId,
-        currentContext: zohoBooksService.getCurrentContext?.() || 'No context getter'
-      });
-      
       try {
-        // Build Zoho contact data with proper structure
-        const zohoContactData = {
+        zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+
+        const zohoResult = await zohoBooksService.createContact({
           name: savedCustomer.name,
+          companyName: savedCustomer.companyName,
           email: savedCustomer.email,
           phone: savedCustomer.phone,
-          address: savedCustomer.address,
-          companyName: savedCustomer.companyName || savedCustomer.name,
-          website: savedCustomer.website,
           taxTreatment: savedCustomer.taxTreatment,
           placeOfSupply: savedCustomer.placeOfSupply,
-          currencyCode: savedCustomer.defaultCurrency.code,
-          taxRegistrationNumber: savedCustomer.taxRegistrationNumber
-        };
+          taxRegistrationNumber: savedCustomer.taxRegistrationNumber,
+          currencyCode: savedCustomer.defaultCurrency?.code,
+          contactPersons: savedCustomer.contactPersons
+        });
 
-        console.log('📤 Sending to Zoho:', JSON.stringify(zohoContactData, null, 2));
-        
-        const zohoResult = await zohoBooksService.createContact(zohoContactData);
-
-        console.log('📥 Zoho Response:', JSON.stringify(zohoResult, null, 2));
-
-        if (zohoResult?.success && zohoResult.zohoId) {
-          // Update customer with Zoho ID
+        if (zohoResult.success && zohoResult.zohoId) {
+          zohoSuccess = true;
           savedCustomer.zohoId = zohoResult.zohoId;
           savedCustomer.zohoSynced = true;
           savedCustomer.zohoSyncDate = new Date();
-          await savedCustomer.save();
 
+          // Update zohoContactPersonId
+          if (zohoResult.contact?.contact_persons) {
+            zohoResult.contact.contact_persons.forEach((zp, i) => {
+              if (savedCustomer.contactPersons[i]) {
+                savedCustomer.contactPersons[i].zohoContactPersonId = zp.contact_person_id;
+              }
+            });
+          }
+
+          await savedCustomer.save();
           customerObj.zohoId = zohoResult.zohoId;
           customerObj.zohoSynced = true;
-          customerObj.zohoData = zohoResult.contact;
-          
-          console.log('✅ Customer synced to Zoho successfully. Zoho ID:', zohoResult.zohoId);
         } else {
-          const errorMsg = zohoResult?.error || 'Unknown Zoho error';
-          console.error('❌ Zoho sync failed:', errorMsg);
-          customerObj.zohoSyncError = `Failed to sync with Zoho: ${errorMsg}`;
-          
-          // Store error in database for debugging
-          savedCustomer.zohoSyncError = errorMsg;
-          savedCustomer.zohoSynced = false;
-          await savedCustomer.save();
+          throw new Error(zohoResult.error || 'Unknown Zoho error');
         }
       } catch (zohoError) {
-        console.error('❌ Exception during Zoho sync:', {
-          message: zohoError.message,
-          stack: zohoError.stack,
-          response: zohoError.response?.data
+        console.error('Zoho Sync Error:', zohoError);
+
+        // ROLLBACK: Delete from MongoDB if Zoho fails
+        await Customer.findByIdAndDelete(savedCustomer._id);
+        return res.status(400).json({
+          success: false,
+          message: `Failed to create customer in Zoho: ${zohoError.message}`,
+          error: zohoError.message
         });
-        customerObj.zohoSyncError = `Failed to sync with Zoho: ${zohoError.message}`;
-        
-        savedCustomer.zohoSyncError = zohoError.message;
-        savedCustomer.zohoSynced = false;
-        await savedCustomer.save();
       }
-    } else {
-      console.warn('⚠️ Skipping Zoho sync - Company has no Zoho Organization ID');
-      customerObj.zohoSyncWarning = 'Zoho sync skipped: Company not configured with Zoho Organization ID';
     }
 
-    // Clear cache
+    // Clear Cache
     const redisService = require('../config/redisService');
-    await redisService.delPattern(`customers_paginated_${company._id}:*`).catch(() => {});
+    await redisService.delPattern(`customers_paginated_${company._id}:*`);
 
     res.status(201).json({
       success: true,
@@ -304,16 +243,16 @@ exports.createCustomer = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error creating customer:', error);
+    console.error('Create Customer Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error creating customer',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     });
   }
 };
 
+ 
 // ─────────────────────────────────────────────────────────────────────────
 // UPDATE CUSTOMER
 // ─────────────────────────────────────────────────────────────────────────
@@ -331,113 +270,177 @@ exports.updateCustomer = async (req, res) => {
       taxTreatment,
       taxRegistrationNumber,
       placeOfSupply,
-      defaultCurrency
+      defaultCurrency,
+      contactPersons = [],
+      mainContactSalutation
     } = req.body;
 
-    if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    if (!id?.trim()) {
       return res.status(400).json({ success: false, message: 'Invalid customer ID' });
     }
 
-    const customer = await Customer.findById(id).catch(() => null);
+    const customer = await Customer.findById(id);
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
+    const company = await Company.findById(customer.companyId);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
     const updateData = {};
 
-    if (name !== undefined) {
-      if (!name || name.trim().length < 2) {
-        return res.status(400).json({ success: false, message: 'Name must be at least 2 characters' });
-      }
-      updateData.name = name.trim();
-    }
+    // Basic fields
+    if (name !== undefined) updateData.name = name.trim().toUpperCase();
+    if (email !== undefined) updateData.email = email.trim().toLowerCase();
+    if (phone !== undefined) updateData.phone = phone.trim();
+    if (address !== undefined) updateData.address = address?.trim() || '';
+    if (companyName !== undefined) updateData.companyName = companyName?.trim() || '';
+    if (website !== undefined) updateData.website = website?.trim() || '';
+    if (notes !== undefined) updateData.notes = notes?.trim() || '';
 
-    if (email !== undefined) updateData.email = email.toLowerCase().trim();
-    if (phone !== undefined) updateData.phone = phone ? phone.trim() : '';
-    if (address !== undefined) updateData.address = address ? address.trim() : '';
-    if (companyName !== undefined) updateData.companyName = companyName ? companyName.trim() : '';
-    if (website !== undefined) updateData.website = website ? website.trim() : '';
-    if (notes !== undefined) updateData.notes = notes ? notes.trim() : '';
-
-    // Tax fields validation
+    // Tax fields
     if (taxTreatment !== undefined || taxRegistrationNumber !== undefined || placeOfSupply !== undefined) {
-      const newTaxTreatment = taxTreatment !== undefined ? taxTreatment : customer.taxTreatment;
-      const newTaxRegistrationNumber = taxRegistrationNumber !== undefined ? taxRegistrationNumber : customer.taxRegistrationNumber;
-      const newPlaceOfSupply = placeOfSupply !== undefined ? placeOfSupply : customer.placeOfSupply;
+      const newTax = taxTreatment ?? customer.taxTreatment;
+      const newTRN = taxRegistrationNumber ?? customer.taxRegistrationNumber;
+      const newPlace = placeOfSupply ?? customer.placeOfSupply;
 
-      const errors = validateTaxData(newTaxTreatment, newTaxRegistrationNumber, newPlaceOfSupply);
-      if (errors.length > 0) {
-        return res.status(400).json({ success: false, message: 'Tax validation error', errors });
+      const taxErrors = validateTaxData(newTax, newTRN, newPlace);
+      if (taxErrors.length > 0) {
+        return res.status(400).json({ success: false, message: taxErrors[0] });
       }
 
-      if (taxTreatment !== undefined) updateData.taxTreatment = taxTreatment;
-      if (taxRegistrationNumber !== undefined) {
-        updateData.taxRegistrationNumber = (newTaxTreatment === 'vat_registered' || newTaxTreatment === 'gcc_vat_registered')
-          ? taxRegistrationNumber.trim()
-          : '';
-      }
-      if (placeOfSupply !== undefined) updateData.placeOfSupply = placeOfSupply;
+      updateData.taxTreatment = newTax;
+      updateData.placeOfSupply = newPlace;
+      updateData.taxRegistrationNumber = (newTax === 'vat_registered' || newTax === 'gcc_vat_registered')
+        ? (newTRN?.trim() || '')
+        : '';
     }
 
+    // Currency
     if (defaultCurrency !== undefined) {
-      const currencyError = validateCurrency(defaultCurrency);
-      if (currencyError) {
-        return res.status(400).json({ success: false, message: currencyError });
-      }
       updateData.defaultCurrency = buildCurrencyObject(defaultCurrency);
     }
 
+    // ====================== CONTACT PERSONS ======================
+    if (contactPersons !== undefined && Array.isArray(contactPersons)) {
+      const processedContacts = [];
+
+      // 1. Main Contact Person
+      const mainContact = {
+        salutation: mainContactSalutation !== undefined ? mainContactSalutation : (customer.contactPersons?.[0]?.salutation || 'Mr.'),
+        firstName: name?.trim() || customer.name,
+        lastName: '',
+        email: email ? email.trim().toLowerCase() : (customer.email || ''),
+        workPhone: phone ? phone.trim() : (customer.phone || ''),
+        mobile: '',
+        designation: '',
+        department: '',
+        isPrimaryContact: true,
+        zohoContactPersonId: customer.contactPersons?.[0]?.zohoContactPersonId || null,
+        createdAt: customer.contactPersons?.[0]?.createdAt || new Date(),
+        updatedAt: new Date()
+      };
+      processedContacts.push(mainContact);
+
+      // 2. Additional Contact Persons (including newly added)
+      contactPersons.forEach(cp => {
+        if (cp.firstName?.trim()) {
+          processedContacts.push({
+            salutation: cp.salutation || '',
+            firstName: cp.firstName.trim(),
+            lastName: cp.lastName?.trim() || '',
+            email: cp.email ? cp.email.trim().toLowerCase() : '',
+            workPhone: cp.workPhone?.trim() || cp.phone?.trim() || '',
+            mobile: cp.mobile?.trim() || '',
+            designation: cp.designation?.trim() || '',
+            department: cp.department?.trim() || '',
+            isPrimaryContact: false,
+            zohoContactPersonId: cp.zohoContactPersonId || null,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          });
+        }
+      });
+
+      updateData.contactPersons = processedContacts;
+    } 
+    // Only update main contact salutation (if no contactPersons array sent)
+    else if (mainContactSalutation !== undefined && customer.contactPersons?.length > 0) {
+      const updatedContacts = [...customer.contactPersons];
+      updatedContacts[0].salutation = mainContactSalutation;
+      updatedContacts[0].updatedAt = new Date();
+      updateData.contactPersons = updatedContacts;
+    }
+
+    // ====================== SAVE UPDATE ======================
     const updatedCustomer = await Customer.findByIdAndUpdate(
       id,
       updateData,
       { new: true, runValidators: true }
-    ).lean().catch(err => {
-      throw new Error(err.message || 'Update failed');
-    });
+    );
 
     if (!updatedCustomer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    const customerObj = { ...updatedCustomer };
+    const customerObj = updatedCustomer.getFormattedData();
+    customerObj.contactPersons = updatedCustomer.contactPersons;
 
-    // Update in Zoho if zohoId exists
-    if (updatedCustomer.zohoId) {
-      try {
-        const zohoUpdateData = {
-          name: updatedCustomer.name,
-          email: updatedCustomer.email,
-          phone: updatedCustomer.phone,
-          address: updatedCustomer.address,
-          companyName: updatedCustomer.companyName,
-          website: updatedCustomer.website,
-          taxTreatment: updatedCustomer.taxTreatment,
-          placeOfSupply: updatedCustomer.placeOfSupply,
-          currencyCode: updatedCustomer.defaultCurrency?.code
-        };
+    // ====================== ZOHO SYNC ======================
+ 
+if (updatedCustomer.zohoId && company.zohoOrganizationId) {
+  try {
+    zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
 
-        if ((updatedCustomer.taxTreatment === 'vat_registered' || updatedCustomer.taxTreatment === 'gcc_vat_registered')
-            && updatedCustomer.taxRegistrationNumber) {
-          zohoUpdateData.taxRegistrationNumber = updatedCustomer.taxRegistrationNumber;
-        }
+    console.log("🔍 [DEBUG] Contact Persons in MongoDB before Zoho:", 
+      JSON.stringify(updatedCustomer.contactPersons, null, 2));
 
-        const zohoResult = await zohoBooksService.updateContact(updatedCustomer.zohoId, zohoUpdateData);
-
-        if (zohoResult?.success) {
-          customerObj.zohoSynced = true;
-          customerObj.zohoData = zohoResult.contact;
-        } else if (zohoResult?.error) {
-          customerObj.zohoSyncError = `Failed to update in Zoho: ${zohoResult.error}`;
-        }
-      } catch (zohoError) {
-         
-        customerObj.zohoSyncError = 'Failed to update in Zoho';
+    // Pass the FULL customer object (or at least contactPersons array) to service
+    const zohoResult = await zohoBooksService.updateContact(
+      updatedCustomer.zohoId, 
+      {
+        name: updatedCustomer.name,
+        companyName: updatedCustomer.companyName || updatedCustomer.name,
+        taxTreatment: updatedCustomer.taxTreatment,
+        placeOfSupply: updatedCustomer.placeOfSupply,
+        taxRegistrationNumber: updatedCustomer.taxRegistrationNumber,
+        currencyCode: updatedCustomer.defaultCurrency?.code,
+        contactPersons: updatedCustomer.contactPersons || []   // ← This is the key
       }
+    );
+
+    console.log("📥 Zoho Update Result:", zohoResult);
+
+    // Update zohoContactPersonId for newly created contacts
+    if (zohoResult.success && zohoResult.contact?.contact_persons) {
+      const zohoPersons = zohoResult.contact.contact_persons;
+      
+      for (let i = 0; i < updatedCustomer.contactPersons.length; i++) {
+        const mongoPerson = updatedCustomer.contactPersons[i];
+        const zohoPerson = zohoPersons.find(p => 
+          p.first_name === mongoPerson.firstName || 
+          p.email === mongoPerson.email
+        );
+        
+        if (zohoPerson && zohoPerson.contact_person_id && !mongoPerson.zohoContactPersonId) {
+          mongoPerson.zohoContactPersonId = zohoPerson.contact_person_id;
+          console.log(`✅ Linked new contact person: ${mongoPerson.firstName}`);
+        }
+      }
+      
+      await updatedCustomer.save(); // Save the new zohoContactPersonIds
     }
 
-    // Clear cache
+  } catch (zohoErr) {
+    console.error('❌ Zoho Update Error:', zohoErr.message);
+  }
+}
+
+    // Clear Cache
     const redisService = require('../config/redisService');
-    await redisService.delPattern('customers_paginated:*').catch(() => {});
+    await redisService.delPattern(`customers_paginated_${customer.companyId}:*`);
 
     res.status(200).json({
       success: true,
@@ -446,7 +449,7 @@ exports.updateCustomer = async (req, res) => {
     });
 
   } catch (error) {
-     
+    console.error('Update Customer Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error updating customer',
@@ -455,78 +458,450 @@ exports.updateCustomer = async (req, res) => {
   }
 };
 
+// Helper function for Zoho sync on update
+async function syncUpdateWithZoho(customer, company, customerId, customerObj) {
+  const zohoBooksService = require('../services/zohoBooksService');
+  
+  zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+  
+  // Only send contacts that have a Zoho ID (existing contacts)
+  const contactsToSync = (customer.contactPersons || [])
+    .filter(contact => contact.zohoContactPersonId)
+    .map(contact => ({
+      first_name: contact.firstName,
+      last_name: contact.lastName || '',
+      email: contact.email || '',
+      phone: contact.workPhone || '',
+      mobile: contact.mobile || '',
+      salutation: contact.salutation || '',
+      designation: contact.designation || '',
+      department: contact.department || '',
+      notes: contact.notes || '',
+      contact_person_id: contact.zohoContactPersonId
+    }));
+  
+  const zohoUpdateData = {
+    name: customer.name,
+    email: customer.email,
+    phone: customer.phone,
+    address: customer.address,
+    companyName: customer.companyName,
+    website: customer.website,
+    taxTreatment: customer.taxTreatment,
+    placeOfSupply: customer.placeOfSupply,
+    currencyCode: customer.defaultCurrency?.code,
+    contactPersons: contactsToSync
+  };
+
+  const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+  if (isVatRegistered && customer.taxRegistrationNumber) {
+    zohoUpdateData.taxRegistrationNumber = customer.taxRegistrationNumber;
+  }
+
+  try {
+    const zohoResult = await zohoBooksService.updateContact(customer.zohoId, zohoUpdateData);
+
+    if (zohoResult?.success) {
+      customerObj.zohoSynced = true;
+      customerObj.zohoData = zohoResult.contact;
+      customerObj.zohoSyncError = null;
+      
+      console.log('✅ Customer updated in Zoho:', customer.zohoId);
+    } else if (zohoResult?.error) {
+      customerObj.zohoSyncError = `Failed to update in Zoho: ${zohoResult.error}`;
+      console.error('❌ Zoho update failed:', zohoResult.error);
+    }
+  } catch (error) {
+    console.error('❌ Zoho sync error:', error.message);
+    customerObj.zohoSyncError = 'Failed to update in Zoho';
+  }
+}
+
+// Helper function for Zoho sync on update
+async function syncUpdateWithZoho(customer, company, customerId, customerObj) {
+   
+  zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+  
+  const zohoUpdateData = {
+    name: customer.name,
+    email: customer.email,
+    phone: customer.phone,
+    address: customer.address,
+    companyName: customer.companyName,
+    website: customer.website,
+    taxTreatment: customer.taxTreatment,
+    placeOfSupply: customer.placeOfSupply,
+    currencyCode: customer.defaultCurrency?.code,
+    contactPersons: (customer.contactPersons || [])
+      .filter(contact => contact.zohoContactPersonId)  
+      .map(contact => ({
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        email: contact.email,
+        phone: contact.workPhone,
+        mobile: contact.mobile,
+        salutation: contact.salutation,  // ✅ Include salutation
+        designation: contact.designation,
+        department: contact.department,
+        notes: contact.notes,
+        contact_person_id: contact.zohoContactPersonId
+      }))
+  };
+
+  const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+  if (isVatRegistered && customer.taxRegistrationNumber) {
+    zohoUpdateData.taxRegistrationNumber = customer.taxRegistrationNumber;
+  }
+
+  try {
+    const zohoResult = await zohoBooksService.updateContact(customer.zohoId, zohoUpdateData);
+
+    if (zohoResult?.success) {
+      customerObj.zohoSynced = true;
+      customerObj.zohoData = zohoResult.contact;
+      customerObj.zohoSyncError = null;
+      
+       if (zohoResult.contact?.contact_persons) {
+        const existingContacts = customer.contactPersons || [];
+        
+        for (let i = 0; i < existingContacts.length && i < zohoResult.contact.contact_persons.length; i++) {
+          const zohoContact = zohoResult.contact.contact_persons[i];
+          const localContact = existingContacts[i];
+          
+          if (zohoContact?.contact_person_id && localContact?._id && !localContact.zohoContactPersonId) {
+            await Customer.updateOne(
+              { _id: customerId, 'contactPersons._id': localContact._id },
+              { $set: { 'contactPersons.$.zohoContactPersonId': zohoContact.contact_person_id } }
+            );
+          }
+        }
+      }
+      
+      console.log('✅ Customer updated in Zoho:', customer.zohoId);
+    } else if (zohoResult?.error) {
+      customerObj.zohoSyncError = `Failed to update in Zoho: ${zohoResult.error}`;
+      console.error('❌ Zoho update failed:', zohoResult.error);
+    }
+  } catch (error) {
+    console.error('❌ Zoho sync error:', error.message);
+    customerObj.zohoSyncError = 'Failed to update in Zoho';
+  }
+}
+
+// Helper function for Zoho sync on update
+async function syncUpdateWithZoho(customer, company, customerId, customerObj) {
+   
+  zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+  
+  const zohoUpdateData = {
+    name: customer.name,
+    email: customer.email,
+    phone: customer.phone,
+    address: customer.address,
+    companyName: customer.companyName,
+    website: customer.website,
+    taxTreatment: customer.taxTreatment,
+    placeOfSupply: customer.placeOfSupply,
+    currencyCode: customer.defaultCurrency?.code,
+    contactPersons: (customer.contactPersons || [])
+      .filter(contact => contact.zohoContactPersonId) // Only existing Zoho contacts
+      .map(contact => ({
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        email: contact.email,
+        phone: contact.workPhone,
+        mobile: contact.mobile,
+        salutation: contact.salutation,
+        designation: contact.designation,
+        department: contact.department,
+        notes: contact.notes,
+        contact_person_id: contact.zohoContactPersonId
+      }))
+  };
+
+  const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+  if (isVatRegistered && customer.taxRegistrationNumber) {
+    zohoUpdateData.taxRegistrationNumber = customer.taxRegistrationNumber;
+  }
+
+  try {
+    const zohoResult = await zohoBooksService.updateContact(customer.zohoId, zohoUpdateData);
+
+    if (zohoResult?.success) {
+      customerObj.zohoSynced = true;
+      customerObj.zohoData = zohoResult.contact;
+      customerObj.zohoSyncError = null;
+      
+      // Update new contact person IDs
+      if (zohoResult.contact?.contact_persons) {
+        const existingContacts = customer.contactPersons || [];
+        
+        for (let i = 0; i < existingContacts.length && i < zohoResult.contact.contact_persons.length; i++) {
+          const zohoContact = zohoResult.contact.contact_persons[i];
+          const localContact = existingContacts[i];
+          
+          if (zohoContact?.contact_person_id && localContact?._id && !localContact.zohoContactPersonId) {
+            await Customer.updateOne(
+              { _id: customerId, 'contactPersons._id': localContact._id },
+              { $set: { 'contactPersons.$.zohoContactPersonId': zohoContact.contact_person_id } }
+            );
+          }
+        }
+      }
+      
+      console.log('✅ Customer updated in Zoho:', customer.zohoId);
+    } else if (zohoResult?.error) {
+      customerObj.zohoSyncError = `Failed to update in Zoho: ${zohoResult.error}`;
+      console.error('❌ Zoho update failed:', zohoResult.error);
+    }
+  } catch (error) {
+    console.error('❌ Zoho sync error:', error.message);
+    customerObj.zohoSyncError = 'Failed to update in Zoho';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // GET ALL CUSTOMERS
 // ─────────────────────────────────────────────────────────────────────────
+ 
 exports.getAllCustomers = async (req, res) => {
   try {
-    const pagination = validatePaginationParams(req.query);
+    const {
+      page = 1,
+      limit = 20,
+      search = '',
+      sortBy = 'createdAt',        
+      sortOrder = 'desc',
+      // Advanced filters
+      status = 'all',
+      taxStatus = 'all',
+      placeOfSupply = 'all',
+      hasTRN = 'all',
+      minQuotations = null,
+      maxQuotations = null,
+      minTotalValue = null,
+      maxTotalValue = null,
+      zohoSyncStatus = 'all'
+    } = req.query;
+
     const companyId = req.headers['x-company-id'] || req.query.companyId;
     
     if (!companyId) {
-      return res.status(400).json({ success: false, message: 'Company ID is required' });
-    }
-
-    const redisService = require('../config/redisService');
-    const cacheKey = `customers_paginated_${companyId}:${pagination.page}:${pagination.limit}:${pagination.search}`;
-
-    const cachedResult = await redisService.get(cacheKey).catch(() => null);
-    if (cachedResult) {
-      return res.status(200).json({
-        success: true,
-        data: cachedResult.data,
-        pagination: cachedResult.pagination,
-        source: 'cache'
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Company ID is required',
+        data: [],
+        pagination: { page: 1, limit, totalItems: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false }
       });
     }
 
-    const query = { isActive: true, companyId };
+    // Parse pagination with validation
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (parsedPage - 1) * parsedLimit;
 
-    if (pagination.search) {
+    // ====================== SORTING VALIDATION ======================
+    const allowedSortFields = ['createdAt', 'updatedAt', 'name', 'companyName'];
+    const finalSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
+    const finalSortOrder = (sortOrder === 'asc' || sortOrder === '1') ? 1 : -1;
+
+    // ============================================================
+    // BUILD QUERY OBJECT
+    // ============================================================
+    const query = { companyId };
+
+    // 1. Status Filter
+    if (status === 'active') {
+      query.isActive = true;
+    } else if (status === 'inactive') {
+      query.isActive = false;
+    }
+
+    // 2. Tax Status Filter
+    if (taxStatus !== 'all' && taxStatus) {
+      query.taxTreatment = taxStatus;
+    }
+
+    // 3. Place of Supply Filter
+    if (placeOfSupply !== 'all' && placeOfSupply) {
+      query.placeOfSupply = placeOfSupply;
+    }
+
+    // 4. TRN Filter
+    if (hasTRN === 'yes') {
+      query.taxRegistrationNumber = { $gt: '' };
+    } else if (hasTRN === 'no') {
       query.$or = [
-        { name: { $regex: pagination.search, $options: 'i' } },
-        { email: { $regex: pagination.search, $options: 'i' } },
-        { phone: { $regex: pagination.search, $options: 'i' } },
-        { companyName: { $regex: pagination.search, $options: 'i' } }
+        { taxRegistrationNumber: '' },
+        { taxRegistrationNumber: { $exists: false } }
       ];
     }
 
-    const totalCount = await Customer.countDocuments(query).catch(() => 0);
-    const totalPages = Math.ceil(totalCount / pagination.limit);
-
-    if (pagination.page > totalPages && totalPages > 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Page ${pagination.page} exceeds total pages (${totalPages})`
-      });
+    // 5. Zoho Sync Status Filter
+    if (zohoSyncStatus === 'synced') {
+      query.zohoSynced = true;
+      query.zohoId = { $exists: true, $ne: null };
+    } else if (zohoSyncStatus === 'not_synced') {
+      query.$or = [
+        { zohoSynced: { $ne: true } },
+        { zohoId: { $exists: false } },
+        { zohoId: null }
+      ];
     }
 
-    const customers = await Customer.find(query)
-      .sort({ [pagination.sortBy]: pagination.sortOrder })
-      .skip(pagination.skip)
-      .limit(pagination.limit)
-      .lean()
-      .catch(() => []);
+    // 6. Search Filter
+    if (search && typeof search === 'string' && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      const orConditions = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { companyName: searchRegex },
+        { taxRegistrationNumber: searchRegex }
+      ];
+      
+      // If already has $or from TRN filter, merge them
+      if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          { $or: orConditions }
+        ];
+        delete query.$or;
+      } else {
+        query.$or = orConditions;
+      }
+    }
 
-    const response = {
-      data: customers,
-      pagination: {
-        page: pagination.page,
-        limit: pagination.limit,
-        totalItems: totalCount,
-        totalPages,
-        hasNextPage: pagination.page < totalPages,
-        hasPreviousPage: pagination.page > 1
-      },
-      filters: pagination.search ? { search: pagination.search } : {}
-    };
+    // ============================================================
+    // HANDLE QUOTATION-BASED FILTERS
+    // ============================================================
+    let customerIdsToInclude = null;
 
-    await redisService.set(cacheKey, response, PAGINATION_CACHE_TTL).catch(() => {});
+    const hasQuotationFilters = minQuotations !== null || 
+                                maxQuotations !== null || 
+                                minTotalValue !== null || 
+                                maxTotalValue !== null;
 
+    if (hasQuotationFilters) {
+      const Quotation = require('../models/quotation').Quotation;
+      
+      const matchStage = { companyId };
+      
+      const aggregationPipeline = [
+        { $match: matchStage },
+        { 
+          $group: {
+            _id: '$customerId',
+            quotationCount: { $sum: 1 },
+            totalValue: { $sum: '$total' } 
+          }
+        }
+      ];
+
+      const statsResults = await Quotation.aggregate(aggregationPipeline);
+      
+      // Apply quotation filters
+      let filtered = statsResults;
+
+      if (minQuotations !== null) {
+        const minQ = parseInt(minQuotations);
+        filtered = filtered.filter(r => r.quotationCount >= minQ);
+      }
+
+      if (maxQuotations !== null) {
+        const maxQ = parseInt(maxQuotations);
+        filtered = filtered.filter(r => r.quotationCount <= maxQ);
+      }
+
+      if (minTotalValue !== null) {
+        const minV = parseFloat(minTotalValue);
+        filtered = filtered.filter(r => r.totalValue >= minV);
+      }
+
+      if (maxTotalValue !== null) {
+        const maxV = parseFloat(maxTotalValue);
+        filtered = filtered.filter(r => r.totalValue <= maxV);
+      }
+
+      customerIdsToInclude = filtered.map(r => r._id);
+
+      // If no customers match, return empty result
+      if (customerIdsToInclude.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: {
+            page: parsedPage,
+            limit: parsedLimit,
+            totalItems: 0,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPreviousPage: false
+          },
+          filters: {
+            status: status !== 'all' ? status : null,
+            taxStatus: taxStatus !== 'all' ? taxStatus : null,
+            placeOfSupply: placeOfSupply !== 'all' ? placeOfSupply : null,
+            hasTRN: hasTRN !== 'all' ? hasTRN : null,
+            zohoSyncStatus: zohoSyncStatus !== 'all' ? zohoSyncStatus : null,
+            minQuotations: minQuotations ? parseInt(minQuotations) : null,
+            maxQuotations: maxQuotations ? parseInt(maxQuotations) : null,
+            minTotalValue: minTotalValue ? parseFloat(minTotalValue) : null,
+            maxTotalValue: maxTotalValue ? parseFloat(maxTotalValue) : null
+          }
+        });
+      }
+
+      // Add customer IDs filter
+      query._id = { $in: customerIdsToInclude };
+    }
+
+    // ============================================================
+    // EXECUTE QUERY
+    // ============================================================
+    const [customers, totalCount] = await Promise.all([
+      Customer.find(query)
+        .select('-zohoData') // Exclude large zohoData field
+        .sort({ [finalSortBy]: finalSortOrder })
+        .skip(skip)
+        .limit(parsedLimit)
+        .lean()
+        .exec(),
+      Customer.countDocuments(query)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / parsedLimit);
+
+    // Format response with contact persons
+    const formattedCustomers = customers.map(customer => ({
+      ...customer,
+      contactPersons: customer.contactPersons || [],
+      primaryContactId: customer.primaryContactId || null
+    }));
+
+    // Return response
     res.status(200).json({
       success: true,
-      ...response,
-      source: 'database'
+      data: formattedCustomers,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        totalItems: totalCount,
+        totalPages,
+        hasNextPage: parsedPage < totalPages,
+        hasPreviousPage: parsedPage > 1
+      },
+      filters: {
+        status: status !== 'all' ? status : null,
+        taxStatus: taxStatus !== 'all' ? taxStatus : null,
+        placeOfSupply: placeOfSupply !== 'all' ? placeOfSupply : null,
+        hasTRN: hasTRN !== 'all' ? hasTRN : null,
+        zohoSyncStatus: zohoSyncStatus !== 'all' ? zohoSyncStatus : null,
+        minQuotations: minQuotations ? parseInt(minQuotations) : null,
+        maxQuotations: maxQuotations ? parseInt(maxQuotations) : null,
+        minTotalValue: minTotalValue ? parseFloat(minTotalValue) : null,
+        maxTotalValue: maxTotalValue ? parseFloat(maxTotalValue) : null
+      }
     });
 
   } catch (error) {
@@ -534,11 +909,12 @@ exports.getAllCustomers = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching customers',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error',
+      data: [],
+      pagination: { page: 1, limit: 20, totalItems: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false }
     });
   }
 };
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // GET SINGLE CUSTOMER
@@ -735,68 +1111,116 @@ exports.searchCustomers = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────
 // GET CUSTOMER STATISTICS
 // ─────────────────────────────────────────────────────────────────────────
+ 
 exports.getCustomerStats = async (req, res) => {
   try {
-    const redisService = require('../config/redisService');
-    const cacheKey = 'customer_stats';
-
-    const cachedStats = await redisService.get(cacheKey).catch(() => null);
-    if (cachedStats) {
-      return res.status(200).json({
-        success: true,
-        stats: cachedStats,
-        source: 'cache'
-      });
+    const companyId = req.headers['x-company-id'] || req.query.companyId;
+    
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: 'Company ID is required' });
     }
+
+    const {
+      status = 'all',
+      taxStatus = 'all',
+      placeOfSupply = 'all',
+      hasTRN = 'all',
+      search = ''
+    } = req.query;
+
+    console.log("📊 Stats API called with filters:", { status, taxStatus, placeOfSupply, hasTRN, search });
+
+    const query = { companyId };
+
+    // === Apply Filters (Same logic as getAllCustomers) ===
+    if (status === 'active') {
+      query.isActive = true;
+    } else if (status === 'inactive') {
+      query.isActive = false;
+    }
+
+    if (taxStatus !== 'all' && taxStatus) {
+      query.taxTreatment = taxStatus;
+    }
+
+    if (placeOfSupply !== 'all' && placeOfSupply) {
+      query.placeOfSupply = placeOfSupply;
+    }
+
+    if (hasTRN === 'yes') {
+      query.taxRegistrationNumber = { $gt: '' };
+    } else if (hasTRN === 'no') {
+      query.$or = [
+        { taxRegistrationNumber: '' },
+        { taxRegistrationNumber: { $exists: false } },
+        { taxRegistrationNumber: null }
+      ];
+    }
+
+    // Search filter
+    if (search && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      query.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { companyName: searchRegex }
+      ];
+    }
+
+    // === Run Parallel Counts ===
+    const [
+      totalCustomers,
+      activeCustomers,
+      vatRegistered,
+      nonVatRegistered,
+      synced,
+      unsynced
+    ] = await Promise.all([
+      Customer.countDocuments(query),
+      Customer.countDocuments({ ...query, isActive: true }),
+      Customer.countDocuments({ ...query, taxTreatment: { $in: ['vat_registered', 'gcc_vat_registered'] } }),
+      Customer.countDocuments({ ...query, taxTreatment: { $in: ['non_vat_registered', 'gcc_non_vat_registered'] } }),
+      Customer.countDocuments({ ...query, zohoSynced: true }),
+      Customer.countDocuments({ ...query, zohoSynced: { $ne: true } })
+    ]);
 
     const stats = {
-      totalCustomers: 0,
-      activeCustomers: 0,
-      vatRegistered: 0,
-      nonVatRegistered: 0,
-      gccVatRegistered: 0,
-      gccNonVatRegistered: 0,
-      synced: 0,
-      unsynced: 0,
-      syncErrors: 0,
-      byPlaceOfSupply: {}
+      totalCustomers,
+      activeCustomers,
+      vatRegistered,
+      nonVatRegistered,
+      synced,
+      unsynced
     };
 
-    try {
-      stats.totalCustomers = await Customer.countDocuments().catch(() => 0);
-      stats.activeCustomers = await Customer.countDocuments({ isActive: true }).catch(() => 0);
-      stats.vatRegistered = await Customer.countDocuments({ taxTreatment: 'vat_registered', isActive: true }).catch(() => 0);
-      stats.nonVatRegistered = await Customer.countDocuments({ taxTreatment: 'non_vat_registered', isActive: true }).catch(() => 0);
-      stats.gccVatRegistered = await Customer.countDocuments({ taxTreatment: 'gcc_vat_registered', isActive: true }).catch(() => 0);
-      stats.gccNonVatRegistered = await Customer.countDocuments({ taxTreatment: 'gcc_non_vat_registered', isActive: true }).catch(() => 0);
-      stats.synced = await Customer.countDocuments({ zohoSynced: true }).catch(() => 0);
-      stats.unsynced = await Customer.countDocuments({ zohoSynced: { $ne: true }, isActive: true }).catch(() => 0);
-      stats.syncErrors = await Customer.countDocuments({ zohoSyncError: { $exists: true } }).catch(() => 0);
-
-      const allPlaceOptions = [...GCC_COUNTRY_NAMES, ...UAE_EMIRATES];
-      for (const place of allPlaceOptions) {
-        stats.byPlaceOfSupply[place] = await Customer.countDocuments({ placeOfSupply: place, isActive: true }).catch(() => 0);
-      }
-    } catch (error) {
-       
-    }
-
-    await redisService.set(cacheKey, stats, 600).catch(() => {});
+    console.log("📊 Stats Calculated:", stats);
 
     res.status(200).json({
       success: true,
       stats,
-      source: 'database'
+      appliedFilters: { status, taxStatus, placeOfSupply, hasTRN, search }
     });
 
   } catch (error) {
-     
+    console.error('❌ Stats Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error calculating statistics',
       error: error.message
     });
   }
+};
+
+// Add this helper if not present
+String.prototype.hashCode = function() {
+  let hash = 0;
+  for (let i = 0; i < this.length; i++) {
+    const char = this.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -912,16 +1336,27 @@ exports.syncFromZoho = async (req, res) => {
     // Pass company object and incremental flag to zohoBooksService
     const result = await zohoBooksService.syncContactsToDatabase(company, !fullSync);
 
-    console.log(">>>>>>>>>", result);
+    console.log("Sync Result:", JSON.stringify(result, null, 2));
+    
     if (result.success) {
       const redisService = require('../config/redisService');
       // Clear all customer-related caches for this company
-      await redisService.delPattern(`customers_paginated_${company._id}:*`).catch(() => {});
-      await redisService.del(`customer_stats_${company._id}`).catch(() => {});
+      await Promise.all([
+        redisService.delPattern(`customers_paginated_${company._id}:*`).catch(() => {}),
+        redisService.del(`customer_stats_${company._id}`).catch(() => {})
+      ]);
+
+      // Build response message
+      let message = `Sync completed successfully. `;
+      if (result.created > 0) message += `Created: ${result.created}, `;
+      if (result.updated > 0) message += `Updated: ${result.updated}, `;
+      if (result.unchanged > 0) message += `Unchanged: ${result.unchanged}, `;
+      if (result.errors > 0) message += `Errors: ${result.errors}`;
+      else message += `No errors.`;
 
       return res.status(200).json({
         success: true,
-        message: `Customers synced from Zoho successfully (${fullSync ? 'full' : 'incremental'} sync)`,
+        message: message,
         stats: {
           totalFromZoho: result.totalFromZoho,
           created: result.created,
@@ -961,76 +1396,116 @@ exports.syncFromZoho = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────
 // GET CUSTOMER STATISTICS (Filter by company)
 // ─────────────────────────────────────────────────────────────────────────
+  
 exports.getCustomerStats = async (req, res) => {
   try {
-    const redisService = require('../config/redisService');
     const companyId = req.headers['x-company-id'] || req.query.companyId;
     
     if (!companyId) {
       return res.status(400).json({ success: false, message: 'Company ID is required' });
     }
-    
-    const cacheKey = `customer_stats_${companyId}`;
 
-    const cachedStats = await redisService.get(cacheKey).catch(() => null);
-    if (cachedStats) {
-      return res.status(200).json({
-        success: true,
-        stats: cachedStats,
-        source: 'cache'
-      });
+    const {
+      status = 'all',
+      taxStatus = 'all',
+      placeOfSupply = 'all',
+      hasTRN = 'all',
+      search = ''
+    } = req.query;
+
+    console.log("📊 Stats API called with filters:", { status, taxStatus, placeOfSupply, hasTRN, search });
+
+    const query = { companyId };
+
+    // === Apply Filters (Same logic as getAllCustomers) ===
+    if (status === 'active') {
+      query.isActive = true;
+    } else if (status === 'inactive') {
+      query.isActive = false;
     }
+
+    if (taxStatus !== 'all' && taxStatus) {
+      query.taxTreatment = taxStatus;
+    }
+
+    if (placeOfSupply !== 'all' && placeOfSupply) {
+      query.placeOfSupply = placeOfSupply;
+    }
+
+    if (hasTRN === 'yes') {
+      query.taxRegistrationNumber = { $gt: '' };
+    } else if (hasTRN === 'no') {
+      query.$or = [
+        { taxRegistrationNumber: '' },
+        { taxRegistrationNumber: { $exists: false } },
+        { taxRegistrationNumber: null }
+      ];
+    }
+
+    // Search filter
+    if (search && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      query.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { companyName: searchRegex }
+      ];
+    }
+
+    // === Run Parallel Counts ===
+    const [
+      totalCustomers,
+      activeCustomers,
+      vatRegistered,
+      nonVatRegistered,
+      synced,
+      unsynced
+    ] = await Promise.all([
+      Customer.countDocuments(query),
+      Customer.countDocuments({ ...query, isActive: true }),
+      Customer.countDocuments({ ...query, taxTreatment: { $in: ['vat_registered', 'gcc_vat_registered'] } }),
+      Customer.countDocuments({ ...query, taxTreatment: { $in: ['non_vat_registered', 'gcc_non_vat_registered'] } }),
+      Customer.countDocuments({ ...query, zohoSynced: true }),
+      Customer.countDocuments({ ...query, zohoSynced: { $ne: true } })
+    ]);
 
     const stats = {
-      totalCustomers: 0,
-      activeCustomers: 0,
-      vatRegistered: 0,
-      nonVatRegistered: 0,
-      gccVatRegistered: 0,
-      gccNonVatRegistered: 0,
-      synced: 0,
-      unsynced: 0,
-      syncErrors: 0,
-      byPlaceOfSupply: {}
+      totalCustomers,
+      activeCustomers,
+      vatRegistered,
+      nonVatRegistered,
+      synced,
+      unsynced
     };
 
-    try {
-      const baseQuery = { companyId, isActive: true };
-      
-      stats.totalCustomers = await Customer.countDocuments({ companyId }).catch(() => 0);
-      stats.activeCustomers = await Customer.countDocuments({ companyId, isActive: true }).catch(() => 0);
-      stats.vatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'vat_registered' }).catch(() => 0);
-      stats.nonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'non_vat_registered' }).catch(() => 0);
-      stats.gccVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_vat_registered' }).catch(() => 0);
-      stats.gccNonVatRegistered = await Customer.countDocuments({ companyId, taxTreatment: 'gcc_non_vat_registered' }).catch(() => 0);
-      stats.synced = await Customer.countDocuments({ companyId, zohoSynced: true }).catch(() => 0);
-      stats.unsynced = await Customer.countDocuments({ companyId, zohoSynced: { $ne: true }, isActive: true }).catch(() => 0);
-      stats.syncErrors = await Customer.countDocuments({ companyId, zohoSyncError: { $exists: true } }).catch(() => 0);
-
-      const allPlaceOptions = [...GCC_COUNTRY_NAMES, ...UAE_EMIRATES];
-      for (const place of allPlaceOptions) {
-        stats.byPlaceOfSupply[place] = await Customer.countDocuments({ companyId, placeOfSupply: place, isActive: true }).catch(() => 0);
-      }
-    } catch (error) {
-      console.error('Error calculating stats:', error);
-    }
-
-    await redisService.set(cacheKey, stats, 600).catch(() => {});
+    console.log("📊 Stats Calculated:", stats);
 
     res.status(200).json({
       success: true,
       stats,
-      source: 'database'
+      appliedFilters: { status, taxStatus, placeOfSupply, hasTRN, search }
     });
 
   } catch (error) {
-    console.error('❌ Error calculating statistics:', error);
+    console.error('❌ Stats Error:', error);
     res.status(500).json({
       success: false,
       message: 'Error calculating statistics',
       error: error.message
     });
   }
+};
+
+// Add this helper if not present
+String.prototype.hashCode = function() {
+  let hash = 0;
+  for (let i = 0; i < this.length; i++) {
+    const char = this.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString(36);
 };
 
 // ─────────────────────────────────────────────────────────────────────────

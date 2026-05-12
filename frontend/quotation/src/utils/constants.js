@@ -92,3 +92,32 @@ export const CSS_CLASSES = {
 export const QUOTATION_NUMBER_FORMAT = 'QT-{yy}{mm}{dd}-{rn}';
 export const BASE_URL = "";
 export const ITEMS_PER_FIRST_PAGE = 8;
+
+export const COUNTRY_CODES = [
+  { code: '+971', country: 'UAE', flag: '🇦🇪', name: 'United Arab Emirates' },
+  { code: '+966', country: 'Saudi Arabia', flag: '🇸🇦', name: 'Saudi Arabia' },
+  { code: '+965', country: 'Kuwait', flag: '🇰🇼', name: 'Kuwait' },
+  { code: '+974', country: 'Qatar', flag: '🇶🇦', name: 'Qatar' },
+  { code: '+973', country: 'Bahrain', flag: '🇧🇭', name: 'Bahrain' },
+  { code: '+968', country: 'Oman', flag: '🇴🇲', name: 'Oman' },
+  { code: '+1', country: 'USA', flag: '🇺🇸', name: 'United States' },
+  { code: '+44', country: 'UK', flag: '🇬🇧', name: 'United Kingdom' },
+  { code: '+91', country: 'India', flag: '🇮🇳', name: 'India' },
+  { code: '+61', country: 'Australia', flag: '🇦🇺', name: 'Australia' },
+  { code: '+49', country: 'Germany', flag: '🇩🇪', name: 'Germany' },
+  { code: '+33', country: 'France', flag: '🇫🇷', name: 'France' },
+  { code: '+86', country: 'China', flag: '🇨🇳', name: 'China' },
+  { code: '+81', country: 'Japan', flag: '🇯🇵', name: 'Japan' },
+  { code: '+82', country: 'South Korea', flag: '🇰🇷', name: 'South Korea' },
+  { code: '+65', country: 'Singapore', flag: '🇸🇬', name: 'Singapore' },
+  { code: '+60', country: 'Malaysia', flag: '🇲🇾', name: 'Malaysia' },
+  { code: '+62', country: 'Indonesia', flag: '🇮🇩', name: 'Indonesia' },
+  { code: '+63', country: 'Philippines', flag: '🇵🇭', name: 'Philippines' },
+  { code: '+66', country: 'Thailand', flag: '🇹🇭', name: 'Thailand' },
+  { code: '+84', country: 'Vietnam', flag: '🇻🇳', name: 'Vietnam' },
+  { code: '+90', country: 'Turkey', flag: '🇹🇷', name: 'Turkey' },
+  { code: '+7', country: 'Russia', flag: '🇷🇺', name: 'Russia' },
+  { code: '+55', country: 'Brazil', flag: '🇧🇷', name: 'Brazil' },
+  { code: '+52', country: 'Mexico', flag: '🇲🇽', name: 'Mexico' },
+  { code: '+27', country: 'South Africa', flag: '🇿🇦', name: 'South Africa' },
+];

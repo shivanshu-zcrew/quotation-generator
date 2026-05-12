@@ -1,116 +1,79 @@
+// controllers/itemController.js
 const Item = require('../models/items');
 const Company = require('../models/company');
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 const zohoBooksService = require('../zoho/customerServices');
 const ItemSyncService = require('../utils/itemsSync');
 
-// ─────────────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────────────
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
 const MIN_PAGE_SIZE = 1;
-
-// Cache TTL for paginated results (5 minutes)
 const PAGINATION_CACHE_TTL = 300;
 
-// Track sync status per company
-const syncStatusMap = new Map(); // key: companyId, value: { isSyncing, lastSyncTime, lastSyncResult }
-
-// In-memory cache for search results and stats
+const syncStatusMap = new Map();
+const syncProgressMap = new Map(); // Track sync progress per company
 const memoryCache = new Map();
-const CACHE_TTL = 600000; // 10 minutes in milliseconds
+const CACHE_TTL = 600000;
 
-// Helper function for in-memory cache
 function getFromCache(key) {
   const cached = memoryCache.get(key);
   if (cached && cached.expiry > Date.now()) {
     return cached.data;
   }
-  if (cached) {
-    memoryCache.delete(key);
-  }
+  if (cached) memoryCache.delete(key);
   return null;
 }
 
 function setToCache(key, data, ttlSeconds = 600) {
-  memoryCache.set(key, {
-    data,
-    expiry: Date.now() + (ttlSeconds * 1000)
-  });
+  memoryCache.set(key, { data, expiry: Date.now() + (ttlSeconds * 1000) });
 }
 
 function clearCache(pattern) {
   if (pattern) {
-    // Clear keys matching pattern
     for (const key of memoryCache.keys()) {
-      if (key.includes(pattern)) {
-        memoryCache.delete(key);
-      }
+      if (key.includes(pattern)) memoryCache.delete(key);
     }
   } else {
     memoryCache.clear();
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// HELPER FUNCTIONS
-// ─────────────────────────────────────────────────────────────────────────
-
-/**
- * Get sync status for a specific company
- */
 function getSyncStatusForCompany(companyId) {
   if (!syncStatusMap.has(companyId)) {
-    syncStatusMap.set(companyId, {
-      isSyncing: false,
-      lastSyncTime: null,
-      lastSyncResult: null
-    });
+    syncStatusMap.set(companyId, { isSyncing: false, lastSyncTime: null, lastSyncResult: null });
   }
   return syncStatusMap.get(companyId);
 }
 
-/**
- * Set sync status for a specific company
- */
 function setSyncStatusForCompany(companyId, updates) {
   const current = getSyncStatusForCompany(companyId);
   syncStatusMap.set(companyId, { ...current, ...updates });
 }
 
-/**
- * Validate and sanitize pagination parameters
- */
-function validatePaginationParams(query) {
-  let page = parseInt(query.page, 10) || 1;
-  let limit = parseInt(query.limit, 10) || DEFAULT_PAGE_SIZE;
-  const search = query.search ? String(query.search).trim() : '';
-  const sortBy = query.sortBy || 'name';
-  const sortOrder = query.sortOrder === 'desc' ? -1 : 1;
+// ✅ Progress tracking helpers
+function updateSyncProgress(companyId, progress) {
+  syncProgressMap.set(companyId, {
+    ...progress,
+    updatedAt: Date.now()
+  });
+}
 
-  if (page < 1) page = 1;
-  if (limit < MIN_PAGE_SIZE) limit = MIN_PAGE_SIZE;
-  if (limit > MAX_PAGE_SIZE) limit = MAX_PAGE_SIZE;
-
-  return {
-    page,
-    limit,
-    skip: (page - 1) * limit,
-    search,
-    sortBy,
-    sortOrder
+function getSyncProgress(companyId) {
+  return syncProgressMap.get(companyId) || {
+    stage: 'idle',
+    message: 'No sync in progress',
+    fetched: 0,
+    total: 0,
+    page: 0,
+    totalPages: 0,
+    startTime: null
   };
 }
 
-/**
- * Map Zoho item to application format
- */
 function mapZohoItem(item) {
   if (!item || typeof item !== 'object') {
     throw new Error('Invalid item object');
   }
-
   return {
     _id: item.item_id || '',
     name: item.name || 'Unknown',
@@ -134,7 +97,7 @@ function mapZohoItem(item) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// GET ALL ITEMS WITH PAGINATION (Multi-Company Support)
+// GET ALL ITEMS WITH FILTERS
 // ─────────────────────────────────────────────────────────────────────────
 exports.getAllItems = async (req, res) => {
   try {
@@ -142,10 +105,10 @@ exports.getAllItems = async (req, res) => {
       page = 1, 
       limit = 50, 
       search = '', 
-      forceRefresh = false 
+      forceRefresh = false,
+      product_type
     } = req.query;
     
-    // Get company from headers or query
     const companyId = req.headers['x-company-id'] || req.query.companyId;
     
     if (!companyId) {
@@ -155,7 +118,6 @@ exports.getAllItems = async (req, res) => {
       });
     }
     
-    // Set company context in zohoBooksService
     const company = await Company.findById(companyId);
     if (!company) {
       return res.status(404).json({
@@ -178,7 +140,8 @@ exports.getAllItems = async (req, res) => {
       page: parseInt(page),
       limit: parseInt(limit),
       search: search.trim(),
-      forceRefresh: forceRefresh === 'true'
+      forceRefresh: forceRefresh === 'true',
+      product_type: product_type && product_type !== 'all' ? product_type : undefined
     });
     
     if (!result.success) {
@@ -190,7 +153,7 @@ exports.getAllItems = async (req, res) => {
     
     res.setHeader('X-Data-Source', result.source);
     res.setHeader('X-Cache-Hit', result.source === 'mongodb_cache' ? 'true' : 'false');
-    // console.log(">>>>>>>>>>", result.data.length);
+    
     res.json({
       success: true,
       data: result.data,
@@ -258,26 +221,25 @@ exports.getItem = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// SYNC ITEMS FROM ZOHO (Multi-Company Support)
-// ─────────────────────────────────────────────────────────────────────────
+// SYNC ITEMS FROM ZOHO
+// ───────────────────────────────────────────────────────────────────────── 
 exports.syncItems = async (req, res) => {
+  let companyId; // Declare outside try-catch
+  let result; // ✅ Declare result outside try-catch
+  
   try {
-    const companyId = req.headers['x-company-id'] || req.body.companyId;
+    companyId = req.headers['x-company-id'] || req.body.companyId;
     
     if (!companyId) {
       return res.status(400).json({
         success: false,
-        message: 'Company ID is required. Please select a company first.'
+        message: 'Company ID is required'
       });
     }
     
-    // Get company details
     const company = await Company.findById(companyId);
     if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
+      return res.status(404).json({ success: false, message: 'Company not found' });
     }
     
     if (!company.zohoOrganizationId) {
@@ -287,63 +249,170 @@ exports.syncItems = async (req, res) => {
       });
     }
     
-    // Check if sync is already in progress for this company
     const syncStatus = getSyncStatusForCompany(companyId);
     if (syncStatus.isSyncing) {
       return res.status(409).json({
         success: false,
-        message: 'Sync already in progress for this company. Please wait.',
-        status: {
-          isSyncing: true,
-          lastSyncTime: syncStatus.lastSyncTime
-        }
+        message: 'Sync already in progress. Please wait.',
+        status: { isSyncing: true }
       });
     }
     
-    // Set sync flag for this company
     setSyncStatusForCompany(companyId, { isSyncing: true });
     
-    // Send immediate response that sync started
+    // Initialize progress
+    updateSyncProgress(companyId, {
+      stage: 'starting',
+      message: 'Starting sync...',
+      fetched: 0,
+      total: 0,
+      page: 0,
+      totalPages: 0,
+      startTime: Date.now()
+    });
+    
+    // Send immediate response
     res.json({
       success: true,
       message: `Item sync started for company: ${company.name}`,
-      status: 'started',
-      company: {
-        id: company._id,
-        name: company.name,
-        code: company.code
-      },
-      estimatedTime: '30-60 seconds'
+      status: 'started'
     });
     
-    // Perform sync in background
-    const result = await ItemSyncService.syncFromZoho(company);
+    // ✅ Perform sync in background - assign to the outer result variable
+    result = await ItemSyncService.syncFromZoho(company, (progress) => {
+      updateSyncProgress(companyId, progress);
+    });
     
     // Clear cache after sync
     clearCache(`zoho_items_${companyId}`);
     clearCache(`zoho_items_stats_${companyId}`);
-    clearCache(`zoho_items_search_${companyId}`);
     
-    // Update sync status
+    // Update company's last sync time for incremental sync
+    if (result && result.success && result.total > 0) {
+      company.lastItemSyncAt = new Date();
+      await company.save();
+    }
+    
     setSyncStatusForCompany(companyId, {
       isSyncing: false,
       lastSyncTime: new Date(),
       lastSyncResult: result
     });
     
-    // console.log(`✅ Item sync completed for ${company.name}: ${result.created} created, ${result.updated} updated`);
+    updateSyncProgress(companyId, {
+      stage: 'completed',
+      message: `Sync completed! ${result?.created || 0} new, ${result?.updated || 0} updated, ${result?.deleted || 0} deleted`,
+      fetched: result?.total || 0,
+      total: result?.total || 0,
+      created: result?.created || 0,
+      updated: result?.updated || 0,
+      deleted: result?.deleted || 0,
+      errors: result?.errors || 0,
+      duration: result?.duration,
+      startTime: Date.now()
+    });
+    
+    // Clear progress after 15 seconds
+    setTimeout(() => {
+      const current = syncProgressMap.get(companyId);
+      if (current?.stage === 'completed') {
+        syncProgressMap.delete(companyId);
+      }
+    }, 15000);
     
   } catch (error) {
     console.error('❌ Error syncing items:', error);
-    setSyncStatusForCompany(companyId, {
-      isSyncing: false,
-      lastSyncResult: { success: false, error: error.message }
+    
+    if (companyId) {
+      setSyncStatusForCompany(companyId, {
+        isSyncing: false,
+        lastSyncResult: { success: false, error: error.message }
+      });
+      
+      updateSyncProgress(companyId, {
+        stage: 'error',
+        message: `Sync failed: ${error.message}`,
+        error: error.message,
+        startTime: Date.now()
+      });
+      
+      // Clear error progress after 10 seconds
+      setTimeout(() => {
+        syncProgressMap.delete(companyId);
+      }, 10000);
+    }
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET SYNC PROGRESS (NEW ENDPOINT)
+// ─────────────────────────────────────────────────────────────────────────
+exports.getSyncProgress = async (req, res) => {
+  try {
+    const companyId = req.headers['x-company-id'] || req.query.companyId;
+    
+    if (!companyId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Company ID is required' 
+      });
+    }
+    
+    const progress = getSyncProgress(companyId);
+    const syncStatus = getSyncStatusForCompany(companyId);
+    
+    // Calculate estimated time remaining
+    let estimatedRemaining = null;
+    if (progress.stage === 'fetching' && progress.fetched > 0 && progress.total > 0 && progress.startTime) {
+      const elapsed = (Date.now() - progress.startTime) / 1000;
+      const rate = progress.fetched / elapsed;
+      const remainingItems = progress.total - progress.fetched;
+      const remainingSeconds = remainingItems / rate;
+      estimatedRemaining = Math.ceil(remainingSeconds);
+    }
+    
+    // Check if sync is actually still in progress
+    const isActuallySyncing = syncStatus.isSyncing;
+    const isCompleted = progress.stage === 'completed';
+    const isError = progress.stage === 'error';
+    
+    // Clear progress if completed/error and time has passed
+    if (isCompleted || isError) {
+      const progressAge = Date.now() - (progress.updatedAt || Date.now());
+      if (progressAge > 10000) { // Clear after 10 seconds
+        syncProgressMap.delete(companyId);
+      }
+    }
+    
+    res.json({
+      success: true,
+      isSyncing: isActuallySyncing,
+      progress: {
+        stage: progress.stage,
+        message: progress.message,
+        fetched: progress.fetched || 0,
+        total: progress.total || 0,
+        page: progress.page || 0,
+        totalPages: progress.totalPages || 0,
+        created: progress.created,
+        updated: progress.updated,
+        deleted: progress.deleted,
+        errors: progress.errors,
+        estimatedRemaining: estimatedRemaining ? `${estimatedRemaining}s` : null,
+        startTime: progress.startTime
+      }
+    });
+  } catch (error) {
+    console.error('Error getting sync progress:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
     });
   }
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// GET SYNC STATUS (Multi-Company Support)
+// GET SYNC STATUS (LEGACY - KEPT FOR COMPATIBILITY)
 // ─────────────────────────────────────────────────────────────────────────
 exports.getSyncStatus = async (req, res) => {
   try {
@@ -357,6 +426,7 @@ exports.getSyncStatus = async (req, res) => {
     }
     
     const syncStatus = getSyncStatusForCompany(companyId);
+    const progress = getSyncProgress(companyId);
     const stats = await ItemSyncService.getStats(companyId);
     
     res.json({
@@ -367,6 +437,14 @@ exports.getSyncStatus = async (req, res) => {
         lastSyncResult: syncStatus.lastSyncResult,
         totalItems: stats.totalItems || 0,
         lastSyncDate: stats.lastSync
+      },
+      progress: {
+        stage: progress.stage,
+        message: progress.message,
+        fetched: progress.fetched,
+        total: progress.total,
+        page: progress.page,
+        totalPages: progress.totalPages
       },
       companyId
     });
@@ -381,11 +459,11 @@ exports.getSyncStatus = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// SEARCH ITEMS BY NAME/SKU (Multi-Company Support)
+// SEARCH ITEMS
 // ─────────────────────────────────────────────────────────────────────────
 exports.searchItems = async (req, res) => {
   try {
-    const { query, limit = 20, offset = 0 } = req.query;
+    const { query, limit = 20, offset = 0, product_type } = req.query;
     const companyId = req.headers['x-company-id'] || req.query.companyId;
     
     if (!companyId) {
@@ -406,8 +484,7 @@ exports.searchItems = async (req, res) => {
     const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const parsedOffset = Math.max(parseInt(offset, 10) || 0, 0);
 
-    // Use in-memory cache instead of Redis
-    const cacheKey = `zoho_items_search_${companyId}:${searchTerm}:${parsedLimit}:${parsedOffset}`;
+    const cacheKey = `zoho_items_search_${companyId}:${searchTerm}:${parsedLimit}:${parsedOffset}:${product_type || 'all'}`;
     const cachedResult = getFromCache(cacheKey);
     
     if (cachedResult) {
@@ -421,7 +498,6 @@ exports.searchItems = async (req, res) => {
       });
     }
 
-    // Set company context
     const company = await Company.findById(companyId);
     if (company) {
       zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
@@ -436,7 +512,7 @@ exports.searchItems = async (req, res) => {
       });
     }
 
-    const mappedItems = result.items
+    let mappedItems = result.items
       .map(item => {
         try {
           return mapZohoItem(item);
@@ -445,6 +521,10 @@ exports.searchItems = async (req, res) => {
         }
       })
       .filter(item => item !== null);
+
+    if (product_type && product_type !== 'all') {
+      mappedItems = mappedItems.filter(item => item.product_type === product_type);
+    }
 
     const searchResults = mappedItems.filter(item => {
       const name = (item.name || '').toLowerCase();
@@ -463,7 +543,6 @@ exports.searchItems = async (req, res) => {
       hasMore: parsedOffset + parsedLimit < searchResults.length
     };
 
-    // Store in memory cache
     setToCache(cacheKey, responseData, 300);
 
     res.status(200).json({
@@ -483,7 +562,7 @@ exports.searchItems = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// GET ITEMS STATISTICS (Multi-Company Support)
+// GET ITEMS STATISTICS
 // ─────────────────────────────────────────────────────────────────────────
 exports.getItemsStats = async (req, res) => {
   try {
@@ -496,7 +575,6 @@ exports.getItemsStats = async (req, res) => {
       });
     }
     
-    // Use in-memory cache instead of Redis
     const cacheKey = `zoho_items_stats_${companyId}`;
     const cachedStats = getFromCache(cacheKey);
     
@@ -508,7 +586,6 @@ exports.getItemsStats = async (req, res) => {
       });
     }
 
-    // Set company context
     const company = await Company.findById(companyId);
     if (company) {
       zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
@@ -531,6 +608,7 @@ exports.getItemsStats = async (req, res) => {
       lowestPrice: Infinity,
       byStatus: {},
       byType: {},
+      byProductType: { goods: 0, service: 0 },
       byTaxable: { taxable: 0, nonTaxable: 0 },
       bySellable: { sellable: 0, notSellable: 0 }
     };
@@ -553,17 +631,15 @@ exports.getItemsStats = async (req, res) => {
         const type = item.item_type || 'unknown';
         stats.byType[type] = (stats.byType[type] || 0) + 1;
 
-        if (item.is_taxable) {
-          stats.byTaxable.taxable++;
-        } else {
-          stats.byTaxable.nonTaxable++;
-        }
+        const productType = item.product_type || 'goods';
+        if (productType === 'goods') stats.byProductType.goods++;
+        else if (productType === 'service') stats.byProductType.service++;
 
-        if (item.can_be_sold) {
-          stats.bySellable.sellable++;
-        } else {
-          stats.bySellable.notSellable++;
-        }
+        if (item.is_taxable) stats.byTaxable.taxable++;
+        else stats.byTaxable.nonTaxable++;
+
+        if (item.can_be_sold) stats.bySellable.sellable++;
+        else stats.bySellable.notSellable++;
       } catch (error) {
         console.warn('Error calculating stats for item:', error.message);
       }
@@ -572,7 +648,6 @@ exports.getItemsStats = async (req, res) => {
     stats.averagePrice = validPrices.length > 0 ? stats.totalValue / validPrices.length : 0;
     stats.lowestPrice = stats.lowestPrice === Infinity ? 0 : stats.lowestPrice;
 
-    // Store in memory cache
     setToCache(cacheKey, stats, 600);
 
     res.status(200).json({
@@ -592,7 +667,7 @@ exports.getItemsStats = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// CLEAR ITEMS CACHE (ADMIN ONLY) - Multi-Company Support
+// CLEAR ITEMS CACHE
 // ─────────────────────────────────────────────────────────────────────────
 exports.clearItemsCache = async (req, res) => {
   try {
@@ -605,8 +680,6 @@ exports.clearItemsCache = async (req, res) => {
     }
 
     let totalCleared = 0;
-
-    // Clear from memory cache
     for (const pattern of patterns) {
       clearCache(pattern);
       totalCleared++;

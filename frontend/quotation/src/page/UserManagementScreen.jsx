@@ -3,7 +3,7 @@ import { authAPI } from "../services/api";
 import { useAppStore } from "../services/store";
 import { useAuth } from "../hooks/customHooks";
 import { PasswordResetModal } from "../components/PasswordResetModel";
-import { Users, Search, X, RefreshCw, Shield, TrendingUp, AlertCircle, LogOut, Eye, CheckCircle, XCircle, Award, Calendar, Plus, UserPlus } from 'lucide-react';
+import { Users, Search, X, RefreshCw, Shield, TrendingUp, AlertCircle, LogOut, Eye, CheckCircle, XCircle, Award, Calendar, Plus, UserPlus, Phone, Edit2, Save, X as XIcon, UserCheck, UserX, Briefcase, Crown, Menu } from 'lucide-react';
 import useToast, { ToastContainer } from '../hooks/useToast';
 
 // ─── Role config ──────────────────────────────────────────────────────────
@@ -16,10 +16,278 @@ const ROLES = [
 const ROLE_COLOR = Object.fromEntries(ROLES.map((r) => [r.key, r.color]));
 const ROLE_LABEL = Object.fromEntries(ROLES.map((r) => [r.key, r.label]));
 
-// ─── Add User Form Component ──────────────────────────────────────────────
+// ─── Responsive hook ──────────────────────────────────────────────────────
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.matchMedia(query).matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia(query);
+    const handler = (e) => setMatches(e.matches);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, [query]);
+
+  return matches;
+};
+
+// ─── User Card Component for Mobile ──────────────────────────────────────
+function UserCard({ user, onEdit, onResetPassword, actionLoading, formatDate }) {
+  const [expanded, setExpanded] = useState(false);
+  const roleColor = ROLE_COLOR[user.role] || '#667eea';
+  const roleLabel = ROLE_LABEL[user.role] || user.role;
+
+  return (
+    <div style={styles.userCard}>
+      <div onClick={() => setExpanded(!expanded)} style={styles.userCardHeader}>
+        <div style={styles.userCardAvatar}>
+          <div style={{ ...styles.userAvatar, backgroundColor: roleColor }}>
+            {user.name?.charAt(0).toUpperCase()}
+          </div>
+        </div>
+        <div style={styles.userCardInfo}>
+          <div style={styles.userCardName}>{user.name}</div>
+          <div style={styles.userCardEmail}>{user.email}</div>
+        </div>
+        <div style={styles.userCardStatus}>
+          <span style={{
+            ...styles.statusBadge,
+            backgroundColor: user.isActive ? "#10b98120" : "#ef444420",
+            color: user.isActive ? "#10b981" : "#ef4444",
+          }}>
+            {user.isActive ? "Active" : "Inactive"}
+          </span>
+        </div>
+        <div style={{ ...styles.expandIcon, transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+          ▼
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={styles.userCardDetails}>
+          <div style={styles.userCardRow}>
+            <span style={styles.userCardLabel}>📞 Phone:</span>
+            <span style={styles.userCardValue}>{user.phone || '—'}</span>
+          </div>
+          <div style={styles.userCardRow}>
+            <span style={styles.userCardLabel}>👔 Role:</span>
+            <span style={{ ...styles.roleBadge, backgroundColor: roleColor + '20', color: roleColor }}>
+              {roleLabel}
+            </span>
+          </div>
+          <div style={styles.userCardRow}>
+            <span style={styles.userCardLabel}>🕐 Last Login:</span>
+            <span style={styles.userCardValue}>{formatDate(user.lastLogin)}</span>
+          </div>
+          <div style={styles.userCardRow}>
+            <span style={styles.userCardLabel}>📅 Joined:</span>
+            <span style={styles.userCardValue}>{formatDate(user.createdAt)}</span>
+          </div>
+          <div style={styles.userCardActions}>
+            <button onClick={() => onEdit(user)} style={styles.editButton} disabled={actionLoading}>
+              <Edit2 size={14} /> Edit
+            </button>
+            <button onClick={() => onResetPassword(user)} style={styles.resetButton} disabled={actionLoading}>
+              🔑 Reset Password
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Edit User Modal Component ──────────────────────────────────────────
+function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
+  const [formData, setFormData] = useState({
+    name: user?.name || "",
+    email: user?.email || "",
+    phone: user?.phone || "",
+    role: user?.role || "user",
+    isActive: user?.isActive ?? true,
+  });
+  const [errors, setErrors] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  const validate = () => {
+    const e = {};
+    if (!formData.name.trim()) e.name = "Name is required";
+    if (!formData.email.trim()) e.email = "Email is required";
+    else if (!/\S+@\S+\.\S+/.test(formData.email)) e.email = "Invalid email address";
+    
+    if (formData.phone && !/^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{3,4}[-\s\.]?[0-9]{3,4}$/.test(formData.phone)) {
+      e.phone = "Invalid phone number format";
+    }
+    return e;
+  };
+
+  const handleChange = (field, value) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: "" }));
+  };
+
+  const handleSubmit = async () => {
+    const e = validate();
+    if (Object.keys(e).length) {
+      setErrors(e);
+      return;
+    }
+    setLoading(true);
+    try {
+      await authAPI.updateUser(user._id, {
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        role: formData.role,
+        isActive: formData.isActive,
+      });
+      onSuccess("User updated successfully");
+    } catch (error) {
+      console.log(">>>><<<<<", error);
+      setErrors({ submit: error.response?.data?.message || "Failed to update user" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selectedRole = ROLES.find((r) => r.key === formData.role);
+  const isLoading = loading || parentLoading;
+
+  return (
+    <div style={styles.modalOverlay}>
+      <div style={{ ...styles.modal, maxWidth: 500 }}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalHeaderLeft}>
+            <div style={styles.modalIcon}>✏️</div>
+            <div>
+              <h2 style={styles.modalTitle}>Edit User</h2>
+              <p style={{ ...styles.modalSubtitle, margin: 0, color: '#94a3b8' }}>Update user information and permissions</p>
+            </div>
+          </div>
+          <button onClick={onClose} style={styles.closeBtn} disabled={isLoading}>✕</button>
+        </div>
+
+        {errors.submit && (
+          <div style={styles.errorBanner}>
+            <AlertCircle size={14} /> {errors.submit}
+          </div>
+        )}
+
+        <div style={styles.modalBody}>
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Full Name</label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => handleChange("name", e.target.value)}
+              placeholder="e.g. John Smith"
+              style={{ ...styles.input, ...(errors.name ? styles.inputError : {}) }}
+              disabled={isLoading}
+            />
+            {errors.name && <span style={styles.errorMsg}>{errors.name}</span>}
+          </div>
+
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Email Address</label>
+            <input
+              type="email"
+              value={formData.email}
+              onChange={(e) => handleChange("email", e.target.value)}
+              placeholder="e.g. john@company.com"
+              style={{ ...styles.input, ...(errors.email ? styles.inputError : {}) }}
+              disabled={isLoading}
+            />
+            {errors.email && <span style={styles.errorMsg}>{errors.email}</span>}
+          </div>
+
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Phone Number (Optional)</label>
+            <input
+              type="tel"
+              value={formData.phone}
+              onChange={(e) => handleChange("phone", e.target.value)}
+              placeholder="e.g. +971 XX XXX XXXX"
+              style={{ ...styles.input, ...(errors.phone ? styles.inputError : {}) }}
+              disabled={isLoading}
+            />
+            {errors.phone && <span style={styles.errorMsg}>{errors.phone}</span>}
+          </div>
+
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Role</label>
+            <div style={styles.roleToggleGroup}>
+              {ROLES.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => handleChange("role", r.key)}
+                  disabled={isLoading}
+                  style={{
+                    ...styles.roleToggleBtn,
+                    ...(formData.role === r.key ? { borderColor: r.color, backgroundColor: r.color + '18', color: r.color, fontWeight: '700' } : {}),
+                  }}
+                >
+                  <span style={{ fontSize: '16px' }}>{r.icon}</span> {r.label}
+                </button>
+              ))}
+            </div>
+            {selectedRole && <p style={{ ...styles.roleHint, color: selectedRole.color }}>{selectedRole.hint}</p>}
+          </div>
+
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Account Status</label>
+            <div style={styles.statusToggleGroup}>
+              <button
+                type="button"
+                onClick={() => handleChange("isActive", true)}
+                disabled={isLoading}
+                style={{
+                  ...styles.statusToggleBtn,
+                  ...(formData.isActive === true ? { borderColor: '#10b981', backgroundColor: '#10b98118', color: '#10b981', fontWeight: '700' } : {}),
+                }}
+              >
+                <CheckCircle size={16} /> Active
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChange("isActive", false)}
+                disabled={isLoading}
+                style={{
+                  ...styles.statusToggleBtn,
+                  ...(formData.isActive === false ? { borderColor: '#ef4444', backgroundColor: '#ef444418', color: '#ef4444', fontWeight: '700' } : {}),
+                }}
+              >
+                <XCircle size={16} /> Inactive
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.modalFooter}>
+          <button onClick={onClose} style={styles.cancelBtn} disabled={isLoading}>Cancel</button>
+          <button onClick={handleSubmit} style={styles.submitBtn} disabled={isLoading}>
+            {isLoading ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Add User Form Component ──────────────────────────────────────────
 function AddUserForm({ onSuccess, onCancel }) {
   const [formData, setFormData] = useState({
-    name: "", email: "", password: "", confirmPassword: "", role: "user",
+    name: "", 
+    email: "", 
+    phone: "", 
+    password: "", 
+    confirmPassword: "", 
+    role: "user",
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
@@ -30,6 +298,11 @@ function AddUserForm({ onSuccess, onCancel }) {
     if (!formData.name.trim()) e.name = "Name is required";
     if (!formData.email.trim()) e.email = "Email is required";
     else if (!/\S+@\S+\.\S+/.test(formData.email)) e.email = "Invalid email address";
+    
+    if (formData.phone && !/^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{3,4}[-\s\.]?[0-9]{3,4}$/.test(formData.phone)) {
+      e.phone = "Invalid phone number format";
+    }
+    
     if (!formData.password) e.password = "Password is required";
     else if (formData.password.length < 6) e.password = "Minimum 6 characters";
     if (formData.password !== formData.confirmPassword) e.confirmPassword = "Passwords do not match";
@@ -52,6 +325,7 @@ function AddUserForm({ onSuccess, onCancel }) {
       await authAPI.register({
         name: formData.name.trim(),
         email: formData.email.trim(),
+        phone: formData.phone.trim(),
         password: formData.password,
         role: formData.role,
       });
@@ -110,6 +384,19 @@ function AddUserForm({ onSuccess, onCancel }) {
               disabled={loading}
             />
             {errors.email && <span style={styles.errorMsg}>{errors.email}</span>}
+          </div>
+
+          <div style={styles.fieldGroup}>
+            <label style={styles.label}>Phone Number (Optional)</label>
+            <input
+              type="tel"
+              value={formData.phone}
+              onChange={(e) => handleChange("phone", e.target.value)}
+              placeholder="e.g. +971 XX XXX XXXX"
+              style={{ ...styles.input, ...(errors.phone ? styles.inputError : {}) }}
+              disabled={loading}
+            />
+            {errors.phone && <span style={styles.errorMsg}>{errors.phone}</span>}
           </div>
 
           <div style={styles.row}>
@@ -182,6 +469,8 @@ function AddUserForm({ onSuccess, onCancel }) {
 export default function UserManagementScreen({ onBack }) {
   const { user: currentUser } = useAuth();
   const { toasts, addToast, dismissToast } = useToast();
+  const isMobile = useMediaQuery('(max-width: 768px)');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -191,6 +480,7 @@ export default function UserManagementScreen({ onBack }) {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showEditForm, setShowEditForm] = useState(false);
   const [newRole, setNewRole] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -247,10 +537,22 @@ export default function UserManagementScreen({ onBack }) {
     addToast(message, "success");
   }, [fetchUsers, addToast]);
 
+  const handleEditUserSuccess = useCallback(async (message) => {
+    setShowEditForm(false);
+    setSelectedUser(null);
+    await fetchUsers();
+    addToast(message, "success");
+  }, [fetchUsers, addToast]);
+
   const openRoleModal = useCallback((user) => {
     setSelectedUser(user);
     setNewRole(user.role);
     setShowRoleModal(true);
+  }, []);
+
+  const openEditModal = useCallback((user) => {
+    setSelectedUser(user);
+    setShowEditForm(true);
   }, []);
 
   const openPasswordResetModal = useCallback((user) => {
@@ -269,7 +571,8 @@ export default function UserManagementScreen({ onBack }) {
   const filteredUsers = useMemo(() =>
     users.filter((user) => {
       const matchesSearch = user.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           user.email?.toLowerCase().includes(searchTerm.toLowerCase());
+                           user.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                           (user.phone && user.phone.toLowerCase().includes(searchTerm.toLowerCase()));
       const matchesRole = filterRole === "all" || user.role === filterRole;
       const matchesStatus = filterStatus === "all" ||
                            (filterStatus === "active" && user.isActive) ||
@@ -299,48 +602,75 @@ export default function UserManagementScreen({ onBack }) {
     <div style={styles.container}>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Topbar */}
-      <div style={styles.topbar}>
-        <div style={styles.topbarLeft}>
-          <button onClick={onBack} style={styles.backButton}>← Back</button>
-          <h1 style={styles.title}>👥 User Management</h1>
+      {/* Topbar - Responsive */}
+      <div style={{ ...styles.topbar, padding: isMobile ? '0.75rem 1rem' : '0 2rem', height: isMobile ? 'auto' : 60, flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '0.75rem' : 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: isMobile ? '100%' : 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button onClick={onBack} style={styles.backButton}>← </button>
+            <h1 style={{ ...styles.title, fontSize: isMobile ? '1rem' : '1.0625rem' }}> User Management</h1>
+          </div>
+          {isMobile && (
+            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={styles.menuButton}>
+              <Menu size={20} />
+            </button>
+          )}
         </div>
-        <div style={styles.topbarActions}>
-          <button onClick={() => setShowAddForm(true)} style={styles.addUserButton}>+ Add User</button>
+        
+        <div style={{ 
+          display: 'flex', 
+          gap: '0.5rem', 
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          ...(isMobile && !mobileMenuOpen ? { display: 'none' } : { display: 'flex' }),
+          width: isMobile ? '100%' : 'auto',
+          justifyContent: isMobile ? 'center' : 'flex-end'
+        }}>
+          <button onClick={() => setShowAddForm(true)} style={styles.addUserButton}>
+            + {isMobile ? 'Add' : 'Add User'}
+          </button>
           <button onClick={fetchUsers} style={styles.refreshButton} disabled={actionLoading}>
-            <RefreshCw size={14} style={actionLoading ? styles.spin : {}} /> Refresh
+            <RefreshCw size={14} style={actionLoading ? styles.spin : {}} /> {!isMobile && 'Refresh'}
           </button>
         </div>
       </div>
 
-      {/* Stats Cards */}
-      <div style={styles.statsGrid}>
+      {/* Stats Cards - Responsive Grid */}
+      <div style={{
+        ...styles.statsGrid,
+        gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)',
+        margin: isMobile ? '1rem' : '1.5rem 2rem 1rem 2rem',
+        gap: isMobile ? '0.75rem' : '1rem'
+      }}>
         {[
-          { label: "Total Users", value: stats.total, color: "#667eea", icon: "👥" },
-          { label: "Active", value: stats.active, color: "#10b981", icon: "✅" },
-          { label: "Inactive", value: stats.inactive, color: "#ef4444", icon: "⭕" },
-          { label: "Ops Managers", value: stats.opsManagers, color: "#f59e0b", icon: "📋" },
-          { label: "Admins", value: stats.admins, color: "#8b5cf6", icon: "👑" },
-        ].map(({ label, value, color, icon }) => (
-          <div key={label} style={styles.statCard}>
-            <div style={{ ...styles.statIconContainer, backgroundColor: color + "20" }}>
-              <span style={{ ...styles.statIcon, color }}>{icon}</span>
+          { label: "Total Users", value: stats.total, color: "#667eea", icon: Users, bgColor: "#eef2ff" },
+          { label: "Active", value: stats.active, color: "#10b981", icon: UserCheck, bgColor: "#d1fae5" },
+          { label: "Inactive", value: stats.inactive, color: "#ef4444", icon: UserX, bgColor: "#fee2e2" },
+          { label: "Ops Managers", value: stats.opsManagers, color: "#f59e0b", icon: Briefcase, bgColor: "#fef3c7" },
+          { label: "Admins", value: stats.admins, color: "#8b5cf6", icon: Crown, bgColor: "#ede9fe" },
+        ].map(({ label, value, color, icon: Icon, bgColor }) => (
+          <div key={label} style={{ ...styles.statCard, padding: isMobile ? '0.75rem' : '1rem' }}>
+            <div style={{ ...styles.statIconContainer, width: isMobile ? '36px' : '44px', height: isMobile ? '36px' : '44px' }}>
+              <Icon size={isMobile ? 16 : 20} color={color} />
             </div>
             <div style={styles.statContent}>
-              <h3 style={styles.statLabel}>{label}</h3>
-              <p style={styles.statValue}>{value}</p>
+              <h3 style={{ ...styles.statLabel, fontSize: isMobile ? '10px' : '12px' }}>{label}</h3>
+              <p style={{ ...styles.statValue, fontSize: isMobile ? '20px' : '24px' }}>{value}</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Filters */}
-      <div style={styles.filtersContainer}>
-        <div style={styles.searchBox}>
+      {/* Filters - Responsive */}
+      <div style={{
+        ...styles.filtersContainer,
+        margin: isMobile ? '0 1rem 1rem 1rem' : '0 2rem 1rem 2rem',
+        flexDirection: isMobile ? 'column' : 'row'
+      }}>
+        <div style={{ ...styles.searchBox, width: isMobile ? '100%' : 'auto' }}>
           <Search size={14} color="#94a3b8" />
           <input
             type="text"
-            placeholder="Search by name or email..."
+            placeholder="Search by name, email or phone..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={styles.searchInput}
@@ -351,14 +681,14 @@ export default function UserManagementScreen({ onBack }) {
             </button>
           )}
         </div>
-        <div style={styles.filterGroup}>
-          <select value={filterRole} onChange={(e) => setFilterRole(e.target.value)} style={styles.filterSelect}>
+        <div style={{ ...styles.filterGroup, width: isMobile ? '100%' : 'auto' }}>
+          <select value={filterRole} onChange={(e) => setFilterRole(e.target.value)} style={{ ...styles.filterSelect, width: isMobile ? '100%' : 'auto' }}>
             <option value="all">All Roles</option>
             <option value="user">Creator</option>
             <option value="ops_manager">Ops Manager</option>
             <option value="admin">Admin</option>
           </select>
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={styles.filterSelect}>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={{ ...styles.filterSelect, width: isMobile ? '100%' : 'auto' }}>
             <option value="all">All Status</option>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
@@ -366,96 +696,111 @@ export default function UserManagementScreen({ onBack }) {
         </div>
       </div>
 
-      {/* Table Card */}
-      <div style={styles.tableCard}>
-        <div style={styles.tableWrapper}>
-          <table style={styles.table}>
-            <thead>
-              <tr style={styles.tableHeader}>
-                <th style={styles.th}>User</th>
-                <th style={styles.th}>Email</th>
-                <th style={styles.th}>Role</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Last Login</th>
-                <th style={styles.th}>Joined</th>
-                <th style={styles.th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.map((user) => {
-                const roleColor = ROLE_COLOR[user.role] || '#667eea';
-                const roleLabel = ROLE_LABEL[user.role] || user.role;
-                return (
-                  <tr key={user._id} style={styles.tr}>
-                    <td style={styles.td}>
-                      <div style={styles.userInfo}>
-                        <div style={{ ...styles.userAvatar, backgroundColor: roleColor }}>{user.name?.charAt(0).toUpperCase()}</div>
-                        <span style={styles.userName}>{user.name}</span>
-                      </div>
-                    </td>
-                    <td style={styles.td}>{user.email}</td>
-                    <td style={styles.td}>
-                      <span style={{ ...styles.roleBadge, backgroundColor: roleColor + '20', color: roleColor }}>{roleLabel}</span>
-                    </td>
-                    <td style={styles.td}>
-                      <span style={{
-                        ...styles.statusBadge,
-                        backgroundColor: user.isActive ? "#10b98120" : "#ef444420",
-                        color: user.isActive ? "#10b981" : "#ef4444",
-                      }}>
-                        {user.isActive ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td style={styles.td}>{formatDate(user.lastLogin)}</td>
-                    <td style={styles.td}>{formatDate(user.createdAt)}</td>
-                    <td style={styles.td}>
-                      <div style={styles.actionButtons}>
-                        <button
-                          onClick={() => openRoleModal(user)}
-                          style={styles.roleButton}
-                          title="Change Role"
-                          disabled={actionLoading || user._id === currentUser?._id}
-                        >
-                          👤
-                        </button>
-                        <button
-                          onClick={() => handleToggleStatus(user._id, user.isActive)}
-                          style={{
-                            ...styles.statusButton,
-                            backgroundColor: user.isActive ? "#ef444420" : "#10b98120",
-                            color: user.isActive ? "#ef4444" : "#10b981",
-                          }}
-                          title={user.isActive ? "Deactivate" : "Activate"}
-                          disabled={actionLoading || user._id === currentUser?._id}
-                        >
-                          {user.isActive ? "🔴" : "🟢"}
-                        </button>
-                        <button
-                          onClick={() => openPasswordResetModal(user)}
-                          style={styles.resetButton}
-                          title="Reset Password"
-                          disabled={actionLoading}
-                        >
-                          🔑
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-           </table>
-
-          {filteredUsers.length === 0 && (
-            <div style={styles.emptyState}>
-              <span style={styles.emptyIcon}>👥</span>
-              <p>No users found</p>
-            </div>
-          )}
-        </div>
+      {/* Table/Card View */}
+      <div style={{
+        ...styles.tableCard,
+        margin: isMobile ? '0 1rem 1rem 1rem' : '0 2rem 2rem 2rem'
+      }}>
+        {isMobile ? (
+          // Mobile Card View
+          <div style={styles.cardsContainer}>
+            {filteredUsers.length === 0 ? (
+              <div style={styles.emptyState}>
+                <span style={styles.emptyIcon}>👥</span>
+                <p>No users found</p>
+              </div>
+            ) : (
+              filteredUsers.map((user) => (
+                <UserCard
+                  key={user._id}
+                  user={user}
+                  onEdit={openEditModal}
+                  onResetPassword={openPasswordResetModal}
+                  actionLoading={actionLoading}
+                  formatDate={formatDate}
+                />
+              ))
+            )}
+          </div>
+        ) : (
+          // Desktop Table View
+          <div style={styles.tableWrapper}>
+            <table style={styles.table}>
+              <thead>
+                <tr style={styles.tableHeader}>
+                  <th style={styles.th}>User</th>
+                  <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Phone</th>
+                  <th style={styles.th}>Role</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={styles.th}>Last Login</th>
+                  <th style={styles.th}>Joined</th>
+                  <th style={styles.th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredUsers.map((user) => {
+                  const roleColor = ROLE_COLOR[user.role] || '#667eea';
+                  const roleLabel = ROLE_LABEL[user.role] || user.role;
+                  return (
+                    <tr key={user._id} style={styles.tr}>
+                      <td style={styles.td}>
+                        <div style={styles.userInfo}>
+                          <div style={{ ...styles.userAvatar, backgroundColor: roleColor }}>{user.name?.charAt(0).toUpperCase()}</div>
+                          <span style={styles.userName}>{user.name}</span>
+                        </div>
+                      </td>
+                      <td style={styles.td}>{user.email}</td>
+                      <td style={styles.td}>
+                        {user.phone ? (
+                          <span style={styles.phoneBadge}>
+                            <Phone size={12} style={{ marginRight: '4px' }} />
+                            {user.phone}
+                          </span>
+                        ) : (
+                          <span style={styles.noPhone}>—</span>
+                        )}
+                      </td>
+                      <td style={styles.td}>
+                        <span style={{ ...styles.roleBadge, backgroundColor: roleColor + '20', color: roleColor }}>{roleLabel}</span>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={{
+                          ...styles.statusBadge,
+                          backgroundColor: user.isActive ? "#10b98120" : "#ef444420",
+                          color: user.isActive ? "#10b981" : "#ef4444",
+                        }}>
+                          {user.isActive ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td style={styles.td}>{formatDate(user.lastLogin)}</td>
+                      <td style={styles.td}>{formatDate(user.createdAt)}</td>
+                      <td style={styles.td}>
+                        <div style={styles.actionButtons}>
+                          <button onClick={() => openEditModal(user)} style={styles.editButton} title="Edit User" disabled={actionLoading}>
+                            <Edit2 size={14} />
+                          </button>
+                          <button onClick={() => openPasswordResetModal(user)} style={styles.resetButton} title="Reset Password" disabled={actionLoading}>
+                            🔑
+                          </button>
+                        </div>
+                       </td>
+                     </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {filteredUsers.length === 0 && (
+              <div style={styles.emptyState}>
+                <span style={styles.emptyIcon}>👥</span>
+                <p>No users found</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Change Role Modal */}
+      {/* Modals */}
       {showRoleModal && selectedUser && (
         <div style={styles.modalOverlay}>
           <div style={styles.modal}>
@@ -499,10 +844,17 @@ export default function UserManagementScreen({ onBack }) {
         </div>
       )}
 
-      {/* Add User Form Modal */}
       {showAddForm && <AddUserForm onSuccess={handleAddUserSuccess} onCancel={() => setShowAddForm(false)} />}
 
-      {/* Password Reset Modal */}
+      {showEditForm && selectedUser && (
+        <EditUserModal
+          user={selectedUser}
+          onClose={() => { setShowEditForm(false); setSelectedUser(null); }}
+          onSuccess={handleEditUserSuccess}
+          loading={actionLoading}
+        />
+      )}
+
       {showPasswordModal && (
         <PasswordResetModal
           open={showPasswordModal}
@@ -516,39 +868,36 @@ export default function UserManagementScreen({ onBack }) {
   );
 }
 
-// ─── Styles (Matching AdminDashboard) ─────────────────────────────────────
+// ─── Styles ─────────────────────────────────────────────────────
 const PRIMARY_COLOR = 'rgb(15, 23, 42)';
-const PRIMARY_DARK = '#0a0f1a';
 
 const styles = {
   container: { minHeight: '100vh', backgroundColor: '#f1f5f9', fontFamily: "'Segoe UI', system-ui, sans-serif" },
   loadingContainer: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '400px', gap: '16px' },
   spinner: { width: '40px', height: '40px', border: '3px solid #e2e8f0', borderTop: '3px solid #6366f1', borderRadius: '50%', animation: 'spin 1s linear infinite' },
   
-  topbar: { backgroundColor: PRIMARY_COLOR, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2rem', height: '60px', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' },
-  topbarLeft: { display: 'flex', alignItems: 'center', gap: '1rem' },
-  topbarActions: { display: 'flex', gap: '0.625rem', alignItems: 'center' },
+  topbar: { backgroundColor: PRIMARY_COLOR, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' },
   backButton: { backgroundColor: 'rgba(255,255,255,0.08)', color: '#94a3b8', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: '0.45rem 0.875rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
-  title: { fontSize: '1.0625rem', fontWeight: 800, color: 'white', letterSpacing: '-0.01em', margin: 0 },
+  title: { margin: 0, fontWeight: 800, color: 'white', letterSpacing: '-0.01em' },
+  menuButton: { background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8, padding: '0.4rem 0.7rem', color: 'white', cursor: 'pointer' },
   addUserButton: { backgroundColor: '#10b981', color: 'white', border: 'none', borderRadius: 8, padding: '0.45rem 0.875rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' },
   refreshButton: { backgroundColor: '#6366f1', color: 'white', border: 'none', borderRadius: 8, padding: '0.45rem 0.875rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' },
   
-  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: '1rem', margin: '1.5rem 2rem 1rem 2rem' },
-  statCard: { backgroundColor: '#fff', borderRadius: 12, padding: '1rem', display: 'flex', alignItems: 'center', gap: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' },
-  statIconContainer: { width: '44px', height: '44px', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  statIcon: { fontSize: '22px' },
+  statsGrid: { display: 'grid', gap: '1rem' },
+  statCard: { backgroundColor: '#fff', borderRadius: 12, display: 'flex', alignItems: 'center', gap: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' },
+  statIconContainer: { borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   statContent: { flex: 1 },
-  statLabel: { fontSize: '12px', color: '#64748b', marginBottom: '4px', margin: 0 },
-  statValue: { fontSize: '24px', fontWeight: 'bold', color: '#0f172a', margin: 0 },
+  statLabel: { color: '#64748b', margin: 0 },
+  statValue: { fontWeight: 'bold', color: '#0f172a', margin: 0 },
   
-  filtersContainer: { display: 'flex', gap: '16px', margin: '0 2rem 1rem 2rem', flexWrap: 'wrap' },
-  searchBox: { flex: 2, minWidth: '250px', display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.4rem 0.75rem' },
+  filtersContainer: { display: 'flex', gap: '16px', flexWrap: 'wrap' },
+  searchBox: { display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.4rem 0.75rem' },
   searchInput: { border: 'none', background: 'transparent', outline: 'none', fontSize: '0.875rem', color: '#0f172a', flex: 1 },
   clearSearchBtn: { background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0, display: 'flex', alignItems: 'center' },
-  filterGroup: { flex: 1, display: 'flex', gap: '12px', minWidth: '250px' },
-  filterSelect: { flex: 1, padding: '0.5rem 0.75rem', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '0.875rem', outline: 'none', backgroundColor: '#fff' },
+  filterGroup: { display: 'flex', gap: '12px' },
+  filterSelect: { padding: '0.5rem 0.75rem', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: '0.875rem', outline: 'none', backgroundColor: '#fff' },
   
-  tableCard: { backgroundColor: '#fff', borderRadius: 14, margin: '0 2rem 2rem 2rem', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', overflow: 'hidden' },
+  tableCard: { backgroundColor: '#fff', borderRadius: 14, boxShadow: '0 1px 4px rgba(0,0,0,0.07)', overflow: 'hidden' },
   tableWrapper: { overflowX: 'auto' },
   table: { width: '100%', borderCollapse: 'collapse' },
   tableHeader: { backgroundColor: '#fafafa', borderBottom: '1px solid #f1f5f9' },
@@ -556,16 +905,33 @@ const styles = {
   td: { padding: '0.85rem 1rem', fontSize: '0.8rem', borderBottom: '1px solid #f8fafc', verticalAlign: 'middle' },
   tr: { transition: 'background-color 0.2s' },
   
+  cardsContainer: { padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' },
+  userCard: { backgroundColor: '#fff', borderRadius: 12, border: '1px solid #f1f5f9', overflow: 'hidden', transition: 'box-shadow 0.2s' },
+  userCardHeader: { display: 'flex', alignItems: 'center', gap: '12px', padding: '1rem', cursor: 'pointer' },
+  userCardAvatar: { flexShrink: 0 },
+  userCardInfo: { flex: 1, minWidth: 0 },
+  userCardName: { fontWeight: 600, color: '#0f172a', fontSize: '0.875rem', marginBottom: '2px' },
+  userCardEmail: { fontSize: '0.7rem', color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  userCardStatus: { flexShrink: 0 },
+  expandIcon: { color: '#94a3b8', fontSize: '10px', transition: 'transform 0.2s' },
+  userCardDetails: { padding: '1rem', borderTop: '1px solid #f1f5f9', backgroundColor: '#fafafa' },
+  userCardRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontSize: '0.75rem' },
+  userCardLabel: { fontWeight: 600, color: '#64748b', minWidth: '85px' },
+  userCardValue: { color: '#334155' },
+  userCardActions: { display: 'flex', gap: '8px', marginTop: '12px' },
+  
   userInfo: { display: 'flex', alignItems: 'center', gap: '12px' },
-  userAvatar: { width: '32px', height: '32px', borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, flexShrink: 0 },
+  userAvatar: { width: '36px', height: '36px', borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 600, flexShrink: 0 },
   userName: { fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' },
+  
+  phoneBadge: { display: 'inline-flex', alignItems: 'center', fontSize: '0.75rem', color: '#475569' },
+  noPhone: { color: '#94a3b8', fontSize: '0.75rem' },
   
   roleBadge: { padding: '4px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap' },
   statusBadge: { padding: '4px 8px', borderRadius: '20px', fontSize: '11px', fontWeight: 500 },
   
   actionButtons: { display: 'flex', gap: '8px' },
-  roleButton: { padding: '6px 10px', backgroundColor: '#667eea20', color: '#667eea', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '14px' },
-  statusButton: { padding: '6px 10px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '14px' },
+  editButton: { padding: '6px 10px', backgroundColor: '#3b82f620', color: '#3b82f6', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
   resetButton: { padding: '6px 10px', backgroundColor: '#f59e0b20', color: '#f59e0b', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: '14px' },
   
   emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px', color: '#94a3b8' },
@@ -597,6 +963,9 @@ const styles = {
   roleToggleGroup: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
   roleToggleBtn: { flex: 1, minWidth: '100px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '13px', fontWeight: 500, color: '#64748b', backgroundColor: '#fff', cursor: 'pointer', transition: 'all 0.15s' },
   roleHint: { fontSize: '11px', marginTop: '8px', fontWeight: 500 },
+  
+  statusToggleGroup: { display: 'flex', gap: '8px' },
+  statusToggleBtn: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '13px', fontWeight: 500, color: '#64748b', backgroundColor: '#fff', cursor: 'pointer', transition: 'all 0.15s' },
   
   cancelBtn: { padding: '8px 16px', backgroundColor: '#e2e8f0', color: '#334155', border: 'none', borderRadius: 6, fontSize: '13px', fontWeight: 500, cursor: 'pointer' },
   submitBtn: { padding: '8px 20px', backgroundColor: PRIMARY_COLOR, color: '#fff', border: 'none', borderRadius: 6, fontSize: '13px', fontWeight: 600, cursor: 'pointer' },

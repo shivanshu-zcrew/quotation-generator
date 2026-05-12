@@ -20,6 +20,7 @@ const {
   getQuotationsByUser
 } = require('../controllers/adminController');
 const { protect, adminOnly, opsManagerOrAdmin } = require('../middleware/auth');
+const { exportQuotationsToExcel } = require('../controllers/quotationController');
 
 // All routes require authentication
 router.use(protect);
@@ -42,5 +43,9 @@ router.put('/quotations/:id/approve', adminOnly, approveQuotation);
 router.put('/quotations/:id/reject',  adminOnly, rejectQuotation);
 router.get('/user-stats', adminOnly, getUserQuotationStats);
 router.get('/user-quotations/:userId', adminOnly,getQuotationsByUser);
+
+
+// Export bulk data
+router.get('/export-excel', adminOnly, exportQuotationsToExcel);
 
 module.exports = router;

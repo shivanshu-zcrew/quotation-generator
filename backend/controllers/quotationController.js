@@ -8,7 +8,7 @@ const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadClo
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
 const imageCompressor = require('../utils/imageCompressor');
-
+const ExcelJS = require('exceljs');
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
 // ─────────────────────────────────────────────────────────────
@@ -59,28 +59,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  _browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-  });
-
   // _browser = await puppeteer.launch({
   //   headless: true,
+  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
+  //     '--no-zygote',
+  //     '--single-process',
   //   ],
   // });
+
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -992,7 +992,7 @@ exports.createQuotation = async (req, res) => {
     discountPercent: discount,
     ...totals,
     notes: notes?.trim() || '',
-    termsAndConditions: termsAndConditions?.trim() || '',
+    termsAndConditions: termsAndConditions || '',
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
     createdBy: req.user.id,
@@ -1134,11 +1134,9 @@ exports.updateQuotation = async (req, res) => {
     
     // Case 1: Admin editing ANY quotation (including their own)
     if (isAdmin) {
-      // If quotation is already approved or awarded, don't change status
       if (currentStatus === 'approved' || currentStatus === 'awarded' || currentStatus === 'not_awarded') {
-        newStatus = currentStatus;  // Keep as is (read-only effectively)
+        newStatus = currentStatus;
       } 
-      // If admin edits a quotation in any review/rejected/pending state, move to pending_admin
       else if (['pending', 'ops_approved', 'ops_rejected', 'rejected', 'draft'].includes(currentStatus)) {
         newStatus = 'pending_admin';
       } 
@@ -1149,20 +1147,15 @@ exports.updateQuotation = async (req, res) => {
     
     // Case 2: Ops Manager editing
     else if (isOpsManager) {
-      // Ops manager can edit their own quotations or user quotations in pending/ops_rejected state
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
-        newStatus = 'ops_approved';  // After edit, goes to admin for review
+        newStatus = 'ops_approved';
       }
-      // ✅ NEW: If creator is Ops Manager and quotation was rejected by admin, move to pending (ops review)
       else if (currentStatus === 'rejected' && isCreator) {
-        // Ops Manager created this quotation and admin rejected it
-        // When Ops Manager revises, it goes back to pending for ops review
         newStatus = 'pending';
         console.log('🔄 Ops Manager revising admin-rejected quotation - moving to pending for ops review');
       }
-      // If editing an already ops_approved quotation, keep as ops_approved (admin needs to review)
       else if (currentStatus === 'ops_approved') {
-        newStatus = 'ops_approved';  // Keeps same status, admin still needs to approve
+        newStatus = 'ops_approved';
       }
       else {
         newStatus = currentStatus;
@@ -1171,12 +1164,11 @@ exports.updateQuotation = async (req, res) => {
     
     // Case 3: User/Creator editing
     else if (isCreator) {
-      // User can edit their own quotations in pending or ops_rejected state
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
-        newStatus = 'pending';  // Goes back to ops manager for review
+        newStatus = 'pending';
       }
       else if (currentStatus === 'rejected') {
-        newStatus = 'pending';  // Resubmit after admin rejection
+        newStatus = 'pending';
       }
       else {
         newStatus = currentStatus;
@@ -1191,8 +1183,6 @@ exports.updateQuotation = async (req, res) => {
       isOpsManager: isOpsManager
     });
 
-    // Check if editing is allowed based on current status
-    // ✅ Allow editing for rejected status when creator is Ops Manager
     const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
     if (!isAdmin && !editableStatuses.includes(currentStatus)) {
       return res.status(400).json({ 
@@ -1320,51 +1310,92 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    // Process terms images
-    let processedTermsImages = existing.termsImages || [];
+    // ============================================================
+    // ✅ STEP 3: PROCESS TERMS IMAGES WITH COMPRESSION & CLOUDINARY UPLOAD
+    // ============================================================
+    let processedTermsImages = [];
+
+    // Process compressed terms images from request
     if (compressedTermsImages && compressedTermsImages.length > 0) {
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
-        let imageBase64 = imageData;
-        let fileName = `terms_image_${i + 1}`;
         
-        if (typeof imageData === 'object') {
-          imageBase64 = imageData.base64 || imageData.url;
-          fileName = imageData.fileName || `terms_image_${i + 1}`;
+        // Case 1: Object with base64 property (new image after compression)
+        if (imageData && typeof imageData === 'object') {
+          let base64ToUpload = null;
+          let fileName = imageData.fileName || `terms_image_${i + 1}`;
+          
+          // Check for base64 in different properties
+          if (imageData.base64 && imageData.base64.startsWith('data:')) {
+            base64ToUpload = imageData.base64;
+          } else if (imageData.url && imageData.url.startsWith('data:')) {
+            base64ToUpload = imageData.url;
+          } else if (imageData.compressedBase64 && imageData.compressedBase64.startsWith('data:')) {
+            base64ToUpload = imageData.compressedBase64;
+          }
+          
+          if (base64ToUpload) {
+            try {
+              const uploaded = await uploadBase64ToCloudinary(base64ToUpload, `quotations/terms/${existing.quotationNumber || Date.now()}`);
+              if (uploaded && uploaded.url) {
+                processedTermsImages.push({
+                  url: uploaded.url,
+                  publicId: uploaded.publicId,
+                  fileName: fileName,
+                  uploadedAt: new Date()
+                });
+                console.log(`✅ Uploaded compressed terms image ${i + 1}: ${uploaded.url}`);
+              }
+            } catch (uploadError) {
+              console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
+            }
+          }
+          // Case: Existing Cloudinary URL (not base64)
+          else if (imageData.url && imageData.url.includes('cloudinary.com')) {
+            processedTermsImages.push({
+              url: imageData.url,
+              publicId: imageData.publicId,
+              fileName: fileName,
+              uploadedAt: imageData.uploadedAt || new Date()
+            });
+            console.log(`✅ Keeping existing terms image: ${imageData.url}`);
+          }
         }
-        
-        if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
+        // Case 2: Direct base64 string
+        else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
           try {
-            const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+            const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
             if (uploaded && uploaded.url) {
               processedTermsImages.push({
                 url: uploaded.url,
                 publicId: uploaded.publicId,
-                fileName: fileName,
+                fileName: `terms_image_${i + 1}`,
                 uploadedAt: new Date()
               });
+              console.log(`✅ Uploaded compressed terms image from string ${i + 1}: ${uploaded.url}`);
             }
           } catch (uploadError) {
-            console.error('Failed to upload terms image:', uploadError.message);
+            console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
           }
-        } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
-          const exists = processedTermsImages.some(img => img.url === imageData.url);
-          if (!exists) {
-            processedTermsImages.push(imageData);
-          }
-        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-          const exists = processedTermsImages.some(img => img.url === imageData);
-          if (!exists) {
-            processedTermsImages.push({
-              url: imageData,
-              publicId: imageData.split('/').pop().split('.')[0],
-              fileName: fileName,
-              uploadedAt: new Date()
-            });
-          }
+        }
+        // Case 3: Direct Cloudinary URL string
+        else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+          processedTermsImages.push({
+            url: imageData,
+            publicId: imageData.split('/').pop().split('.')[0],
+            fileName: `terms_image_${i + 1}`,
+            uploadedAt: new Date()
+          });
         }
       }
     }
+
+    // If no compressed terms images were processed, try to preserve existing ones
+    if (processedTermsImages.length === 0 && existing.termsImages && existing.termsImages.length > 0) {
+      processedTermsImages = existing.termsImages;
+    }
+
+    console.log(`📸 Final processed terms images count: ${processedTermsImages.length}`);
 
     // Process internal documents
     let newInternalDocs = [];
@@ -1418,7 +1449,7 @@ exports.updateQuotation = async (req, res) => {
       total: total,
       totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
-      ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions?.trim() || '' }),
+      ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions || '' }),
       termsImages: processedTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
@@ -1428,7 +1459,6 @@ exports.updateQuotation = async (req, res) => {
     if (newStatus === 'pending' || newStatus === 'pending_admin') {
       updateData.opsRejectionReason = '';
       updateData.rejectionReason = '';
-      // Clear approval fields when resubmitting
       updateData.opsApprovedBy = null;
       updateData.opsApprovedAt = null;
       updateData.approvedBy = null;
@@ -2611,3 +2641,495 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
   }
 };
 
+
+ 
+exports.exportQuotationsToExcel = async (req, res) => {
+  try {
+    const {
+      status,
+      fromDate,
+      toDate,
+      companyId,
+      search,
+      startDate,
+      endDate,
+    } = req.query;
+
+    // =========================================================
+    // BUILD QUERY
+    // =========================================================
+    const query = {};
+
+    // Company filter
+    if (companyId) {
+      query.companyId = companyId;
+    }
+
+    // Status filter
+    if (status) {
+      if (status.includes(",")) {
+        query.status = { $in: status.split(",") };
+      } else if (status !== "all") {
+        query.status = status;
+      }
+    }
+
+    // Date filter
+    const from = fromDate || startDate;
+    const to = toDate || endDate;
+
+    if (from || to) {
+      query.createdAt = {};
+
+      if (from) {
+        query.createdAt.$gte = new Date(from);
+      }
+
+      if (to) {
+        query.createdAt.$lte = new Date(to);
+      }
+    }
+
+    // Search
+    if (search?.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+
+      query.$or = [
+        { quotationNumber: regex },
+        { "customerSnapshot.name": regex },
+        { projectName: regex },
+        { "customerId.name": regex },
+      ];
+    }
+
+    console.log("📊 Export query:", query);
+
+    // =========================================================
+    // FETCH DATA
+    // =========================================================
+    const quotations = await Quotation.find(query)
+      .sort({ createdAt: -1 })
+      .populate("createdBy", "name email")
+      .populate("customerId", "name email phone")
+      .populate("companyId", "name code")
+      .lean();
+
+    if (!quotations.length) {
+      return res.status(404).json({
+        success: false,
+        message: "No quotations found",
+      });
+    }
+
+    // =========================================================
+    // CREATE WORKBOOK
+    // =========================================================
+    const workbook = new ExcelJS.Workbook();
+
+    workbook.creator = "Quotation Management System";
+    workbook.created = new Date();
+
+    // =========================================================
+    // SUMMARY SHEET
+    // =========================================================
+    const summarySheet = workbook.addWorksheet("Export Summary");
+
+    summarySheet.columns = [
+      { header: "Filter", key: "filter", width: 25 },
+      { header: "Value", key: "value", width: 45 },
+    ];
+
+    summarySheet.addRows([
+      {
+        filter: "Export Date",
+        value: new Date().toLocaleString(),
+      },
+      {
+        filter: "Company",
+        value: companyId || "All Companies",
+      },
+      {
+        filter: "Status",
+        value: status || "All Statuses",
+      },
+      {
+        filter: "From Date",
+        value: from || "-",
+      },
+      {
+        filter: "To Date",
+        value: to || "-",
+      },
+      {
+        filter: "Search",
+        value: search || "-",
+      },
+      {
+        filter: "Total Quotations",
+        value: quotations.length,
+      },
+    ]);
+
+    // Summary header styling
+    const summaryHeader = summarySheet.getRow(1);
+
+    summaryHeader.font = {
+      bold: true,
+      color: { argb: "FFFFFFFF" },
+    };
+
+    summaryHeader.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF10B981" },
+    };
+
+    // =========================================================
+    // MAIN SHEET
+    // =========================================================
+    const worksheet = workbook.addWorksheet("Quotations", {
+      pageSetup: {
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+      },
+    });
+
+    // =========================================================
+    // COLUMNS
+    // =========================================================
+    worksheet.columns = [
+      { header: "SL No", key: "slNo", width: 10 },
+
+      { header: "Quotation Number", key: "quotationNumber", width: 25 },
+
+      { header: "Company", key: "company", width: 35 },
+
+      { header: "Customer Name", key: "customerName", width: 35 },
+
+      { header: "Customer Email", key: "customerEmail", width: 35 },
+
+      { header: "Customer Phone", key: "customerPhone", width: 18 },
+
+      { header: "Contact Person", key: "contact", width: 25 },
+
+      { header: "Project Name", key: "projectName", width: 40 },
+
+      { header: "Date", key: "date", width: 15 },
+
+      { header: "Expiry Date", key: "expiryDate", width: 15 },
+
+      { header: "Query Date", key: "queryDate", width: 15 },
+
+      {
+        header: "Total Amount",
+        key: "total",
+        width: 18,
+        style: {
+          numFmt: "#,##0.00",
+        },
+      },
+
+      { header: "Currency", key: "currency", width: 12 },
+
+      {
+        header: "Total in AED",
+        key: "totalInAED",
+        width: 18,
+        style: {
+          numFmt: "#,##0.00",
+        },
+      },
+
+      { header: "Tax %", key: "taxPercent", width: 10 },
+
+      { header: "Discount %", key: "discountPercent", width: 12 },
+
+      { header: "Status", key: "status", width: 18 },
+
+      { header: "Created By", key: "createdBy", width: 25 },
+
+      { header: "Created At", key: "createdAt", width: 22 },
+
+      { header: "Items Count", key: "itemsCount", width: 15 },
+
+      { header: "Payment Terms", key: "paymentTerms", width: 30 },
+
+      { header: "Delivery Terms", key: "deliveryTerms", width: 30 },
+
+      { header: "TL", key: "tl", width: 15 },
+
+      { header: "TRN", key: "trn", width: 20 },
+    ];
+
+    // =========================================================
+    // HEADER STYLE
+    // =========================================================
+    const headerRow = worksheet.getRow(1);
+
+    headerRow.height = 28;
+
+    headerRow.font = {
+      bold: true,
+      size: 11,
+      color: { argb: "FFFFFFFF" },
+    };
+
+    headerRow.alignment = {
+      horizontal: "center",
+      vertical: "middle",
+      wrapText: true,
+    };
+
+    headerRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF4F46E5" },
+    };
+
+    // =========================================================
+    // ADD ROWS
+    // =========================================================
+    quotations.forEach((q, index) => {
+      const row = worksheet.addRow({
+        slNo: index + 1,
+
+        quotationNumber: q.quotationNumber || "",
+
+        company:
+          q.companySnapshot?.name ||
+          q.companyId?.name ||
+          "",
+
+        customerName:
+          q.customerSnapshot?.name ||
+          q.customerId?.name ||
+          "",
+
+        customerEmail:
+          q.customerSnapshot?.email ||
+          q.customerId?.email ||
+          "",
+
+        customerPhone:
+          q.customerSnapshot?.phone ||
+          q.customerId?.phone ||
+          "",
+
+        contact: q.contact || "",
+
+        projectName: q.projectName || "",
+
+        date: q.date
+          ? new Date(q.date).toLocaleDateString()
+          : "",
+
+        expiryDate: q.expiryDate
+          ? new Date(q.expiryDate).toLocaleDateString()
+          : "",
+
+        queryDate: q.queryDate
+          ? new Date(q.queryDate).toLocaleDateString()
+          : "",
+
+        total: q.total || 0,
+
+        currency: q.currency?.code || "AED",
+
+        totalInAED: q.totalInBaseCurrency || 0,
+
+        taxPercent: q.taxPercent || 0,
+
+        discountPercent: q.discountPercent || 0,
+
+        status: q.status || "",
+
+        createdBy:
+          q.createdBy?.name ||
+          q.createdBySnapshot?.name ||
+          "",
+
+        createdAt: q.createdAt
+          ? new Date(q.createdAt).toLocaleString()
+          : "",
+
+        itemsCount: q.items?.length || 0,
+
+        paymentTerms: q.paymentTerms || "",
+
+        deliveryTerms: q.deliveryTerms || "",
+
+        tl: q.tl || "",
+
+        trn: q.trn || "",
+      });
+
+      // =====================================================
+      // ROW STYLE
+      // =====================================================
+      row.height = 24;
+
+      row.alignment = {
+        vertical: "middle",
+        horizontal: "left",
+        wrapText: false, // IMPORTANT FIX
+      };
+
+      // Alternate row colors
+      if (index % 2 === 0) {
+        row.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF9FAFB" },
+        };
+      }
+
+      // =====================================================
+      // STATUS COLORS
+      // =====================================================
+      const statusCell = row.getCell("status");
+
+      if (q.status === "approved") {
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFD1FAE5" },
+        };
+
+        statusCell.font = {
+          bold: true,
+          color: { argb: "FF065F46" },
+        };
+      }
+
+      else if (q.status === "pending") {
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFEF3C7" },
+        };
+
+        statusCell.font = {
+          bold: true,
+          color: { argb: "FF92400E" },
+        };
+      }
+
+      else if (q.status === "rejected") {
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFEE2E2" },
+        };
+
+        statusCell.font = {
+          bold: true,
+          color: { argb: "FF991B1B" },
+        };
+      }
+
+      else if (q.status === "awarded") {
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFDBEAFE" },
+        };
+
+        statusCell.font = {
+          bold: true,
+          color: { argb: "FF1E40AF" },
+        };
+      }
+    });
+
+    // =========================================================
+    // TOTAL ROW
+    // =========================================================
+    const totalRow = worksheet.addRow({
+      status: "TOTAL",
+      totalInAED: {
+        formula: `SUM(N2:N${quotations.length + 1})`,
+      },
+    });
+
+    totalRow.font = {
+      bold: true,
+    };
+
+    totalRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF3F4F6" },
+    };
+
+    // =========================================================
+    // AUTO FILTER
+    // =========================================================
+    worksheet.autoFilter = {
+      from: "A1",
+      to: "X1",
+    };
+
+    // =========================================================
+    // FREEZE HEADER
+    // =========================================================
+    worksheet.views = [
+      {
+        state: "frozen",
+        ySplit: 1,
+      },
+    ];
+
+    // =========================================================
+    // AUTO FIT COLUMNS
+    // =========================================================
+    worksheet.columns.forEach((column) => {
+      let maxLength = 0;
+
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        const value = cell.value
+          ? cell.value.toString()
+          : "";
+
+        maxLength = Math.max(maxLength, value.length);
+      });
+
+      column.width = Math.min(
+        Math.max(maxLength + 3, 12),
+        45
+      );
+    });
+
+    // =========================================================
+    // GENERATE FILE
+    // =========================================================
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    const fileName = `quotations_export_${
+      new Date().toISOString().split("T")[0]
+    }.xlsx`;
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=${fileName}`
+    );
+
+    res.setHeader("Content-Length", buffer.length);
+
+    return res.send(buffer);
+
+  } catch (error) {
+    console.error("Export error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error exporting quotations",
+      error: error.message,
+    });
+  }
+};

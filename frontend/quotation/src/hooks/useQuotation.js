@@ -100,16 +100,28 @@ const amountInWords = useMemo(() => {
       originalQuotation.customerTaxTreatment || 
       originalQuotation.taxTreatment ||
       'non_vat_registered';
-
+  
     const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
       originalQuotation.customerPlaceOfSupply || 
       originalQuotation.placeOfSupply ||
       'Dubai';
-
+  
     setCustomerTaxTreatment(taxTreatment);
     setCustomerPlaceOfSupply(placeOfSupply);
-
+  
+    // ✅ IMPORTANT: Properly load terms images from existing data
     const cloudinaryImages = originalQuotation.termsImages || [];
+    const formattedTermsImages = cloudinaryImages.map((img, index) => ({
+      id: img._id || `existing-img-${Date.now()}-${index}`,
+      url: img.url,
+      publicId: img.publicId,
+      fileName: img.fileName,
+      isTemp: false,
+      uploadedAt: img.uploadedAt
+    }));
+    
+    setTermsImages(formattedTermsImages);
+    
     const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
     setTcSections(sections);
     
@@ -421,75 +433,112 @@ const amountInWords = useMemo(() => {
       item.id === itemId ? { ...item, imagePaths: item.imagePaths.filter((_, i) => i !== idx) } : item
     )), []);
 
-  const handleTermsImagesUpload = useCallback((files) => {
-    const newImagesList = [];
-    const remainingSlots = 10 - termsImages.length;
-    
-    if (remainingSlots <= 0) {
-      setSnackbar({ show: true, message: 'Maximum 10 terms images allowed', type: 'error' });
-      return;
-    }
-    
-    const filesToProcess = files.slice(0, remainingSlots);
-    if (files.length > remainingSlots) {
-      setSnackbar({ show: true, message: `Only ${remainingSlots} more image(s) allowed`, type: 'warning' });
-    }
-    
-    filesToProcess.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        newImagesList.push({
-          id: `terms-img-${Date.now()}-${Math.random()}`,
-          base64: reader.result,
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-          isTemp: true
-        });
-        
-        if (newImagesList.length === filesToProcess.length) {
-          setTermsImages(prev => [...prev, ...newImagesList]);
+    const handleTermsImagesUpload = useCallback((files) => {
+      console.log('📸 Files received in handleTermsImagesUpload:', files);
+      
+      if (!files || files.length === 0) return;
+      
+      const remainingSlots = 10 - termsImages.length;
+      
+      if (remainingSlots <= 0) {
+        setSnackbar({ show: true, message: 'Maximum 10 terms images allowed', type: 'error' });
+        return;
+      }
+      
+      const filesToProcess = files.slice(0, remainingSlots);
+      if (files.length > remainingSlots) {
+        setSnackbar({ show: true, message: `Only ${remainingSlots} more image(s) allowed`, type: 'warning' });
+      }
+      
+      const newImagesList = [];
+      let processedCount = 0;
+      
+      filesToProcess.forEach((file) => {
+        // Check if file is a File object or already processed
+        if (file instanceof File) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            newImagesList.push({
+              id: `terms-img-${Date.now()}-${Math.random()}`,
+              url: reader.result,
+              base64: reader.result,
+              fileName: file.name,
+              fileType: file.type,
+              fileSize: file.size,
+              isTemp: true,
+              uploadedAt: new Date().toISOString()
+            });
+            
+            processedCount++;
+            
+            if (processedCount === filesToProcess.length) {
+              console.log('📸 All images processed, updating state with:', newImagesList);
+              setTermsImages(prev => {
+                const updated = [...prev, ...newImagesList];
+                console.log('Updated termsImages state:', updated);
+                return updated;
+              });
+            }
+          };
+          reader.onerror = () => {
+            console.error('Error reading file:', file.name);
+            processedCount++;
+          };
+          reader.readAsDataURL(file);
+        } else if (file.url || file.base64) {
+          // Already processed image object
+          newImagesList.push(file);
+          processedCount++;
+          
+          if (processedCount === filesToProcess.length) {
+            setTermsImages(prev => [...prev, ...newImagesList]);
+          }
         }
-      };
-      reader.readAsDataURL(file);
-    });
-  }, [termsImages.length]);
+      });
+    }, [termsImages.length]);
 
-  const removeTermsImage = useCallback((imageId) => {
-    setTermsImages(prev => prev.filter(img => img.id !== imageId));
-  }, []);
+    const removeTermsImage = useCallback((imageId) => {
+      console.log('🗑️ Removing terms image with ID:', imageId);
+      setTermsImages(prev => {
+        const filtered = prev.filter(img => img.id !== imageId);
+        console.log('Remaining terms images:', filtered.length);
+        return filtered;
+      });
+    }, []);
 
-  const cancelEdit = useCallback(() => {
-    if (!originalQuotation) return;
+    const cancelEdit = useCallback(() => {
+      if (!originalQuotation) return;
+      
+      const parsedData = parseQuotationData(originalQuotation);
+      delete parsedData.termsImage;
+      setQuotationData(parsedData);
+      setQuotationItems(parseQuotationItems(originalQuotation.items));
+      
+      // ✅ Reset termsImages from original data
+      const cloudinaryImages = originalQuotation.termsImages || [];
+      setTermsImages(cloudinaryImages);
+      
+      const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
+      setTcSections(sections);
+      
+      setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
+      setNewDocuments([]);
+      setNewImages({});
+      setEditingImgId(null);
+      setFieldErrors({});
+      setIsEditing(false);
+      
+      const taxTreatment = originalQuotation.customerId?.taxTreatment || 
+        originalQuotation.customerTaxTreatment || 
+        originalQuotation.taxTreatment;
     
-    const parsedData = parseQuotationData(originalQuotation);
-    delete parsedData.termsImage;
-    setQuotationData(parsedData);
-    setQuotationItems(parseQuotationItems(originalQuotation.items));
-    
-    const cloudinaryImages = originalQuotation.termsImages || [];
-    const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
-    setTcSections(sections);
-    
-    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
-    setNewDocuments([]);
-    setNewImages({});
-    setTermsImages([]);
-    setEditingImgId(null);
-    setFieldErrors({});
-    setIsEditing(false);
-    
-    const taxTreatment = originalQuotation.customerId?.taxTreatment || 
-      originalQuotation.customerTaxTreatment || 
-      originalQuotation.taxTreatment;
-
-    const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
-      originalQuotation.customerPlaceOfSupply || 
-      originalQuotation.placeOfSupply ||
-      'Dubai';
-    setCustomerTaxTreatment(taxTreatment);
-    setCustomerPlaceOfSupply(placeOfSupply);
-  }, [originalQuotation]);
+      const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
+        originalQuotation.customerPlaceOfSupply || 
+        originalQuotation.placeOfSupply ||
+        'Dubai';
+      setCustomerTaxTreatment(taxTreatment);
+      setCustomerPlaceOfSupply(placeOfSupply);
+    }, [originalQuotation]);
 
   const validateBeforeSave = useCallback(() => {
     if (!quotationItems.length) {
@@ -541,28 +590,46 @@ const amountInWords = useMemo(() => {
     return true;
   }, [quotationItems, quotationData]);
 
-  const extractTermsImagesFromSections = useCallback((sections) => {
+  const extractTermsImagesFromSections = useCallback((sections, currentTermsImages = []) => {
     const images = [];
     
-    if (!sections || !Array.isArray(sections)) return images;
+    // ✅ First, add existing Cloudinary images from termsImages state
+    if (currentTermsImages && currentTermsImages.length > 0) {
+      currentTermsImages.forEach((img) => {
+        if (img.url && !img.url.startsWith('data:')) {
+          images.push({
+            url: img.url,
+            publicId: img.publicId,
+            fileName: img.fileName
+          });
+        }
+      });
+    }
     
-    sections.forEach((section, sectionIndex) => {
-      if (section.images && Array.isArray(section.images) && section.images.length > 0) {
-        section.images.forEach((img, imgIndex) => {
-          if (img.url && img.url.startsWith('data:') && !img.publicId) {
-            images.push({
-              base64: img.url,
-              fileName: img.fileName || `section_${sectionIndex + 1}_img_${imgIndex + 1}`,
-              sectionIndex: sectionIndex,
-            });
-          }
-        });
-      }
-    });
+    // Also check sections for any additional images
+    if (sections && Array.isArray(sections)) {
+      sections.forEach((section) => {
+        if (section.images && Array.isArray(section.images)) {
+          section.images.forEach((img) => {
+            if (img.url && !img.url.startsWith('data:')) {
+              const exists = images.some(i => i.url === img.url);
+              if (!exists) {
+                images.push({
+                  url: img.url,
+                  publicId: img.publicId,
+                  fileName: img.fileName
+                });
+              }
+            }
+          });
+        }
+      });
+    }
     
     return images;
   }, []);
 
+  
   const handleSave = useCallback(async () => {
     if (!validateBeforeSave()) return;
   
@@ -610,8 +677,21 @@ const amountInWords = useMemo(() => {
   
       const taxValue = parseFloat(quotationData.tax) || 0;
       const discountValue = parseFloat(quotationData.discount) || 0;
-      const termsImagesData = extractTermsImagesFromSections(tcSections);
-      const termsHTMLWithoutImages = sectionsToHTMLWithoutImages(tcSections);
+  
+      // === BUILD RAW TERMS & CONDITIONS ===
+      let finalTermsAndConditions = "";
+  
+      if (tcSections && tcSections.length > 0) {
+        finalTermsAndConditions = tcSections
+          .map(sec => {
+            let text = "";
+            if (sec.heading?.trim()) text += sec.heading + "\n\n";
+            if (sec.content?.trim()) text += sec.content;
+            return text.trim();
+          })
+          .filter(Boolean)
+          .join("\n\n");
+      }
   
       const formattedItems = quotationItems.map((qi) => ({
         itemId: qi.itemId,
@@ -619,6 +699,14 @@ const amountInWords = useMemo(() => {
         unitPrice: Number(qi.unitPrice) || 0,
         description: qi.description || "",
       }));
+  
+      // ✅ IMPORTANT: Collect ALL terms images (both existing and new)
+      // Separate existing Cloudinary images from new base64 images
+      const existingCloudinaryImages = termsImages.filter(img => img.url && !img.url.startsWith('data:'));
+      const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
+      
+      console.log('📸 Existing Cloudinary images:', existingCloudinaryImages.length);
+      console.log('📸 New base64 images to upload:', newBase64Images.length);
   
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
@@ -637,8 +725,13 @@ const amountInWords = useMemo(() => {
         taxPercent: taxValue,
         discountPercent: discountValue,
         notes: quotationData.notes?.trim() || "",
-        termsAndConditions: termsHTMLWithoutImages,
-        termsImages: termsImagesData,
+        
+        // ✅ Send RAW text
+        termsAndConditions: finalTermsAndConditions,
+        
+        // ✅ Send ALL terms images - include both existing and new
+        termsImages: termsImages,
+        
         items: formattedItems,
         quotationImages: quotationImages,
         internalDocuments: documentData
@@ -649,30 +742,39 @@ const amountInWords = useMemo(() => {
           .map(doc => doc.description || '')
       };
   
-      // ✅ Get the current user role to know what status to expect
-      const userRole = useAppStore.getState().user?.role;
-      console.log('📝 Saving quotation. User role:', userRole);
-      console.log('📝 Current status before save:', originalQuotation?.status);
+      console.log("📤 Sending payload with termsImages count:", termsImages.length);
+      console.log("📤 Payload termsImages:", payload.termsImages.map(img => ({ 
+        hasUrl: !!img.url, 
+        isBase64: img.url?.startsWith('data:'),
+        fileName: img.fileName 
+      })));
   
       const result = await updateQuotation(originalQuotation._id, payload);
   
-      console.log('📝 Save result:', result);
-  
       if (result?.success) {
-        // ✅ Get the updated quotation from the result
         const updatedQuotation = result.quotation;
         
         if (updatedQuotation) {
-          console.log('📝 Updated quotation status:', updatedQuotation.status);
-          
-          // ✅ Update the local state with the new status
-          setQuotationData(prev => ({
-            ...prev,
-            status: updatedQuotation.status
-          }));
-          
-          // ✅ Also update the fetchedQ state
           setFetchedQ(updatedQuotation);
+          const parsedData = parseQuotationData(updatedQuotation);
+          delete parsedData.termsImage;
+          setQuotationData(parsedData);
+          setQuotationItems(parseQuotationItems(updatedQuotation.items));
+          
+          // Update terms images from server response
+          const serverTermsImages = updatedQuotation.termsImages || [];
+          setTermsImages(serverTermsImages.map(img => ({
+            id: img._id || `img-${Date.now()}`,
+            url: img.url,
+            publicId: img.publicId,
+            fileName: img.fileName,
+            isTemp: false
+          })));
+          
+          const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
+          setTcSections(sections);
+          
+          setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
         }
         
         setSnackbar({ show: true, message: "Quotation updated successfully!", type: 'success' });
@@ -681,30 +783,6 @@ const amountInWords = useMemo(() => {
         setNewImages({});
         setNewDocuments([]);
         setFieldErrors({});
-  
-        // ✅ Refresh the quotation data from API to ensure consistency
-        const refreshed = await quotationAPI.getById(id);
-        if (refreshed.data) {
-          console.log('📝 Refreshed quotation status:', refreshed.data.status);
-          setFetchedQ(refreshed.data);
-          
-          const parsedData = parseQuotationData(refreshed.data);
-          delete parsedData.termsImage;
-          setQuotationData(parsedData);
-          setQuotationItems(parseQuotationItems(refreshed.data.items));
-          
-          const cloudinaryImages = refreshed.data.termsImages || [];
-          const sections = htmlToSections(refreshed.data.termsAndConditions, cloudinaryImages);
-          setTcSections(sections);
-          
-          setInternalDocuments(parseInternalDocuments(refreshed.data.internalDocuments));
-          
-          // ✅ Force a refresh of the store's quotations list
-          const store = useAppStore.getState();
-          if (store.refetchQuotations) {
-            await store.refetchQuotations();
-          }
-        }
       } else {
         setSnackbar({ show: true, message: result?.error || "Failed to update quotation", type: 'error' });
       }
@@ -715,7 +793,8 @@ const amountInWords = useMemo(() => {
       setIsSaving(false);
     }
   }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, newDocuments,
-      internalDocuments, tcSections, updateQuotation, id, extractTermsImagesFromSections]);
+      internalDocuments, tcSections, termsImages, updateQuotation]);
+
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;

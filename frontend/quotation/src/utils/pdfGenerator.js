@@ -28,6 +28,26 @@ const getContact = (quotation) => {
 };
 
 /**
+ * Safely extract customer email
+ */
+const getCustomerEmail = (quotation) => {
+  if (quotation.customerSnapshot?.email) return quotation.customerSnapshot.email;
+  if (quotation.customerEmail) return quotation.customerEmail;
+  if (quotation.customerId?.email) return quotation.customerId.email;
+  return 'N/A';
+};
+
+/**
+ * Safely extract customer phone
+ */
+const getCustomerPhone = (quotation) => {
+  if (quotation.customerSnapshot?.phone) return quotation.customerSnapshot.phone;
+  if (quotation.customerPhone) return quotation.customerPhone;
+  if (quotation.customerId?.phone) return quotation.customerId.phone;
+  return 'N/A';
+};
+
+/**
  * Safely extract item name and description
  */
 const getItemDetails = (item) => {
@@ -56,15 +76,15 @@ const getItemDetails = (item) => {
 const buildTermsImagesHTML = (termsImages = []) => {
   if (!termsImages || termsImages.length === 0) return '';
   
-  let imagesHTML = '<div style="margin-top:12px;"><h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Reference Images</h3>';
+  let imagesHTML = '<div style="margin-top:16px;">';
   imagesHTML += '<div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:flex-start;">';
   
   termsImages.forEach((img, idx) => {
     if (img && img.url) {
       imagesHTML += `
-        <div style="text-align:center; max-width:200px;">
-          <img src="${img.url}" style="max-width:200px;max-height:150px;border-radius:8px;border:1px solid #e2e8f0;object-fit:contain;background:#f8fafc;" />
-          ${img.fileName ? `<div style="font-size:10px;color:#6b7280;margin-top:6px;word-break:break-all;">${img.fileName}</div>` : ''}
+        <div style="text-align:center; max-width:200px; border:1px solid #e2e8f0; border-radius:8px; padding:8px; background:#ffffff;">
+          <img src="${img.url}" style="max-width:180px;max-height:150px;border-radius:4px;object-fit:contain;" />
+          ${img.fileName ? `<div style="font-size:10px;color:#6b7280;margin-top:8px;word-break:break-all;">${img.fileName}</div>` : ''}
         </div>
       `;
     }
@@ -75,30 +95,86 @@ const buildTermsImagesHTML = (termsImages = []) => {
 };
 
 /**
+ * Format terms and conditions text with proper line breaks
+ */
+const formatTermsText = (text) => {
+  if (!text) return '';
+  
+  // ONLY trim the very beginning and end if they are pure whitespace
+  // This removes backend-added newlines without affecting user's intentional spaces
+  let cleaned = text;
+  
+  // Remove only if the first character is a newline that wasn't intended
+  if (cleaned.startsWith('\n')) {
+    cleaned = cleaned.replace(/^\n+/, '');
+  }
+  
+  // Remove only if the last character is a newline that wasn't intended
+  if (cleaned.endsWith('\n')) {
+    cleaned = cleaned.replace(/\n+$/, '');
+  }
+  
+  // Preserve ALL other whitespace exactly as user entered
+  return cleaned.replace(/\n/g, '<br>');
+};
+
+/**
  * Build HTML for PDF generation
  */
 export const buildPDFHTML = async (quotation, options = {}) => {
   const { newImages = {} } = options;
-
+  console.log('🔍 PDF Generator received termsAndConditions:', {
+    raw: quotation.termsAndConditions,
+    length: quotation.termsAndConditions?.length,
+    hasLeadingSpace: quotation.termsAndConditions?.startsWith(' '),
+    firstChar: quotation.termsAndConditions?.charAt(0)
+  });
   // Extract basic fields with fallbacks
   const items = quotation.items || [];
   const taxPercent = quotation.taxPercent || quotation.tax || 0;
   const discountPercent = quotation.discountPercent || quotation.discount || 0;
+  
+  // Customer details
   const customerName = getCustomerName(quotation);
   const contact = getContact(quotation);
+  const customerEmail = getCustomerEmail(quotation);
+  const customerPhone = getCustomerPhone(quotation);
+  
+  // Dates
   const date = quotation.date || new Date().toISOString().split('T')[0];
   const expiryDate = quotation.expiryDate || '';
+  
+  // Project and reference fields
   const projectName = quotation.projectName || '';
   const tl = quotation.tl || '';
   const trn = quotation.trn || '';
   const ourRef = quotation.ourRef || '';
   const ourContact = quotation.ourContact || '';
+  const salesManagerEmail = quotation.salesManagerEmail || '';
   const salesOffice = quotation.salesOffice || '';
   const paymentTerms = quotation.paymentTerms || '';
   const deliveryTerms = quotation.deliveryTerms || '';
   const notes = quotation.notes || '';
-  const termsAndConditions = quotation.termsAndConditions || '';
-  const termsImages = quotation.termsImages || [];  
+  
+  // Terms and Conditions
+  let termsAndConditions = quotation.termsAndConditions || '';
+  if (!termsAndConditions && quotation.tcSections && quotation.tcSections.length > 0) {
+    termsAndConditions = quotation.tcSections
+      .map(sec => {
+        let text = "";
+        if (sec.heading?.trim()) text += sec.heading + "\n\n";
+        if (sec.content?.trim()) text += sec.content;
+        return text.trim();
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  }
+  
+  let termsImages = quotation.termsImages || [];
+  if (termsImages.length === 0 && quotation.tcSections && quotation.tcSections[0]?.images) {
+    termsImages = quotation.tcSections[0].images;
+  }
+  
   const quotationNumber = quotation.quotationNumber || '';
   const currency = quotation.currency?.code || 'AED';
   const companySnapshot = quotation.companySnapshot || null;
@@ -114,7 +190,6 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const approvedByName = quotation.approvedBy?.name || '—';
   const approvedByEmail = quotation.approvedBy?.email || '';
   const approvedAt = quotation.approvedAt ? fmtDate(quotation.approvedAt) : '—';
-
 
   // Convert header image to base64
   const headerBase64 = await imageToBase64(headerImage);
@@ -153,15 +228,12 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const tax = Number(taxPercent) || 0;
   const discount = Number(discountPercent) || 0;
   
-
   const discAmt = (subtotal * discount) / 100;
   const subtotalAfterDiscount = subtotal - discAmt;
   const taxAmt = (subtotalAfterDiscount * tax) / 100;
-  const grandTotal = subtotalAfterDiscount + taxAmt ;
+  const grandTotal = subtotalAfterDiscount + taxAmt;
   
-  // Optional: round to 2 decimals (recommended for currency)
   const roundedTotal = Number(grandTotal.toFixed(2));
-  
   const amountInWords = numberToWords(roundedTotal);
 
   // Split items for multi-page
@@ -209,7 +281,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <tr style="background:#000;color:white;font-weight:700;">
       <td colspan="3" style="border:none;padding:8px;"></td>
       <td style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
-      <td style="text-align:right;padding:12px 8px;font-size:12px;">${grandTotal.toFixed(2)}</td>
+      <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
     </tr>`;
 
   // Table header
@@ -219,68 +291,68 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:50px;">Qty</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:70px;">Unit Price</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:80px;">Amount</th>
-  </tr></thead>`;
+  <tr></thead>`;
 
-  // ✅ Build terms images gallery HTML
   const termsImagesHTML = buildTermsImagesHTML(termsImages);
+  const formattedTermsText = formatTermsText(termsAndConditions);
 
   // Company footer
-const companyInfo = companySnapshot;
- const isCreatorAdmin = createdByRole === 'admin';
-const showReviewedBy = !isCreatorAdmin; // Only show Reviewed By if creator is NOT admin
+  const companyInfo = companySnapshot;
+  const isCreatorAdmin = createdByRole === 'admin';
+  const showReviewedBy = !isCreatorAdmin;
 
-const companyFooter = `
-  <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
-    <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
-    <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
-  </div>
-  
-  <!-- Approval Chain Section -->
-  <div style="margin-top:12px;padding-top:16px;">
-    <table style="width:100%;border-collapse:collapse;font-size:10px;">
-      <thead>
-        <tr>
-          <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Prepared By (Requested)</th>
-          ${showReviewedBy ? `
-            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Reviewed By</th>
-          ` : ''}
-          <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Approved By</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="padding:8px 6px;vertical-align:top;">
-            <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
-            <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
-            <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
-          </td>
-          ${showReviewedBy ? `
+  const companyFooter = `
+    <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
+      <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
+      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
+    </div>
+    
+    <!-- Approval Chain Section -->
+    <div style="margin-top:12px;padding-top:16px;">
+      <table style="width:100%;border-collapse:collapse;font-size:10px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Prepared By (Requested)</th>
+            ${showReviewedBy ? `
+              <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Reviewed By</th>
+            ` : ''}
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0;color:#64748b;font-weight:600;">Approved By</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
             <td style="padding:8px 6px;vertical-align:top;">
-              ${opsReviewedByName !== '—' ? `
-                <div style="font-weight:600;color:#0f172a;">${opsReviewedByName}</div>
-                <div style="font-size:9px;color:#64748b;">${opsReviewedByEmail}</div>
-                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${opsReviewedAt}</div>
+              <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
+              <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
+              <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
+            </td>
+            ${showReviewedBy ? `
+              <td style="padding:8px 6px;vertical-align:top;">
+                ${opsReviewedByName !== '—' ? `
+                  <div style="font-weight:600;color:#0f172a;">${opsReviewedByName}</div>
+                  <div style="font-size:9px;color:#64748b;">${opsReviewedByEmail}</div>
+                  <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${opsReviewedAt}</div>
+                ` : `
+                  <div style="color:#94a3b8;font-style:italic;">Not reviewed yet</div>
+                `}
+              </td>
+            ` : ''}
+            <td style="padding:8px 6px;vertical-align:top;">
+              ${approvedByName !== '—' ? `
+                <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
+                <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
+                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
               ` : `
-                <div style="color:#94a3b8;font-style:italic;">Not reviewed yet</div>
+                <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
               `}
             </td>
-          ` : ''}
-          <td style="padding:8px 6px;vertical-align:top;">
-            ${approvedByName !== '—' ? `
-              <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
-              <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
-              <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
-            ` : `
-              <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
-            `}
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-`;
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
 
-  // Build complete HTML
+  // Build complete HTML with ALL fields
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -292,6 +364,7 @@ const companyFooter = `
     @page{size:A4;margin:5mm;}
     thead{display:table-row-group;}
     @media print{body{margin:0;padding:0;}.page-break{page-break-before:always;}thead{display:table-row-group;}}
+    .terms-content{white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.5; text-indent: 0;margin: 0;padding: 0;}
   </style>
 </head>
 <body>
@@ -313,20 +386,24 @@ const companyFooter = `
       </div>
     </div>
 
-    <!-- Details Grid -->
+    <!-- Details Grid - LEFT SIDE (Customer Info) -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
+      <!-- Left Column - Customer Details -->
       <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
         <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Customer</span><span>:</span><span>${customerName}</span>
-        <span style="font-weight:600;color:#4b5563;">Contact</span><span>:</span><span>${contact}</span>
+        <span style="font-weight:600;color:#4b5563;">Customer Email</span><span>:</span><span>${customerEmail || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Customer Phone</span><span>:</span><span>${customerPhone || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Date</span><span>:</span><span>${fmtDate(date)}</span>
         <span style="font-weight:600;color:#4b5563;">Expiry Date</span><span>:</span><span>${fmtDate(expiryDate)}</span>
         <span style="font-weight:600;color:#4b5563;">TL</span><span>:</span><span>${tl || "N/A"}</span>
       </div>
+      
+      <!-- Right Column - Sales & Reference Details -->
       <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
+        <span style="font-weight:600;color:#4b5563;">Sales Email</span><span>:</span><span>${salesManagerEmail || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Sales Contact</span><span>:</span><span>${ourContact || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Our Ref</span><span>:</span><span>${ourRef || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Our Contact</span><span>:</span><span>${ourContact || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Sales Office</span><span>:</span><span>${salesOffice || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Payment</span><span>:</span><span>${paymentTerms || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Delivery</span><span>:</span><span>${deliveryTerms || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">TRN</span><span>:</span><span>${trn || "N/A"}</span>
@@ -372,15 +449,20 @@ const companyFooter = `
       </div>
     ` : ''}
 
-    <!-- Terms & Conditions -->
+    <!-- Terms & Conditions WITH IMAGES INSIDE -->
     ${termsAndConditions ? `
-      <div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Terms & Conditions</h3>
-        <div style="font-size:10px;color:#4b5563;line-height:1.5;">${termsAndConditions}</div>
-      </div>
-    ` : ''}
-
- 
+  <div style="margin-bottom:16px;">
+    <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
+    <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;">
+      ${termsAndConditions ? `
+        <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">
+          ${formattedTermsText}
+        </div>
+      ` : ''}
+      ${termsImagesHTML}
+    </div>
+  </div>
+` : ''}
 
     <!-- Footer -->
     ${companyFooter}

@@ -91,14 +91,13 @@ const getCompanyName = (selectedCompany, companies) => {
   return company?.name || DEFAULT_COMPANY_NAME;
 };
 
-const generateQuotationNumber = () => {
-  const d = new Date();
-  const yy = d.getFullYear().toString().slice(-2);
-  const mm = (d.getMonth() + 1).toString().padStart(2, "0");
-  const dd = d.getDate().toString().padStart(2, "0");
-  const rn = Math.floor(Math.random() * 1000).toString().padStart(3, "0");
-  return `QT-${yy}${mm}${dd}-${rn}`;
+const generateQuotationNumber = (companyCode) => {
+  const prefix = companyCode || 'QT';
+  const timestamp = Date.now();
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `${prefix}-${timestamp}-${random}`;
 };
+
 
 // ============================================================
 // MAIN COMPONENT
@@ -123,6 +122,15 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const { addQuotation } = useQuotations();
   
   // State
+  const [quotationNumber] = useState(() => {
+    const companyCode = typeof selectedCompany === 'object' 
+      ? selectedCompany?.code 
+      : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany)?.code;
+    const prefix = companyCode || 'QT';
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `${prefix}-${timestamp}-${random}`;
+  });
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [quotationItems, setQuotationItems] = useState([]);
   const [quotationData, setQuotationData] = useState({
@@ -239,7 +247,6 @@ const grandTotal = useMemo(() =>
 );
 
 const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
-const quotationNumber = useMemo(generateQuotationNumber, []);
 const companyName = useMemo(() => getCompanyName(selectedCompany, companies), [selectedCompany, companies]);
 const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldErrors).some(e => e && Object.keys(e).length > 0);
 
@@ -410,37 +417,58 @@ const totalImageCount = useMemo(() => {
   }, []);
   
   const handleSubmit = useCallback(async () => {
-    console.log(">>>>>>>>>>><<<<<<<<<", quotationData);
     if (!validateAll()) return;
     if (!selectedCompany) {
       showSnack("Please select a company", "error");
       return;
     }
-    
+  
     setIsSaving(true);
     setSaveProgress(10);
-    setSaveStep("Validating data...");
-    setImageCount(totalImageCount);
-    
+    setSaveStep("Preparing data...");
+  
     try {
-      setSaveProgress(20);
-      setSaveStep("Formatting items...");
+      // === BUILD RAW TERMS & CONDITIONS ===
+      let finalTermsAndConditions = "";
+  
+      if (tcSections && tcSections.length > 0) {
+        finalTermsAndConditions = tcSections
+          .map(sec => {
+            let text = "";
+            if (sec.heading?.trim()) text += sec.heading + "\n\n";
+            if (sec.content?.trim()) text += sec.content;
+            return text.trim();
+          })
+          .filter(Boolean)
+          .join("\n\n");
+      }
+  
+      // === EXTRACT TERMS IMAGES FOR SAVING ===
+      // Extract only images that are NOT base64 (already uploaded to Cloudinary)
+      // For new images, we need to upload them first or send base64 to backend
+      const termsImagesForSave = termsImages
+        .filter(img => img.url && !img.url.startsWith('data:')) // Only keep Cloudinary URLs
+        .map(img => ({
+          url: img.url,
+          publicId: img.publicId,
+          fileName: img.fileName,
+          uploadedAt: img.uploadedAt || new Date().toISOString()
+        }));
+  
+      // Process new base64 images for upload
+      const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
       
-      // Format items
+      // Format items with images
       const formattedItems = quotationItems.map(item => ({
-        itemId: item.zohoId || item.itemId,
-        zohoId: item.zohoId || item.itemId,
+        itemId: item.itemId || item.zohoId,
         name: item.name,
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
         imagePaths: [...(item.imagePaths || []), ...(item.newImages || [])]
       }));
-      
-      setSaveProgress(40);
-      setSaveStep("Processing images...");
-      
-      // Create quotationImages object
+  
+      // Build quotation images object
       const quotationImages = {};
       quotationItems.forEach((item, index) => {
         const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
@@ -448,52 +476,14 @@ const totalImageCount = useMemo(() => {
           quotationImages[index] = allImages;
         }
       });
-      
-      setSaveProgress(60);
-      setSaveStep("Extracting terms images...");
-      
-      // Extract terms images from tcSections
-      const allTermsImages = [];
-      if (tcSections && tcSections.length > 0) {
-        tcSections.forEach((section, sectionIdx) => {
-          if (section.images && section.images.length > 0) {
-            section.images.forEach((img, imgIdx) => {
-              if (img.url) {
-                allTermsImages.push({
-                  url: img.url,
-                  fileName: img.fileName || `image_${sectionIdx + 1}_${imgIdx + 1}`,
-                  sectionIndex: sectionIdx,
-                  isTemp: img.isTemp || false
-                });
-              }
-            });
-          }
-        });
-      }
-      
-      setSaveProgress(70);
-      setSaveStep("Building terms HTML...");
-      
-      // Create clean sections without images
-      const cleanSections = tcSections.map(section => ({
-        heading: section.heading || '',
-        points: (section.points || []).filter(p => p && p.text && p.text.trim()).map(p => p.text),
-      }));
-      
-      const termsHTML = sectionsToHTMLWithoutImages(cleanSections);
-      
-      setSaveProgress(80);
-      setSaveStep("Saving to database...");
-      
+  
       const quotation = {
-        companyId: selectedCompany,
+        quotationNumber,
+        companyId: typeof selectedCompany === 'object' ? selectedCompany._id : selectedCompany,
         currencyCode: selectedCurrency,
         customerId: customer._id,
         customer: quotationData.customer?.trim(),
         contact: quotationData.contact?.trim() || "",
-        customerCountry: customer.country || "UAE",
-        date: quotationData.date,
-        expiryDate: quotationData.expiryDate,
         projectName: quotationData.projectName?.trim(),
         ourRef: quotationData.ourRef?.trim() || "",
         ourContact: quotationData.ourContact?.trim() || "",
@@ -501,32 +491,37 @@ const totalImageCount = useMemo(() => {
         paymentTerms: quotationData.paymentTerms?.trim() || "",
         deliveryTerms: quotationData.deliveryTerms?.trim() || "",
         tl: quotationData.tl?.trim() || "",
-        trn: quotationData.trn?.trim() || customer?.trn || "",
+        trn: quotationData.trn?.trim() || "",
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes?.trim() || "",
-        termsAndConditions: termsHTML,
+        
+        // ✅ RAW TEXT - No HTML
+        termsAndConditions: finalTermsAndConditions,
+        
+        // ✅ Send both existing and new images
+        termsImages: newBase64Images, // Send base64 images to backend for Cloudinary upload
+        existingTermsImages: termsImagesForSave, // Send existing Cloudinary URLs
+        
         items: formattedItems,
         quotationImages: quotationImages,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
-        termsImages: allTermsImages,
         queryDate: quotationData.queryDate
       };
-    
-      
-      setSaveProgress(90);
-      setSaveStep("Finalizing...");
-      
+  
+      console.log("📤 Final termsAndConditions (raw):", JSON.stringify(finalTermsAndConditions).substring(0, 300) + "...");
+      console.log("📸 Terms images count:", termsImages.length);
+      console.log("📸 New base64 images:", newBase64Images.length);
+      console.log("📸 Existing cloudinary images:", termsImagesForSave.length);
+  
       const result = await addQuotation(quotation);
-      
+  
       if (result?.success) {
-        setSaveProgress(100);
-        setSaveStep("Complete!");
-        showSnack("Quotation created successfully!", "success");
-        const { refetchQuotations } = useAppStore.getState();
-        await refetchQuotations();
-        setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1500);
+        // Clear terms images after successful save
+        setTermsImages([]);
+        showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
+        setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1200);
       } else {
         showSnack(result?.error || "Failed to create quotation", "error");
       }
@@ -538,8 +533,7 @@ const totalImageCount = useMemo(() => {
       setSaveProgress(0);
       setSaveStep("");
     }
-  }, [validateAll, selectedCompany, showSnack, selectedCurrency, customer, quotationData, quotationItems, uploadedDocuments, tcSections, addQuotation, user, navigate, totalImageCount]);
-
+  }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency]);
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
     setIsExporting(true);

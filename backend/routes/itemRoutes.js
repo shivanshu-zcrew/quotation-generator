@@ -34,6 +34,8 @@ router.post('/sync', itemController.syncItems);
 // GET sync status (check if sync is in progress)
 router.get('/sync/status', itemController.getSyncStatus);
 
+router.get('/sync/progress', itemController.getSyncProgress);
+
 // POST clear items cache
 router.post('/clear-cache', itemController.clearItemsCache);
 

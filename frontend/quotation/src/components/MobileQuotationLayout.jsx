@@ -1,5 +1,5 @@
 // components/mobile/MobileQuotationLayout.jsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Upload, FileText, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import ValidatedInput from './ValidatedInput';
 import TermsEditor, { TermsViewer } from './TermsCondition';
@@ -7,15 +7,22 @@ import Snackbar from './Snackbar';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { fmtDate } from '../utils/formatters';
 import { inputStyle } from './QuotationLayout';
+import { useAppStore } from '../services/store'; 
 
 import headerImage from '../assets/header.png';
+
 // ============================================================
-// Mobile Field Component
+// Mobile Field Component (Updated with read-only support)
 // ============================================================
-const MobileField = ({ label, field, type, value, isEditing, onChange, error }) => (
+const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false }) => (
   <div style={styles.fieldCard}>
-    <label style={styles.fieldLabel}>{label}</label>
-    {isEditing ? (
+    <label style={styles.fieldLabel}>
+      {label}
+      {isReadOnly && isEditing && (
+        <span style={{ marginLeft: '8px', fontSize: '10px', color: '#6b7280' }}>🔒 Auto-filled</span>
+      )}
+    </label>
+    {isEditing && !isReadOnly ? (
       <input
         type={type}
         value={value || ''}
@@ -27,14 +34,19 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error }) 
         }}
       />
     ) : (
-      <div style={styles.fieldValue}>{type === 'date' ? fmtDate(value) : (value || 'N/A')}</div>
+      <div style={{
+        ...styles.fieldValue,
+        ...(isReadOnly && isEditing ? { backgroundColor: '#f3f4f6', padding: '0.5rem 0.75rem', borderRadius: '0.5rem' } : {})
+      }}>
+        {type === 'date' ? fmtDate(value) : (value || 'N/A')}
+      </div>
     )}
     {error && <div style={styles.fieldError}>{error}</div>}
   </div>
 );
 
 // ============================================================
-// Mobile Item Card Component
+// Mobile Item Card Component (Keep as is)
 // ============================================================
 const MobileItemCard = ({ 
   item, index, isEditing, onUpdate, onRemove, onAddImages,
@@ -222,7 +234,7 @@ const MobileItemCard = ({
 };
 
 // ============================================================
-// Mobile Document Section Component
+// Mobile Document Section Component (Keep as is)
 // ============================================================
 const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEditing, formatFileSize, getFileIcon }) => {
   const [expanded, setExpanded] = useState(false);
@@ -307,7 +319,7 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEd
 };
 
 // ============================================================
-// Main Mobile Quotation Layout Component
+// Main Mobile Quotation Layout Component (UPDATED)
 // ============================================================
 const MobileQuotationLayout = ({
   isEditing,
@@ -349,6 +361,28 @@ const MobileQuotationLayout = ({
   handleTaxChange,
 }) => {
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
+  
+  // Get current user from store
+  const currentUser = useAppStore((state) => state.user);
+
+  // Auto-populate sales info from logged-in user
+  useEffect(() => {
+    console.log('Mobile - Auto-populate check:', { isEditing, currentUser });
+    
+    if (isEditing && currentUser) {
+      // Auto-populate Sales Email ONLY if it's empty
+      if (!quotationData.salesManagerEmail && currentUser.email) {
+        console.log('Mobile - Setting sales email to:', currentUser.email);
+        onDataChange('salesManagerEmail', currentUser.email);
+      }
+      
+      // Auto-populate Sales Contact ONLY if it's empty
+      if (!quotationData.ourContact && currentUser.name) {
+        console.log('Mobile - Setting sales contact to:', currentUser.name);
+        onDataChange('ourContact', currentUser.name);
+      }
+    }
+  }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, onDataChange]);
 
   const showLocalSnack = (message, type = 'error') => {
     setSnackbar({ show: true, message, type });
@@ -366,23 +400,27 @@ const MobileQuotationLayout = ({
     }
   };
 
+  // Updated field definitions with correct field names
   const LEFT_FIELDS = [
     ['Project Name', 'projectName', 'text'],
     ['Customer', 'customer', 'text'],
     ['Contact', 'contact', 'text'],
     ['Date', 'date', 'date'],
     ['Expiry Date', 'expiryDate', 'date'],
-    ['Sales Manager Email', 'salesOffice', 'text'],
   ];
 
+  // Updated RIGHT_FIELDS with correct field names and read-only config
   const RIGHT_FIELDS = [
-    ['Our Ref', 'ourRef', 'text'],
-    ['Our Contact', 'ourContact', 'text'],
-    ['Payment', 'paymentTerms', 'text'],
-    ['Delivery', 'deliveryTerms', 'text'],
-    ['TL', 'tl', 'text'],
-    ['TRN', 'trn', 'text'],
+    ['Sales Email', 'salesManagerEmail', 'text', true], // Read-only
+    ['Sales Contact', 'ourContact', 'text', true], // Read-only
+    ['Payment', 'paymentTerms', 'text', false],
+    ['Delivery', 'deliveryTerms', 'text', false],
+    ['TL', 'tl', 'text', false],
+    ['TRN', 'trn', 'text', false],
   ];
+
+  // Read-only fields array
+  const READONLY_FIELDS = ['customer', 'salesManagerEmail', 'ourContact'];
 
   return (
     <div style={styles.container}>
@@ -412,32 +450,43 @@ const MobileQuotationLayout = ({
         </div>
       </div>
 
-      {/* Form Fields */}
+      {/* Form Fields - Split into two columns for better mobile layout */}
       <div style={styles.fieldsSection}>
-        {LEFT_FIELDS.map(([label, field, type]) => (
-          <MobileField
-            key={field}
-            label={label}
-            field={field}
-            type={type}
-            value={quotationData[field]}
-            isEditing={isEditing}
-            onChange={handleFieldChange}
-            error={headerErrors[field]}
-          />
-        ))}
-        {RIGHT_FIELDS.map(([label, field, type]) => (
-          <MobileField
-            key={field}
-            label={label}
-            field={field}
-            type={type}
-            value={quotationData[field]}
-            isEditing={isEditing}
-            onChange={handleFieldChange}
-            error={headerErrors[field]}
-          />
-        ))}
+        {/* Left Column Fields */}
+        <div style={styles.column}>
+          <h4 style={styles.columnTitle}>Quotation Details</h4>
+          {LEFT_FIELDS.map(([label, field, type]) => (
+            <MobileField
+              key={field}
+              label={label}
+              field={field}
+              type={type}
+              value={quotationData[field]}
+              isEditing={isEditing}
+              onChange={handleFieldChange}
+              error={headerErrors[field]}
+              isReadOnly={READONLY_FIELDS.includes(field)}
+            />
+          ))}
+        </div>
+        
+        {/* Right Column Fields */}
+        <div style={styles.column}>
+          <h4 style={styles.columnTitle}>Sales & Payment Info</h4>
+          {RIGHT_FIELDS.map(([label, field, type, isReadOnly]) => (
+            <MobileField
+              key={field}
+              label={label}
+              field={field}
+              type={type}
+              value={quotationData[field]}
+              isEditing={isEditing}
+              onChange={handleFieldChange}
+              error={headerErrors[field]}
+              isReadOnly={isReadOnly || READONLY_FIELDS.includes(field)}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Items Section */}
@@ -561,22 +610,25 @@ const MobileQuotationLayout = ({
 };
 
 // ============================================================
-// Styles
+// Styles (Keep your existing styles)
 // ============================================================
 const styles = {
   container: {
     backgroundColor: 'white',
+    borderRadius: '0.75rem',
     padding: '1rem',
-    minHeight: '100vh',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
   },
   headerImage: {
     width: '100%',
     height: '100px',
-    backgroundColor: '#f8fafc',
-    border: '2px solid #000',
-    borderRadius: '8px',
-    overflow: 'hidden',
     marginBottom: '1rem',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: '#f8fafc',
+    borderRadius: '0.5rem',
   },
   headerImageImg: {
     width: '100%',
@@ -586,9 +638,9 @@ const styles = {
   },
   titleSection: {
     textAlign: 'center',
+    marginBottom: '1.5rem',
     borderBottom: '2px solid #000',
     paddingBottom: '1rem',
-    marginBottom: '1rem',
   },
   title: {
     fontSize: '1.5rem',
@@ -596,8 +648,8 @@ const styles = {
     margin: 0,
   },
   quoteNumber: {
-    fontSize: '0.75rem',
     color: '#6b7280',
+    fontSize: '0.75rem',
     margin: '0.25rem 0',
   },
   validUntil: {
@@ -605,83 +657,81 @@ const styles = {
   },
   validUntilLabel: {
     fontSize: '0.7rem',
+    fontWeight: '600',
     color: '#6b7280',
     display: 'block',
   },
   expiryDate: {
-    fontSize: '0.9rem',
-    fontWeight: '600',
+    fontSize: '0.875rem',
+    fontWeight: '700',
   },
   errorText: {
-    fontSize: '0.65rem',
     color: '#dc2626',
+    fontSize: '0.7rem',
     marginTop: '0.25rem',
   },
   fieldsSection: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.75rem',
     marginBottom: '1.5rem',
   },
+  column: {
+    marginBottom: '1rem',
+  },
+  columnTitle: {
+    fontSize: '0.8rem',
+    fontWeight: '600',
+    color: '#4b5563',
+    marginBottom: '0.5rem',
+    paddingBottom: '0.25rem',
+    borderBottom: '1px solid #e5e7eb',
+  },
   fieldCard: {
-    backgroundColor: '#f8fafc',
-    padding: '0.75rem',
-    borderRadius: '8px',
-    border: '1px solid #e2e8f0',
+    marginBottom: '0.75rem',
   },
   fieldLabel: {
+    display: 'block',
     fontSize: '0.7rem',
     fontWeight: '600',
-    color: '#6b7280',
+    color: '#374151',
     marginBottom: '0.25rem',
-    display: 'block',
-    textTransform: 'uppercase',
   },
   fieldValue: {
     fontSize: '0.875rem',
-    fontWeight: '500',
     color: '#1f2937',
+    padding: '0.25rem 0',
   },
   fieldError: {
     fontSize: '0.65rem',
     color: '#dc2626',
     marginTop: '0.25rem',
   },
-  sectionTitle: {
-    fontSize: '0.875rem',
-    fontWeight: '700',
-    marginBottom: '0.75rem',
-    textTransform: 'uppercase',
-  },
   itemsSection: {
     marginBottom: '1.5rem',
   },
+  sectionTitle: {
+    fontSize: '0.875rem',
+    fontWeight: '700',
+    marginBottom: '1rem',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
   itemCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: '12px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '0.5rem',
     marginBottom: '0.75rem',
-    border: '1px solid #e2e8f0',
     overflow: 'hidden',
   },
   itemCardHeader: {
+    padding: '0.75rem',
+    backgroundColor: '#f8fafc',
     display: 'flex',
     alignItems: 'center',
-    padding: '1rem',
+    gap: '0.5rem',
     cursor: 'pointer',
-    gap: '0.75rem',
-    backgroundColor: '#fff',
   },
   itemCardNumber: {
-    width: '32px',
-    height: '32px',
-    backgroundColor: '#000',
-    color: 'white',
-    borderRadius: '50%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '0.75rem',
-    fontWeight: 'bold',
+    fontWeight: '600',
+    fontSize: '0.8rem',
+    color: '#6b7280',
   },
   itemCardTitle: {
     flex: 1,
@@ -691,57 +741,51 @@ const styles = {
     fontSize: '0.875rem',
   },
   itemCardTotal: {
-    fontSize: '0.7rem',
-    color: '#6b7280',
-    marginTop: '0.25rem',
+    fontSize: '0.75rem',
+    color: '#059669',
+    fontWeight: '600',
   },
   itemCardBody: {
-    padding: '1rem',
-    borderTop: '1px solid #e2e8f0',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.75rem',
+    padding: '0.75rem',
+    borderTop: '1px solid #e5e7eb',
   },
   itemField: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.25rem',
+    marginBottom: '0.75rem',
   },
   itemLabel: {
+    display: 'block',
     fontSize: '0.7rem',
     fontWeight: '600',
+    color: '#374151',
+    marginBottom: '0.25rem',
+  },
+  itemDescription: {
+    fontSize: '0.8rem',
     color: '#6b7280',
-    textTransform: 'uppercase',
   },
   itemRow: {
     display: 'flex',
     gap: '0.75rem',
+    marginBottom: '0.75rem',
   },
   itemValue: {
     fontSize: '0.875rem',
     fontWeight: '500',
-    padding: '0.3rem 0.5rem',
-    backgroundColor: '#f1f5f9',
-    borderRadius: '6px',
   },
   amountRow: {
     display: 'flex',
     justifyContent: 'space-between',
-    padding: '0.5rem 0',
-    borderTop: '1px solid #e2e8f0',
-    borderBottom: '1px solid #e2e8f0',
+    alignItems: 'center',
+    paddingTop: '0.5rem',
+    borderTop: '1px solid #e5e7eb',
   },
   amountValue: {
     fontSize: '0.875rem',
     fontWeight: '700',
     color: '#059669',
   },
-  itemDescription: {
-    fontSize: '0.8rem',
-    color: '#6b7280',
-  },
   imageSection: {
-    marginTop: '0.25rem',
+    marginBottom: '0.75rem',
   },
   imageGrid: {
     display: 'flex',
@@ -751,17 +795,16 @@ const styles = {
   },
   imageContainer: {
     position: 'relative',
-    width: '70px',
-    height: '70px',
-    borderRadius: '8px',
+    width: '80px',
+    height: '80px',
+    borderRadius: '0.375rem',
+    overflow: 'hidden',
     border: '1px solid #d1d5db',
-    overflow: 'visible',
   },
   itemImage: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
-    borderRadius: '8px',
   },
   removeImgBtnStyle: {
     position: 'absolute',
@@ -771,193 +814,171 @@ const styles = {
     color: 'white',
     border: '2px solid white',
     borderRadius: '50%',
-    width: '24px',
-    height: '24px',
+    width: '20px',
+    height: '20px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: 'bold',
-    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-    zIndex: 10,
   },
   addImageBtn: {
     color: 'white',
-    padding: '0.4rem 0.875rem',
-    borderRadius: '8px',
+    padding: '0.35rem 0.75rem',
+    borderRadius: '0.375rem',
     border: 'none',
-    fontSize: '0.75rem',
+    cursor: 'pointer',
+    fontSize: '0.7rem',
     display: 'inline-flex',
     alignItems: 'center',
     gap: '0.4rem',
-    cursor: 'pointer',
   },
   imageUploadLabel: {
     display: 'block',
-    marginTop: '0.5rem',
     padding: '0.5rem',
     border: '2px dashed #d1d5db',
-    borderRadius: '8px',
+    borderRadius: '0.375rem',
     textAlign: 'center',
-    fontSize: '0.7rem',
     cursor: 'pointer',
+    fontSize: '0.75rem',
+    color: '#6b7280',
   },
   deleteItemBtn: {
     backgroundColor: '#ef4444',
     color: 'white',
     border: 'none',
-    borderRadius: '8px',
-    padding: '0.6rem',
-    fontSize: '0.75rem',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '0.4rem',
+    borderRadius: '0.375rem',
+    padding: '0.5rem',
     cursor: 'pointer',
+    fontSize: '0.75rem',
     width: '100%',
-  },
-  addItemBtn: {
-    width: '100%',
-    backgroundColor: '#2563eb',
-    color: 'white',
-    padding: '0.75rem',
-    borderRadius: '10px',
-    border: 'none',
+    marginTop: '0.5rem',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '0.5rem',
-    cursor: 'pointer',
-    fontSize: '0.875rem',
-    marginTop: '0.5rem',
   },
   totalsSection: {
     backgroundColor: '#f8fafc',
-    borderRadius: '12px',
-    padding: '1rem',
+    borderRadius: '0.5rem',
+    padding: '0.75rem',
     marginBottom: '1rem',
-    border: '1px solid #e2e8f0',
   },
   totalRow: {
     display: 'flex',
     justifyContent: 'space-between',
     padding: '0.5rem 0',
     fontSize: '0.875rem',
-    borderBottom: '1px solid #e2e8f0',
+    borderBottom: '1px solid #e5e7eb',
   },
   grandTotalRow: {
     display: 'flex',
     justifyContent: 'space-between',
-    padding: '0.75rem 0 0',
+    padding: '0.75rem 0 0.5rem',
     fontSize: '1rem',
-    fontWeight: 'bold',
-    marginTop: '0.5rem',
-    paddingTop: '0.75rem',
-    borderTop: '2px solid #000',
+    fontWeight: '700',
+    color: '#059669',
   },
   taxEditSection: {
-    backgroundColor: '#eff6ff',
-    borderRadius: '12px',
-    padding: '1rem',
+    backgroundColor: '#f0f9ff',
+    borderRadius: '0.5rem',
+    padding: '0.75rem',
     marginBottom: '1rem',
   },
   taxTitle: {
-    margin: '0 0 0.75rem',
-    fontSize: '0.875rem',
-    fontWeight: '700',
-    color: '#1e40af',
+    fontSize: '0.75rem',
+    fontWeight: '600',
+    marginBottom: '0.5rem',
+    color: '#0369a1',
   },
   amountWords: {
-    backgroundColor: '#f8fafc',
     padding: '0.75rem',
-    borderRadius: '8px',
-    fontSize: '0.8rem',
+    backgroundColor: '#f8fafc',
+    borderRadius: '0.5rem',
+    fontSize: '0.75rem',
     marginBottom: '1rem',
-    border: '1px solid #e2e8f0',
   },
   termsSection: {
     marginBottom: '1rem',
   },
   docSection: {
-    backgroundColor: '#f8fafc',
-    borderRadius: '12px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '0.5rem',
     marginBottom: '1rem',
-    border: '1px solid #e2e8f0',
     overflow: 'hidden',
   },
   docHeader: {
+    padding: '0.75rem',
+    backgroundColor: '#f8fafc',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '1rem',
     cursor: 'pointer',
-    backgroundColor: '#fff',
   },
   docTitle: {
     fontWeight: '600',
     fontSize: '0.875rem',
   },
   docBody: {
-    padding: '1rem',
-    borderTop: '1px solid #e2e8f0',
+    padding: '0.75rem',
+    borderTop: '1px solid #e5e7eb',
   },
   uploadBtn: {
-    display: 'flex',
+    display: 'inline-flex',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: '0.5rem',
-    padding: '0.75rem',
+    padding: '0.5rem 1rem',
     backgroundColor: '#4f46e5',
     color: 'white',
-    borderRadius: '10px',
-    fontSize: '0.875rem',
+    borderRadius: '0.375rem',
+    fontSize: '0.75rem',
     cursor: 'pointer',
+    border: 'none',
   },
   selectedFiles: {
-    marginBottom: '1rem',
+    marginTop: '0.75rem',
   },
   selectedFile: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: '0.5rem',
-    backgroundColor: 'white',
-    borderRadius: '8px',
+    backgroundColor: '#f3f4f6',
+    borderRadius: '0.375rem',
     marginBottom: '0.5rem',
+    fontSize: '0.75rem',
   },
   removeBtn: {
     background: 'none',
     border: 'none',
-    color: '#ef4444',
     cursor: 'pointer',
+    color: '#ef4444',
     fontSize: '1rem',
   },
   uploadConfirm: {
-    width: '100%',
-    padding: '0.6rem',
+    marginTop: '0.5rem',
+    padding: '0.5rem',
     backgroundColor: '#10b981',
     color: 'white',
     border: 'none',
-    borderRadius: '8px',
-    fontSize: '0.75rem',
-    marginTop: '0.5rem',
+    borderRadius: '0.375rem',
     cursor: 'pointer',
+    fontSize: '0.75rem',
+    width: '100%',
   },
   emptyDocs: {
     textAlign: 'center',
     padding: '1rem',
     color: '#9ca3af',
-    fontSize: '0.8rem',
+    fontSize: '0.75rem',
   },
   docItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.75rem',
-    padding: '0.75rem',
-    backgroundColor: 'white',
-    borderRadius: '10px',
-    marginBottom: '0.5rem',
+    gap: '0.5rem',
+    padding: '0.5rem',
+    borderBottom: '1px solid #e5e7eb',
   },
   docIcon: {
     fontSize: '1.2rem',
@@ -966,11 +987,11 @@ const styles = {
     flex: 1,
   },
   docName: {
-    fontSize: '0.8rem',
+    fontSize: '0.75rem',
     fontWeight: '500',
   },
   docDesc: {
-    fontSize: '0.7rem',
+    fontSize: '0.65rem',
     color: '#6b7280',
   },
   docActions: {
@@ -982,21 +1003,37 @@ const styles = {
     border: 'none',
     cursor: 'pointer',
     fontSize: '1rem',
-    padding: '0.2rem',
+    padding: '0.25rem',
   },
   signature: {
     marginTop: '1.5rem',
     paddingTop: '1rem',
-    borderTop: '1px solid #e2e8f0',
-    fontSize: '0.8rem',
+    borderTop: '1px solid #e5e7eb',
+    textAlign: 'right',
+    fontSize: '0.75rem',
   },
   actionBar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.5rem',
     marginTop: '1rem',
     paddingTop: '1rem',
-    borderTop: '1px solid #e2e8f0',
+    borderTop: '1px solid #e5e7eb',
+    display: 'flex',
+    justifyContent: 'center',
+    gap: '1rem',
+  },
+  addItemBtn: {
+    marginTop: '0.75rem',
+    backgroundColor: '#3b82f6',
+    color: 'white',
+    padding: '0.5rem 1rem',
+    borderRadius: '0.5rem',
+    border: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    width: '100%',
+    justifyContent: 'center',
   },
 };
 

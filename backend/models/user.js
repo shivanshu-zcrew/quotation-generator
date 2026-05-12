@@ -21,6 +21,19 @@ const userSchema = new mongoose.Schema(
         'Please provide a valid email'
       ]
     },
+    phone: {
+      type: String,
+      trim: true,
+      index: true,
+      validate: {
+        validator: function(v) {
+          // Optional: Add phone number validation
+          // Example: +1234567890 or 1234567890
+          return !v || /^[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{3,4}[-\s\.]?[0-9]{3,4}$/.test(v);
+        },
+        message: 'Please provide a valid phone number'
+      }
+    },
     password: {
       type: String,
       required: [true, 'Please provide a password'],
@@ -68,6 +81,7 @@ const userSchema = new mongoose.Schema(
 // Compound indexes
 userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ email: 1, isActive: 1 });
+userSchema.index({ phone: 1 });
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {

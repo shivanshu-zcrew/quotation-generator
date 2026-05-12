@@ -5,7 +5,9 @@ import {
   Eye, Download, Trash2, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp, Calendar, Menu
+  Shield, Award, Ban, Users, TrendingUp, Calendar, Menu,
+  ShoppingCartIcon,
+  Loader
 } from 'lucide-react';
 
 import { useAppStore, useCompanyQuotations } from '../services/store';
@@ -44,6 +46,8 @@ import {
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import UserQuotationStats from '../components/UserQuotationStats';
 import { SimpleLoadingOverlay } from '../components/LoadingOverlay';
+import AwardModal from '../components/AwardModal';
+import { adminAPI } from '../services/api';
 
 // Custom hook for responsive detection
 const useMediaQuery = (query) => {
@@ -117,7 +121,7 @@ const ExpiryBadge = React.memo(({ type }) => {
 });
 
 // Mobile Quotation Card for Admin
-const AdminQuotationCard = React.memo(({ quotation,onAward,isAwardin, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
+const AdminQuotationCard = React.memo(({ quotation,onAward,isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'ops_approved';
@@ -277,6 +281,15 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 const [refreshMessage, setRefreshMessage] = useState('');
 const [pdfProgress, setPdfProgress] = useState(0);
 const [pdfMessage, setPdfMessage] = useState('');
+const [isExporting, setIsExporting] = useState(false);
+const [exportProgress, setExportProgress] = useState(0);
+const [exportMessage, setExportMessage] = useState('');
+const [exportFilters, setExportFilters] = useState({
+  showFilters: false,
+  fromDate: '',
+  toDate: '',
+  status: 'all',
+});
   
   // ── Store subscriptions ───────────────────────────────────
   const { quotations: companyQuotations, refresh: refreshCompanyQuotations } = useCompanyQuotations();
@@ -345,13 +358,11 @@ const [pdfMessage, setPdfMessage] = useState('');
     awarded: null
   });
 
-  // Update limit on screen resize
-  useEffect(() => {
+   useEffect(() => {
     setLimit(isMobile ? 10 : 20);
   }, [isMobile]);
 
-  // Reset view mode on mobile
-  useEffect(() => {
+   useEffect(() => {
     if (isMobile) {
       setViewMode('card');
     }
@@ -510,6 +521,95 @@ const [pdfMessage, setPdfMessage] = useState('');
       setExportingId(null);
     }
   }, [addToast]);
+
+  const handleExportDateChange = (type, value) => {
+    setExportFilters(prev => ({ ...prev, [type]: value }));
+  };
+  
+  const toggleExportFilters = () => {
+    setExportFilters(prev => ({ ...prev, showFilters: !prev.showFilters }));
+  };
+
+  
+  const handleExportToExcel = useCallback(async () => {
+    setIsExporting(true);
+    setExportProgress(10);
+    setExportMessage('Preparing export...');
+    
+    const progressInterval = setInterval(() => {
+      setExportProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, 500);
+    
+    try {
+      setExportProgress(30);
+      setExportMessage('Fetching data...');
+      
+      // Build params with current filters
+      const params = {
+        companyId: selectedCompany,
+      };
+      
+      // Add status filter if selected
+      if (exportFilters.status && exportFilters.status !== 'all') {
+        params.status = exportFilters.status;
+      } else if (activeTab !== 'all') {
+        params.status = activeTab;
+      }
+      
+      // Add date range if provided
+      if (exportFilters.fromDate) {
+        params.fromDate = exportFilters.fromDate;
+      }
+      if (exportFilters.toDate) {
+        params.toDate = exportFilters.toDate;
+      }
+      
+      // Add search if exists
+      if (search && search.trim()) {
+        params.search = search;
+      }
+      
+      console.log('📊 Export params:', params);
+      
+      setExportProgress(60);
+      setExportMessage('Generating Excel file...');
+      
+      const response = await adminAPI.exportQuotationsToExcel(params);
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `quotations_export_${new Date().toISOString().split('T')[0]}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      setExportProgress(100);
+      setExportMessage('Complete!');
+      addToast('Quotations exported successfully!', 'success');
+      
+      setTimeout(() => {
+        setExportProgress(0);
+        setExportMessage('');
+      }, 1500);
+      
+    } catch (error) {
+      console.error('Export error:', error);
+      setExportProgress(0);
+      setExportMessage('');
+      addToast(error.response?.data?.message || 'Export failed', 'error');
+    } finally {
+      clearInterval(progressInterval);
+      setIsExporting(false);
+    }
+  }, [selectedCompany, activeTab, search, exportFilters, addToast]);
 
   const handleApprove = useCallback(async (id) => {
     setActionLoading(id, 'approve', true);
@@ -814,27 +914,38 @@ const [pdfMessage, setPdfMessage] = useState('');
 
   const handleAward = {
     open: useCallback((quotation) => {
-      console.log('🎯 Award button clicked!', quotation);
-      console.log('Quotation number:', quotation.quotationNumber);
-      console.log('Quotation ID:', quotation._id);
-      setAwardModal({
-        open: true,
-        quotation,
-        busy: false,
-        awardNote: '',
-        awarded: null
-      });
+      setAwardModal({ open: true, quotation });
     }, []),
-    
+
     close: useCallback(() => {
-      setAwardModal({
-        open: false,
-        quotation: null,
-        busy: false,
-        awardNote: '',
-        awarded: null
-      });
+      setAwardModal({ open: false, quotation: null });
     }, []),
+
+    confirm: useCallback(async (awarded, awardNote) => {
+      if (!awardModal.quotation) return;
+
+      try {
+        const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
+
+        if (result?.success) {
+          addToast(
+            awarded 
+              ? `🏆 Quotation ${awardModal.quotation.quotationNumber} marked as Awarded!` 
+              : `Quotation ${awardModal.quotation.quotationNumber} marked as Not Awarded.`,
+            "success"
+          );
+          refreshCompanyQuotations();
+          refreshStats();
+        } else {
+          addToast(result?.error || "Failed to update award status", "error");
+        }
+      } catch (error) {
+        addToast(error.message || "Failed to update award status", "error");
+      } finally {
+        handleAward.close();
+      }
+    }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats])
+  };
     
     confirm: useCallback(async (awarded, awardNote) => {
       if (!awardModal.quotation) return;
@@ -867,7 +978,7 @@ const [pdfMessage, setPdfMessage] = useState('');
         setAwardModal(prev => ({ ...prev, busy: false }));
       }
     }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats])
-  };
+  
 
   const handleGoToCustomers = useCallback(() => {
     if (onNavigate) {
@@ -981,8 +1092,85 @@ const [pdfMessage, setPdfMessage] = useState('');
       gap: '0.4rem'
     }}
   >
-    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
+    <ShoppingCartIcon size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
   </button>
+
+  <div style={styles.headerActions}>
+  {/* Export Button with Filter Options */}
+  <div style={{ position: 'relative' }}>
+    <button 
+      onClick={toggleExportFilters}
+      disabled={isExporting}
+      style={styles.exportBtn}
+    >
+      <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
+    </button>
+    
+    {exportFilters.showFilters && (
+      <div style={styles.exportFilterDropdown}>
+        <div style={styles.filterGroup}>
+          <label style={styles.filterLabel}>Date Range</label>
+          <div style={styles.dateRangeRow}>
+            <input
+              type="date"
+              value={exportFilters.fromDate}
+              onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
+              style={styles.filterInput}
+              placeholder="From Date"
+            />
+            <span>to</span>
+            <input
+              type="date"
+              value={exportFilters.toDate}
+              onChange={(e) => handleExportDateChange('toDate', e.target.value)}
+              style={styles.filterInput}
+              placeholder="To Date"
+            />
+          </div>
+        </div>
+        
+        <div style={styles.filterGroup}>
+          <label style={styles.filterLabel}>Status</label>
+          <select
+            value={exportFilters.status}
+            onChange={(e) => handleExportDateChange('status', e.target.value)}
+            style={styles.filterSelect}
+          >
+            <option value="all">All Statuses</option>
+            <option value="pending">Pending</option>
+            <option value="ops_approved">Awaiting Admin</option>
+            <option value="ops_rejected">Returned by Ops</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="awarded">Awarded</option>
+          </select>
+        </div>
+        
+        <div style={styles.filterActions}>
+          <button
+            onClick={() => {
+              setExportFilters({
+                showFilters: false,
+                fromDate: '',
+                toDate: '',
+                status: 'all',
+              });
+            }}
+            style={styles.filterResetBtn}
+          >
+            Reset
+          </button>
+          <button
+            onClick={handleExportToExcel}
+            style={styles.filterApplyBtn}
+          >
+            Export Now
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+</div>
 
   <button 
     onClick={handleCreateQuotation}
@@ -1021,7 +1209,27 @@ const [pdfMessage, setPdfMessage] = useState('');
 >
   <Users size={isMobile ? 12 : 14} /> User Stats
 </button>
-          <NavBtn onClick={handleUsers}  label="Users" />
+
+<button 
+ onClick={handleUsers}
+  style={{
+    backgroundColor: '#e0e7ff',
+    color: '#4f46e5',
+    border: 'none',
+    borderRadius: '8px',
+    padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+    fontSize: isMobile ? '0.7rem' : '0.8rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem'
+  }}
+>
+  <Users size={isMobile ? 12 : 14} /> Users
+</button>
+
+          {/* <NavBtn onClick={handleUsers}  label="Users" /> */}
           <button onClick={handleLogout} className="adm-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
@@ -1215,77 +1423,13 @@ const [pdfMessage, setPdfMessage] = useState('');
   />
 )}
  
- {awardModal.open && awardModal.quotation && (
-  <div style={styles.modalOverlay}>
-    <div style={styles.modal}>
-      <div style={styles.modalHeader}>
-        <h3 style={styles.modalTitle}>
-          {awardModal.awarded === null ? 'Award Decision' : 
-           awardModal.awarded ? 'Confirm Award' : 'Confirm Not Awarded'}
-        </h3>
-        <button onClick={handleAward.close} style={styles.modalCloseBtn}>✕</button>
-      </div>
-      
-      <div style={styles.modalBody}>
-        <p style={styles.modalSubtitle}>
-          Quotation: <strong>{awardModal.quotation.quotationNumber}</strong>
-        </p>
-        
-        {awardModal.awarded === null ? (
-          // Step 1: Choose decision
-          <div style={styles.awardDecisionContainer}>
-            <button
-              onClick={() => setAwardModal(prev => ({ ...prev, awarded: true }))}
-              style={styles.awardYesBtn}
-            >
-              <Award size={20} /> 🏆 Won / Awarded
-            </button>
-            <button
-              onClick={() => setAwardModal(prev => ({ ...prev, awarded: false }))}
-              style={styles.awardNoBtn}
-            >
-              <X size={20} /> ✗ Not Awarded
-            </button>
-          </div>
-        ) : (
-          // Step 2: Add note and confirm
-          <>
-            <div style={styles.fieldWrapper}>
-              <label style={styles.label}>Award Note</label>
-              <textarea
-                value={awardModal.awardNote}
-                onChange={(e) => setAwardModal(prev => ({ ...prev, awardNote: e.target.value }))}
-                placeholder={awardModal.awarded 
-                  ? "Add award details (e.g., PO number, award date, amount)..." 
-                  : "Add reason for not being awarded..."}
-                rows={4}
-                style={styles.awardTextarea}
-                autoFocus
-              />
-            </div>
-            
-            <div style={styles.modalButtons}>
-              <button 
-                onClick={() => setAwardModal(prev => ({ ...prev, awarded: null, awardNote: '' }))}
-                style={styles.cancelBtn}
-                disabled={awardModal.busy}
-              >
-                Back
-              </button>
-              <button
-                onClick={() => handleAward.confirm(awardModal.awarded, awardModal.awardNote)}
-                style={awardModal.awarded ? styles.submitBtn : styles.dangerBtn}
-                disabled={awardModal.busy}
-              >
-                {awardModal.busy ? 'Processing...' : (awardModal.awarded ? 'Confirm Award' : 'Confirm Not Awarded')}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  </div>
-)}
+ <AwardModal
+          open={awardModal.open}
+          quotation={awardModal.quotation}
+          onConfirm={handleAward.confirm}
+          onCancel={handleAward.close}
+          loading={false}   
+        />
 
     </div>
   );
@@ -1931,5 +2075,98 @@ const styles = {
     fontSize: '0.875rem',
     fontWeight: 500,
     cursor: 'pointer',
+  },
+  exportBtn: {
+    backgroundColor: '#10b981',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '0.45rem 0.875rem',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem'
+  },
+  
+  exportFilterDropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    marginTop: '8px',
+    backgroundColor: 'white',
+    borderRadius: '12px',
+    boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
+    padding: '1rem',
+    minWidth: '300px',
+    zIndex: 100,
+    border: '1px solid #e2e8f0'
+  },
+  
+  filterGroup: {
+    marginBottom: '1rem'
+  },
+  
+  filterLabel: {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: '#374151',
+    marginBottom: '0.5rem'
+  },
+  
+  dateRangeRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem'
+  },
+  
+  filterInput: {
+    flex: 1,
+    padding: '0.5rem',
+    border: '1px solid #e2e8f0',
+    borderRadius: '6px',
+    fontSize: '0.75rem',
+    outline: 'none'
+  },
+  
+  filterSelect: {
+    width: '100%',
+    padding: '0.5rem',
+    border: '1px solid #e2e8f0',
+    borderRadius: '6px',
+    fontSize: '0.75rem',
+    outline: 'none',
+    backgroundColor: 'white'
+  },
+  
+  filterActions: {
+    display: 'flex',
+    gap: '0.5rem',
+    justifyContent: 'flex-end',
+    marginTop: '0.5rem'
+  },
+  
+  filterResetBtn: {
+    padding: '0.5rem 1rem',
+    backgroundColor: '#f3f4f6',
+    color: '#374151',
+    border: 'none',
+    borderRadius: '6px',
+    fontSize: '0.75rem',
+    fontWeight: 500,
+    cursor: 'pointer'
+  },
+  
+  filterApplyBtn: {
+    padding: '0.5rem 1rem',
+    backgroundColor: '#10b981',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    cursor: 'pointer'
   },
 };

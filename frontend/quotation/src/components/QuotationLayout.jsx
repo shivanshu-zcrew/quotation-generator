@@ -10,6 +10,7 @@ import { validateQuantity, validatePrice, validatePercentage } from '../utils/qt
 import { fmtDate } from '../utils/formatters';
 import useItemStore from '../services/itemStore';
 import { itemAPI } from '../services/api';
+import { useAppStore } from '../services/store';
 
 // ============================================================
 // CONSTANTS
@@ -35,12 +36,12 @@ const LEFT_FIELDS = [
   ['Contact', 'contact', 'text'],
   ['Date', 'date', 'date'],
   ['Expiry Date', 'expiryDate', 'date'],
-  ['Sales Manager Email', 'salesManagerEmail', 'text'],
 ];
 
 const RIGHT_FIELDS = [
-  ['Our Ref', 'ourRef', 'text'],
-  ['Our Contact', 'ourContact', 'text'],
+  // ['Our Ref', 'ourRef', 'text'],
+  ['Sales Email', 'salesManagerEmail', 'text'],
+  ['Sales Contact', 'ourContact', 'text'],
   ['Payment', 'paymentTerms', 'text'],
   ['Delivery', 'deliveryTerms', 'text'],
   ['TL', 'tl', 'text'],
@@ -919,7 +920,46 @@ export default function QuotationLayout({
   const [totalItemsCount, setTotalItemsCount] = useState(0);
   const itemCache = useRef(new Map());
   const initialized = useRef(false);
+  const currentUser = useAppStore((state) => state.user);
 
+  useEffect(() => {
+    console.log('Current user from store:', currentUser);
+    console.log('Sales email field current value:', quotationData.salesManagerEmail);
+    console.log('Our contact field current value:', quotationData.ourContact);
+  }, [currentUser, quotationData.salesManagerEmail, quotationData.ourContact]);
+
+  useEffect(() => {
+    console.log('=== AUTO-POPULATION DEBUG ===');
+    console.log('isEditing:', isEditing);
+    console.log('currentUser:', currentUser);
+    console.log('quotationData.salesManagerEmail before:', quotationData.salesManagerEmail);
+    console.log('quotationData.ourContact before:', quotationData.ourContact);
+    
+    // Only auto-populate when in editing mode and user exists
+    if ( currentUser) {
+      console.log('Auto-population conditions met');
+      
+      // Auto-populate Sales Email ONLY if it's empty
+      if (!quotationData.salesManagerEmail && currentUser.email) {
+        console.log('Setting sales email to:', currentUser.email);
+        onDataChange('salesManagerEmail', currentUser.email);
+      } else {
+        console.log('Not setting sales email - already has value or no email');
+      }
+      
+      // Auto-populate Sales Contact ONLY if it's empty
+      if (!quotationData.ourContact && currentUser.name) {
+        console.log('Setting sales contact to:', currentUser.phone);
+        onDataChange('ourContact', currentUser.phone);
+      } else {
+        console.log('Not setting sales contact - already has value or no name');
+      }
+    } else {
+      console.log('Auto-population conditions NOT met');
+      if (!isEditing) console.log('- isEditing is false');
+      if (!currentUser) console.log('- currentUser is null');
+    }
+  }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, onDataChange]);
   if (!quotationData) return null;
 
   const displayCurrency = useMemo(() => {
@@ -954,7 +994,9 @@ export default function QuotationLayout({
 
   const { items: storeItems, getItemOptions, isLoaded } = useItemStore();
   
- 
+  console.log('LEFT_FIELDS:', LEFT_FIELDS.map(f => f[1]));
+console.log('quotationData keys:', Object.keys(quotationData));
+console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
 
   useEffect(() => {
     if (isLoaded && storeItems.length > 0) {
@@ -1086,37 +1128,58 @@ export default function QuotationLayout({
   }, [itemOptions, onUpdateItem]);
 
   // Render helpers
-  const renderFieldGrid = (fields) => (
+
+  const READONLY_FIELDS_IN_EDIT_MODE = ['customer', 'salesManagerEmail', 'ourContact'];
+
+  
+  const renderFieldGrid = (fields, isReadOnly = false) => (
     <div style={styles.fieldGrid}>
-      {fields.map(([label, field, type]) => (
-        <React.Fragment key={field}>
-          <span style={styles.fieldLabel}>{label}</span>
-          <span style={styles.fieldColon}>:</span>
-          {isEditing ? (
-            <div>
-              <input
-                type={type}
-                className="edit-input"
-                value={quotationData[field] || ''}
-                min={field === 'expiryDate' ? quotationData.date : undefined}
-                onChange={(e) => handleFieldChange(field, e.target.value)}
-                style={{
-                  ...inputStyle,
-                  borderColor: headerErrors[field] ? '#dc2626' : undefined,
-                  backgroundColor: headerErrors[field] ? '#fef2f2' : undefined
-                }}
-              />
-              {headerErrors[field] && (
-                <div style={styles.fieldError}>⚠ {headerErrors[field]}</div>
-              )}
-            </div>
-          ) : (
-            <span style={styles.fieldValue}>
-              {type === 'date' ? fmtDate(quotationData[field]) : (quotationData[field] || 'N/A')}
-            </span>
-          )}
-        </React.Fragment>
-      ))}
+      {fields.map(([label, field, type]) => {
+        const isReadOnlyField = READONLY_FIELDS_IN_EDIT_MODE.includes(field);
+        
+        return (
+          <React.Fragment key={field}>
+            <span style={styles.fieldLabel}>{label}</span>
+            <span style={styles.fieldColon}>:</span>
+            {isEditing && !isReadOnly ? (
+              <div>
+                {isReadOnlyField ? (
+                  <span style={{
+                    ...styles.fieldValue,
+                    padding: '0.5rem 0.75rem',
+                    backgroundColor: '#f3f4f6',
+                    borderRadius: '0.5rem',
+                    display: 'block',
+                    cursor: 'not-allowed'
+                  }}>
+                    {quotationData[field] || 'N/A'}
+                  </span>
+                ) : (
+                  <input
+                    type={type}
+                    className="edit-input"
+                    value={quotationData[field] || ''}
+                    min={field === 'expiryDate' ? quotationData.date : undefined}
+                    onChange={(e) => handleFieldChange(field, e.target.value)}
+                    style={{
+                      ...inputStyle,
+                      borderColor: headerErrors[field] ? '#dc2626' : undefined,
+                      backgroundColor: headerErrors[field] ? '#fef2f2' : undefined
+                    }}
+                  />
+                )}
+                {headerErrors[field] && (
+                  <div style={styles.fieldError}>⚠ {headerErrors[field]}</div>
+                )}
+              </div>
+            ) : (
+              <span style={styles.fieldValue}>
+                {type === 'date' ? fmtDate(quotationData[field]) : (quotationData[field] || 'N/A')}
+              </span>
+            )}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 
@@ -1492,25 +1555,10 @@ export default function QuotationLayout({
       onRemoveTermsImage={onRemoveTermsImage}
     />
   ) : (
-    <div style={styles.termsViewer}>
-      <div style={{ flex: '1 1 65%', minWidth: 0 }}>
-        <TermsViewer sections={tcSections} />
-      </div>
-      {termsImages && termsImages.length > 0 && (
-        <div style={{ flex: '0 0 300px', maxWidth: '300px' }}>
-          {termsImages.map((img, idx) => (
-            <div key={idx} style={styles.termsImageContainer}>
-              <img 
-                src={img.url || img.fileData} 
-                alt={`Terms ${idx + 1}`} 
-                style={styles.termsImage} 
-              />
-              {img.caption && <p style={styles.termsImageCaption}>{img.caption}</p>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <TermsViewer 
+      sections={tcSections} 
+      termsImages={termsImages}
+    />
   )}
 </div>
 

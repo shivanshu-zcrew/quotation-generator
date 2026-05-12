@@ -81,6 +81,71 @@ const customerSchema = new mongoose.Schema(
         return value.replace(/[^\d]/g, ''); 
       }
     },
+
+    contactPersons: [{
+      salutation: { 
+        type: String, 
+        enum: ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Prof.', 'Miss', 'Master', ''],
+        default: ''
+      },
+      firstName: { 
+        type: String,  
+        trim: true 
+      },
+      lastName: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      email: { 
+        type: String, 
+        lowercase: true, 
+        trim: true,
+        sparse: true
+      },
+      workPhone: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      mobile: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      designation: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      department: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      isPrimaryContact: { type: Boolean, default: false },
+      notes: { 
+        type: String, 
+        trim: true,
+        default: ''
+      },
+      zohoContactPersonId: { 
+        type: String, 
+        index: true 
+      },
+      createdAt: { 
+        type: Date, 
+        default: Date.now 
+      },
+      updatedAt: { 
+        type: Date, 
+        default: Date.now 
+      }
+    }],
+    
+    primaryContactId: { 
+      type: mongoose.Schema.Types.ObjectId 
+    },
     placeOfSupply: {
       type: String,
       required: [true, 'Place of supply is required'],
@@ -133,8 +198,6 @@ const customerSchema = new mongoose.Schema(
   }
 );
 
-// Compound unique index for company + zohoId
-customerSchema.index({ companyId: 1, zohoId: 1 }, { unique: true, sparse: true });
 
 // Regular indexes
 customerSchema.index({ companyId: 1, name: 1, isActive: 1 });

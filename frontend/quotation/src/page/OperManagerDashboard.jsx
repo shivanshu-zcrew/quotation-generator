@@ -5,7 +5,8 @@ import {
   Eye, Download, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp, Menu
+  Shield, Award, Ban, Users, TrendingUp, Menu,
+  ShoppingCart
 } from 'lucide-react';
 
 import { useOpsStats } from '../hooks/customHooks';
@@ -882,7 +883,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           justifyContent: isMobile ? 'center' : 'flex-end'
         }}>
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
-          <NavBtn onClick={() => navigate('/home')} label="Home" />
+          {/* <NavBtn onClick={() => navigate('/home')} label="Home" /> */}
           <button 
             onClick={() => navigate('/customers')}
             className="adm-nav-btn" 
@@ -901,6 +902,25 @@ export default function OpsDashboard({ onViewQuotation }) {
             }}
           >
             <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+          </button>
+          <button 
+            onClick={() => navigate('/items')}
+            className="adm-nav-btn" 
+            style={{
+              backgroundColor: '#e0e7ff',
+              color: '#4f46e5',
+              border: 'none',
+              borderRadius: 8,
+              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+              fontSize: isMobile ? '0.7rem' : '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem'
+            }}
+          >
+            <ShoppingCart size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
           </button>
 
           <button 
