@@ -9,7 +9,7 @@ import {
   parseInternalDocuments
 } from '../utils/quotationUtils';
 import { numberToWords } from '../utils/numberToWords';
-import { newSection, htmlToSections, sectionsToHTML, sectionsToHTMLWithoutImages } from '../components/TermsCondition';
+import { newSection, htmlToSections, sectionsToHTML } from '../components/TermsCondition';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { ALLOWED_IMAGE_TYPES, MAX_IMAGES_PER_ITEM, MAX_IMAGE_SIZE_MB } from '../utils/constants';
@@ -18,11 +18,13 @@ export function useQuotation() {
   const { id } = useParams();
   const navigate = useNavigate();
 
+  // ALL HOOKS MUST BE CALLED AT THE TOP LEVEL, BEFORE ANY CONDITIONAL RETURNS
   const { items } = useItems();
   const quotations = useAppStore((state) => state.quotations);
   const updateQuotation = useAppStore((state) => state.updateQuotation);
   const deleteQuotation = useAppStore((state) => state.deleteQuotation);
 
+  // All useState hooks must be at the top
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -42,38 +44,43 @@ export function useQuotation() {
   const [customerTaxTreatment, setCustomerTaxTreatment] = useState('non_vat_registered');
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
   const [termsImages, setTermsImages] = useState([]);
-  const originalQuotation = (quotations || []).find((q) => q._id === id) || fetchedQ;
-  const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
 
+  // Helper functions defined before useMemo/useCallback
+  const round = useCallback((num) => Number((num || 0).toFixed(2)), []);
   
-const round = (num) => Number((num || 0).toFixed(2));
+  const showSnack = useCallback((msg, type = "error") => {
+    setSnackbar({ show: true, message: msg, type });
+  }, []);
 
-// Calculations
-const subtotal = useMemo(() => {
-  return round(
-    quotationItems.reduce((s, i) => {
-      const qty = Number(i.quantity) || 0;
-      const price = Number(i.unitPrice) || 0;
-      return s + round(qty * price);  
-    }, 0)
-  );
-}, [quotationItems]);
+  // Find original quotation - must be after all hooks
+  const originalQuotation = useMemo(() => {
+    return (quotations || []).find((q) => q._id === id) || fetchedQ;
+  }, [quotations, id, fetchedQ]);
 
-const taxPercent = Number(quotationData.tax) || 0;
-const discountPercent = Number(quotationData.discount) || 0;
+  // Calculations - useMemo for derived values
+  const subtotal = useMemo(() => {
+    return round(
+      quotationItems.reduce((s, i) => {
+        const qty = Number(i.quantity) || 0;
+        const price = Number(i.unitPrice) || 0;
+        return s + round(qty * price);
+      }, 0)
+    );
+  }, [quotationItems, round]);
 
- 
-const discountAmount = round((subtotal * discountPercent) / 100);
-const subtotalAfterDiscount = subtotal - discountAmount;
+  const taxPercent = Number(quotationData.tax) || 0;
+  const discountPercent = Number(quotationData.discount) || 0;
 
-const taxAmount = round((subtotalAfterDiscount * taxPercent) / 100);
+  const discountAmount = useMemo(() => round((subtotal * discountPercent) / 100), [subtotal, discountPercent, round]);
+  const subtotalAfterDiscount = useMemo(() => subtotal - discountAmount, [subtotal, discountAmount]);
+  const taxAmount = useMemo(() => round((subtotalAfterDiscount * taxPercent) / 100), [subtotalAfterDiscount, taxPercent, round]);
+  const grandTotal = useMemo(() => round(subtotalAfterDiscount + taxAmount), [subtotalAfterDiscount, taxAmount, round]);
 
-const grandTotal = round(subtotalAfterDiscount + taxAmount);
+  const amountInWords = useMemo(() => {
+    return numberToWords(grandTotal);
+  }, [grandTotal]);
 
-const amountInWords = useMemo(() => {
-  return numberToWords(grandTotal);
-}, [grandTotal]);
-
+  // All useEffect hooks must be at the top level
   useEffect(() => {
     if (!(quotations || []).find((q) => q._id === id) && id) {
       setLoading(true);
@@ -93,23 +100,56 @@ const amountInWords = useMemo(() => {
     
     const parsedData = parseQuotationData(originalQuotation);
     delete parsedData.termsImage;
-    setQuotationData(parsedData);
-    setQuotationItems(parseQuotationItems(originalQuotation.items));
+    
+    setQuotationData({
+      ...parsedData,
+      // Left side fields
+      projectName: originalQuotation.projectName || "",
+      scopeOfWork: originalQuotation.scopeOfWork || "",
+      remark: originalQuotation.remark || "",
+      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
+      customerName: originalQuotation.customerName || originalQuotation.customerSnapshot?.name || "",
+      customerPhone: originalQuotation.customerPhone || originalQuotation.contact || originalQuotation.customerSnapshot?.phone || "",
+      customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
+      customerDesignation: originalQuotation.customerSnapshot?.designation || "",
+      customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
+      customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || originalQuotation.trn || "",
+      // Right side fields
+      ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
+      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
+      ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
+      salesManagerEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
+      companyPhone: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
+      companyEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
+      date: originalQuotation.date ? new Date(originalQuotation.date).toISOString().split('T')[0] : "",
+      expiryDate: originalQuotation.expiryDate ? new Date(originalQuotation.expiryDate).toISOString().split('T')[0] : "",
+      queryDate: originalQuotation.queryDate ? new Date(originalQuotation.queryDate).toISOString().split('T')[0] : "",
+      ourRef: originalQuotation.ourRef || "",
+      paymentTerms: originalQuotation.paymentTerms || "",
+      deliveryTerms: originalQuotation.deliveryTerms || "",
+      tl: originalQuotation.tl || "",
+      trn: originalQuotation.trn || originalQuotation.customerSnapshot?.vatNumber || "",
+      tax: originalQuotation.taxPercent || 0,
+      discount: originalQuotation.discountPercent || 0,
+      notes: originalQuotation.notes || "",
+    });
+    
+    const parsedItems = parseQuotationItems(originalQuotation.items);
+    setQuotationItems(parsedItems);
     
     const taxTreatment = originalQuotation.customerId?.taxTreatment || 
       originalQuotation.customerTaxTreatment || 
       originalQuotation.taxTreatment ||
       'non_vat_registered';
-  
+    
     const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
       originalQuotation.customerPlaceOfSupply || 
       originalQuotation.placeOfSupply ||
       'Dubai';
-  
+    
     setCustomerTaxTreatment(taxTreatment);
     setCustomerPlaceOfSupply(placeOfSupply);
-  
-    // ✅ IMPORTANT: Properly load terms images from existing data
+    
     const cloudinaryImages = originalQuotation.termsImages || [];
     const formattedTermsImages = cloudinaryImages.map((img, index) => ({
       id: img._id || `existing-img-${Date.now()}-${index}`,
@@ -123,11 +163,12 @@ const amountInWords = useMemo(() => {
     setTermsImages(formattedTermsImages);
     
     const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
-    setTcSections(sections);
+    setTcSections(sections.length ? sections : [newSection()]);
     
     setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
   }, [originalQuotation]);
 
+  // Define all callbacks before conditional logic
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
     try {
       const base64Promises = files.map(file => {
@@ -157,45 +198,30 @@ const amountInWords = useMemo(() => {
       }));
 
       setNewDocuments(prev => [...prev, ...tempDocs]);
-      setSnackbar({
-        show: true,
-        message: `${files.length} document(s) ready`,
-        type: 'success'
-      });
+      showSnack(`${files.length} document(s) ready`, 'success');
     } catch (error) {
       console.error('Error processing documents:', error);
-      setSnackbar({
-        show: true,
-        message: 'Failed to process documents',
-        type: 'error'
-      });
+      showSnack('Failed to process documents', 'error');
     }
-  }, []);
+  }, [showSnack]);
 
   const handleDocumentDelete = useCallback(async (docId) => {
     const isTemp = newDocuments.some(d => d.id === docId);
 
     if (isTemp) {
       setNewDocuments(prev => prev.filter(d => d.id !== docId));
+      showSnack('Document removed', 'success');
     } else {
       try {
         await quotationAPI.documents.delete(id, docId);
         setInternalDocuments(prev => prev.filter(d => d._id !== docId));
-        setSnackbar({
-          show: true,
-          message: 'Document deleted',
-          type: 'success'
-        });
+        showSnack('Document deleted', 'success');
       } catch (error) {
         console.error('Error deleting document:', error);
-        setSnackbar({
-          show: true,
-          message: 'Failed to delete document',
-          type: 'error'
-        });
+        showSnack('Failed to delete document', 'error');
       }
     }
-  }, [id, newDocuments]);
+  }, [id, newDocuments, showSnack]);
 
   const handleDocumentDownload = useCallback((docId) => {
     const doc = [...internalDocuments, ...newDocuments].find(d =>
@@ -205,6 +231,20 @@ const amountInWords = useMemo(() => {
       window.open(doc.fileUrl || doc.fileData, '_blank');
     }
   }, [internalDocuments, newDocuments]);
+
+  const handleDocumentPreview = useCallback((docId) => {
+    const doc = [...internalDocuments, ...newDocuments].find(d => 
+      (d._id === docId || d.id === docId)
+    );
+    
+    if (!doc) return;
+    
+    if (doc.fileType?.startsWith('image/')) {
+      setPreviewDoc(doc);
+    } else {
+      handleDocumentDownload(docId);
+    }
+  }, [internalDocuments, newDocuments, handleDocumentDownload]);
 
   const handleDataChange = useCallback((field, value) => {
     if (value === '') {
@@ -219,27 +259,26 @@ const amountInWords = useMemo(() => {
     if (field === 'tax' || field === 'discount') {
       const result = validatePercentage(value);
       if (!result.isValid) {
-        setSnackbar({ show: true, message: result.error, type: 'error' });
+        showSnack(result.error, 'error');
         return;
       }
       value = parseFloat(value) || 0;
     }
 
     setQuotationData((prev) => ({ ...prev, [field]: value }));
-  }, []);
+  }, [showSnack]);
 
-  const addItem = useCallback(() =>
-    setQuotationItems((prev) => [...prev,
-      {
-        id: `${Date.now()}-${Math.random()}`,
-        itemId: null,
-        name: "",
-        description: "",
-        quantity: 1,
-        unitPrice: 0,
-        imagePaths: []
-      }
-    ]), []);
+  const addItem = useCallback(() => {
+    setQuotationItems((prev) => [...prev, {
+      id: `${Date.now()}-${Math.random()}`,
+      itemId: null,
+      name: "",
+      description: "",
+      quantity: 1,
+      unitPrice: 0,
+      imagePaths: []
+    }]);
+  }, []);
 
   const removeItem = useCallback((id) => {
     setQuotationItems((prev) => prev.filter((i) => i.id !== id));
@@ -252,9 +291,9 @@ const amountInWords = useMemo(() => {
   }, []);
 
   const updateItem = useCallback((id, field, value) => {
-    if (value === '') {
+    if (value === '' || value === null || value === undefined) {
       if (field === 'quantity') {
-        setSnackbar({ show: true, message: 'Quantity cannot be empty', type: 'error' });
+        showSnack('Quantity cannot be empty', 'error');
         return;
       }
       if (field === 'unitPrice') {
@@ -263,12 +302,18 @@ const amountInWords = useMemo(() => {
         ));
         return;
       }
+      if (field === 'name') {
+        setQuotationItems((prev) => prev.map((item) =>
+          item.id === id ? { ...item, [field]: '' } : item
+        ));
+        return;
+      }
     }
 
     if (field === 'quantity') {
       const result = validateQuantity(value);
       if (!result.isValid) {
-        setSnackbar({ show: true, message: result.error, type: 'error' });
+        showSnack(result.error, 'error');
         setFieldErrors((prev) => ({ ...prev, [id]: { ...prev[id], quantity: result.error } }));
         return;
       } else {
@@ -289,7 +334,7 @@ const amountInWords = useMemo(() => {
     if (field === 'unitPrice') {
       const result = validatePrice(value);
       if (!result.isValid) {
-        setSnackbar({ show: true, message: result.error, type: 'error' });
+        showSnack(result.error, 'error');
         setFieldErrors((prev) => ({ ...prev, [id]: { ...prev[id], unitPrice: result.error } }));
         return;
       } else {
@@ -307,89 +352,78 @@ const amountInWords = useMemo(() => {
       value = parseFloat(value) || 0;
     }
 
-    setQuotationItems((prev) => prev.map((item) => {
-      if (item.id !== id) return item;
-
-      if (field === "itemId" && value) {
-        const found = items.find((i) => i._id === value);
-        return {
+    if (field === "itemId" && value) {
+      const found = items.find((i) => i._id === value);
+      setQuotationItems((prev) => prev.map((item) =>
+        item.id === id ? {
           ...item,
           itemId: value,
           name: found?.name || item.name,
           description: found?.description || item.description,
           unitPrice: found?.price != null ? Number(found.price) : item.unitPrice,
-        };
-      }
+        } : item
+      ));
+      return;
+    }
 
-      return { ...item, [field]: value };
-    }));
-  }, [items]);
+    setQuotationItems((prev) => prev.map((item) =>
+      item.id === id ? { ...item, [field]: value } : item
+    ));
+  }, [items, showSnack]);
 
- 
   const handleImageUpload = useCallback((e, itemId) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-  
-    // ✅ Get current images count (existing + new)
+
     const existingItem = quotationItems.find(item => item.id === itemId);
     const existingImageCount = existingItem?.imagePaths?.length || 0;
     const newImageCount = (newImages[itemId] || []).length;
     const currentTotalImages = existingImageCount + newImageCount;
-    
-    // Calculate available slots
     const availableSlots = MAX_IMAGES_PER_ITEM - currentTotalImages;
-    
-    console.log(`📸 Item ${itemId}: Existing: ${existingImageCount}, New: ${newImageCount}, Total: ${currentTotalImages}, Slots: ${availableSlots}`);
-  
+
     if (availableSlots <= 0) {
       showSnack(`Maximum ${MAX_IMAGES_PER_ITEM} images allowed per item. You already have ${currentTotalImages} image(s).`, 'error');
       e.target.value = "";
       return;
     }
-  
-    // Process only up to available slots
+
     const toProcess = files.slice(0, availableSlots);
-  
+
     if (files.length > availableSlots) {
       showSnack(`Only ${availableSlots} slot(s) left — first ${availableSlots} of ${files.length} will be added.`, 'warning');
     }
-  
-    // Validate each file
+
     const validFiles = [];
     const errors = [];
-  
+
     for (const file of toProcess) {
-      // Validate type
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
         errors.push(`"${file.name}" is not a supported image type.`);
         continue;
       }
-  
-      // Validate size
+
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
         errors.push(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
         continue;
       }
-  
+
       validFiles.push(file);
     }
-  
-    // Show validation errors if any
+
     if (errors.length > 0) {
       errors.forEach(err => showSnack(err, 'error'));
     }
-  
+
     if (validFiles.length === 0) {
       e.target.value = "";
       return;
     }
-  
-    // Process valid files
+
     let processedCount = 0;
-    
+
     validFiles.forEach((file) => {
       const reader = new FileReader();
-  
+
       reader.onload = () => {
         setNewImages((prev) => ({
           ...prev,
@@ -402,256 +436,224 @@ const amountInWords = useMemo(() => {
             id: `${Date.now()}-${Math.random()}`
           }],
         }));
-        
+
         processedCount++;
-        
-        // When all files are processed, show success message
+
         if (processedCount === validFiles.length) {
           showSnack(`${validFiles.length} image(s) added to item.`, 'success');
         }
       };
-  
+
       reader.onerror = () => {
         showSnack(`Failed to read file: ${file.name}`, 'error');
       };
-  
+
       reader.readAsDataURL(file);
     });
-  
+
     setEditingImgId(null);
-    e.target.value = ""; // reset input
+    e.target.value = "";
   }, [quotationItems, newImages, showSnack]);
 
-  const removeNewImage = useCallback((itemId, idx) =>
+  const removeNewImage = useCallback((itemId, idx) => {
     setNewImages((prev) => {
       const arr = (prev[itemId] || []).filter((_, i) => i !== idx);
       return { ...prev, [itemId]: arr.length ? arr : undefined };
-    }), []);
+    });
+  }, []);
 
-  const removeExistingImage = useCallback((itemId, idx) =>
+  const removeExistingImage = useCallback((itemId, idx) => {
     setQuotationItems((prev) => prev.map((item) =>
       item.id === itemId ? { ...item, imagePaths: item.imagePaths.filter((_, i) => i !== idx) } : item
-    )), []);
+    ));
+  }, []);
 
-    const handleTermsImagesUpload = useCallback((files) => {
-      console.log('📸 Files received in handleTermsImagesUpload:', files);
-      
-      if (!files || files.length === 0) return;
-      
-      const remainingSlots = 10 - termsImages.length;
-      
-      if (remainingSlots <= 0) {
-        setSnackbar({ show: true, message: 'Maximum 10 terms images allowed', type: 'error' });
-        return;
-      }
-      
-      const filesToProcess = files.slice(0, remainingSlots);
-      if (files.length > remainingSlots) {
-        setSnackbar({ show: true, message: `Only ${remainingSlots} more image(s) allowed`, type: 'warning' });
-      }
-      
-      const newImagesList = [];
-      let processedCount = 0;
-      
-      filesToProcess.forEach((file) => {
-        // Check if file is a File object or already processed
-        if (file instanceof File) {
-          const reader = new FileReader();
-          reader.onload = () => {
-            newImagesList.push({
-              id: `terms-img-${Date.now()}-${Math.random()}`,
-              url: reader.result,
-              base64: reader.result,
-              fileName: file.name,
-              fileType: file.type,
-              fileSize: file.size,
-              isTemp: true,
-              uploadedAt: new Date().toISOString()
-            });
-            
-            processedCount++;
-            
-            if (processedCount === filesToProcess.length) {
-              console.log('📸 All images processed, updating state with:', newImagesList);
-              setTermsImages(prev => {
-                const updated = [...prev, ...newImagesList];
-                console.log('Updated termsImages state:', updated);
-                return updated;
-              });
-            }
-          };
-          reader.onerror = () => {
-            console.error('Error reading file:', file.name);
-            processedCount++;
-          };
-          reader.readAsDataURL(file);
-        } else if (file.url || file.base64) {
-          // Already processed image object
-          newImagesList.push(file);
+  const handleTermsImagesUpload = useCallback((files) => {
+    if (!files || files.length === 0) return;
+
+    const remainingSlots = 10 - termsImages.length;
+
+    if (remainingSlots <= 0) {
+      showSnack('Maximum 10 terms images allowed', 'error');
+      return;
+    }
+
+    const filesToProcess = files.slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      showSnack(`Only ${remainingSlots} more image(s) allowed`, 'warning');
+    }
+
+    const newImagesList = [];
+    let processedCount = 0;
+
+    filesToProcess.forEach((file) => {
+      if (file instanceof File) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          newImagesList.push({
+            id: `terms-img-${Date.now()}-${Math.random()}`,
+            url: reader.result,
+            base64: reader.result,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            isTemp: true,
+            uploadedAt: new Date().toISOString()
+          });
+
           processedCount++;
-          
+
           if (processedCount === filesToProcess.length) {
             setTermsImages(prev => [...prev, ...newImagesList]);
           }
+        };
+        reader.onerror = () => {
+          console.error('Error reading file:', file.name);
+          processedCount++;
+        };
+        reader.readAsDataURL(file);
+      } else if (file.url || file.base64) {
+        newImagesList.push(file);
+        processedCount++;
+
+        if (processedCount === filesToProcess.length) {
+          setTermsImages(prev => [...prev, ...newImagesList]);
         }
-      });
-    }, [termsImages.length]);
+      }
+    });
+  }, [termsImages.length, showSnack]);
 
-    const removeTermsImage = useCallback((imageId) => {
-      console.log('🗑️ Removing terms image with ID:', imageId);
-      setTermsImages(prev => {
-        const filtered = prev.filter(img => img.id !== imageId);
-        console.log('Remaining terms images:', filtered.length);
-        return filtered;
-      });
-    }, []);
+  const removeTermsImage = useCallback((imageId) => {
+    setTermsImages(prev => prev.filter(img => img.id !== imageId));
+    showSnack('Image removed', 'success');
+  }, [showSnack]);
 
-    const cancelEdit = useCallback(() => {
-      if (!originalQuotation) return;
-      
-      const parsedData = parseQuotationData(originalQuotation);
-      delete parsedData.termsImage;
-      setQuotationData(parsedData);
-      setQuotationItems(parseQuotationItems(originalQuotation.items));
-      
-      // ✅ Reset termsImages from original data
-      const cloudinaryImages = originalQuotation.termsImages || [];
-      setTermsImages(cloudinaryImages);
-      
-      const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
-      setTcSections(sections);
-      
-      setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
-      setNewDocuments([]);
-      setNewImages({});
-      setEditingImgId(null);
-      setFieldErrors({});
-      setIsEditing(false);
-      
-      const taxTreatment = originalQuotation.customerId?.taxTreatment || 
-        originalQuotation.customerTaxTreatment || 
-        originalQuotation.taxTreatment;
-    
-      const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
-        originalQuotation.customerPlaceOfSupply || 
-        originalQuotation.placeOfSupply ||
-        'Dubai';
-      setCustomerTaxTreatment(taxTreatment);
-      setCustomerPlaceOfSupply(placeOfSupply);
-    }, [originalQuotation]);
+  const cancelEdit = useCallback(() => {
+    if (!originalQuotation) return;
+
+    const parsedData = parseQuotationData(originalQuotation);
+    delete parsedData.termsImage;
+
+    setQuotationData({
+      ...parsedData,
+      projectName: originalQuotation.projectName || "",
+      scopeOfWork: originalQuotation.scopeOfWork || "",
+      remark: originalQuotation.remark || "",
+      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
+      customerName: originalQuotation.customerName || "",
+      customerPhone: originalQuotation.customerPhone || originalQuotation.contact || "",
+      customerEmail: originalQuotation.customerEmail || "",
+      customerDesignation: originalQuotation.customerSnapshot?.designation || "",
+      customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
+      customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || "",
+      ourFocalPoint: originalQuotation.ourFocalPoint || "",
+      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || "",
+      date: originalQuotation.date ? new Date(originalQuotation.date).toISOString().split('T')[0] : "",
+      expiryDate: originalQuotation.expiryDate ? new Date(originalQuotation.expiryDate).toISOString().split('T')[0] : "",
+    });
+
+    setQuotationItems(parseQuotationItems(originalQuotation.items));
+
+    const cloudinaryImages = originalQuotation.termsImages || [];
+    setTermsImages(cloudinaryImages);
+
+    const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
+    setTcSections(sections.length ? sections : [newSection()]);
+
+    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
+    setNewDocuments([]);
+    setNewImages({});
+    setEditingImgId(null);
+    setFieldErrors({});
+    setIsEditing(false);
+
+    const taxTreatment = originalQuotation.customerId?.taxTreatment ||
+      originalQuotation.customerTaxTreatment ||
+      originalQuotation.taxTreatment;
+
+    const placeOfSupply = originalQuotation.customerId?.placeOfSupply ||
+      originalQuotation.customerPlaceOfSupply ||
+      originalQuotation.placeOfSupply ||
+      'Dubai';
+
+    setCustomerTaxTreatment(taxTreatment);
+    setCustomerPlaceOfSupply(placeOfSupply);
+  }, [originalQuotation]);
 
   const validateBeforeSave = useCallback(() => {
     if (!quotationItems.length) {
-      setSnackbar({ show: true, message: "Add at least one item.", type: 'error' });
+      showSnack("Add at least one item.", 'error');
       return false;
     }
 
     for (const item of quotationItems) {
-      if (!item.itemId) {
-        setSnackbar({ show: true, message: "Please select an item for all rows.", type: 'error' });
+      if (!item.description || !item.description.trim()) {
+        showSnack(`Item description is required for all items.`, 'error');
         return false;
       }
-
+    
       const quantityResult = validateQuantity(item.quantity);
       if (!quantityResult.isValid) {
-        setSnackbar({ show: true, message: `Item "${item.name || 'Unknown'}" has invalid quantity`, type: 'error' });
+        showSnack(`Item "${item.name}" has invalid quantity`, 'error');
         return false;
       }
 
       const priceResult = validatePrice(item.unitPrice);
       if (!priceResult.isValid) {
-        setSnackbar({ show: true, message: `Item "${item.name || 'Unknown'}" has invalid price`, type: 'error' });
+        showSnack(`Item "${item.name}" has invalid price`, 'error');
         return false;
       }
     }
 
-    if (!quotationData.customer?.trim()) {
-      setSnackbar({ show: true, message: "Customer name is required.", type: 'error' });
+    if (!quotationData.projectName?.trim()) {
+      showSnack("Project Name is required.", 'error');
+      return false;
+    }
+
+    if (!quotationData.ourFocalPoint?.trim()) {
+      showSnack("Focal Point Name is required.", 'error');
       return false;
     }
 
     if (!quotationData.expiryDate) {
-      setSnackbar({ show: true, message: "Expiry date is required.", type: 'error' });
+      showSnack("Expiry date is required.", 'error');
       return false;
     }
 
     const taxResult = validatePercentage(quotationData.tax);
     if (!taxResult.isValid) {
-      setSnackbar({ show: true, message: taxResult.error, type: 'error' });
+      showSnack(taxResult.error, 'error');
       return false;
     }
 
     const discountResult = validatePercentage(quotationData.discount);
     if (!discountResult.isValid) {
-      setSnackbar({ show: true, message: discountResult.error, type: 'error' });
+      showSnack(discountResult.error, 'error');
       return false;
     }
 
     return true;
-  }, [quotationItems, quotationData]);
+  }, [quotationItems, quotationData, showSnack]);
 
-  const extractTermsImagesFromSections = useCallback((sections, currentTermsImages = []) => {
-    const images = [];
-    
-    // ✅ First, add existing Cloudinary images from termsImages state
-    if (currentTermsImages && currentTermsImages.length > 0) {
-      currentTermsImages.forEach((img) => {
-        if (img.url && !img.url.startsWith('data:')) {
-          images.push({
-            url: img.url,
-            publicId: img.publicId,
-            fileName: img.fileName
-          });
-        }
-      });
-    }
-    
-    // Also check sections for any additional images
-    if (sections && Array.isArray(sections)) {
-      sections.forEach((section) => {
-        if (section.images && Array.isArray(section.images)) {
-          section.images.forEach((img) => {
-            if (img.url && !img.url.startsWith('data:')) {
-              const exists = images.some(i => i.url === img.url);
-              if (!exists) {
-                images.push({
-                  url: img.url,
-                  publicId: img.publicId,
-                  fileName: img.fileName
-                });
-              }
-            }
-          });
-        }
-      });
-    }
-    
-    return images;
-  }, []);
-
-  
   const handleSave = useCallback(async () => {
     if (!validateBeforeSave()) return;
   
     setIsSaving(true);
     try {
       const quotationImages = {};
-      
+  
       quotationItems.forEach((item, index) => {
         const allImages = [];
-        
+  
         if (item.imagePaths && Array.isArray(item.imagePaths) && item.imagePaths.length > 0) {
           allImages.push(...item.imagePaths);
         }
-        
+  
         if (newImages[item.id] && Array.isArray(newImages[item.id]) && newImages[item.id].length > 0) {
-          allImages.push(...newImages[item.id]);
+          const previewUrls = newImages[item.id].map(img => img.preview || img);
+          allImages.push(...previewUrls);
         }
-        
-        if (item.newImages && Array.isArray(item.newImages) && item.newImages.length > 0) {
-          allImages.push(...item.newImages);
-        }
-        
+  
         if (allImages.length > 0) {
           quotationImages[index] = allImages;
         }
@@ -678,9 +680,7 @@ const amountInWords = useMemo(() => {
       const taxValue = parseFloat(quotationData.tax) || 0;
       const discountValue = parseFloat(quotationData.discount) || 0;
   
-      // === BUILD RAW TERMS & CONDITIONS ===
       let finalTermsAndConditions = "";
-  
       if (tcSections && tcSections.length > 0) {
         finalTermsAndConditions = tcSections
           .map(sec => {
@@ -694,43 +694,55 @@ const amountInWords = useMemo(() => {
       }
   
       const formattedItems = quotationItems.map((qi) => ({
-        itemId: qi.itemId,
+        itemId: qi.itemId || null,
+        name: qi.name || "",
+        description: qi.description || "",
         quantity: Number(qi.quantity) || 1,
         unitPrice: Number(qi.unitPrice) || 0,
-        description: qi.description || "",
+        imagePaths: qi.imagePaths || []
       }));
   
-      // ✅ IMPORTANT: Collect ALL terms images (both existing and new)
-      // Separate existing Cloudinary images from new base64 images
       const existingCloudinaryImages = termsImages.filter(img => img.url && !img.url.startsWith('data:'));
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
-      
-      console.log('📸 Existing Cloudinary images:', existingCloudinaryImages.length);
-      console.log('📸 New base64 images to upload:', newBase64Images.length);
   
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
-        projectName: quotationData.projectName,
-        customer: quotationData.customer,
-        contact: quotationData.contact,
+        
+        // Left side fields
+        projectName: quotationData.projectName?.trim(),
+        scopeOfWork: quotationData.scopeOfWork?.trim() || "",
+        remark: quotationData.remark?.trim() || "",
+        customer: quotationData.customer?.trim(),
+        customerName: quotationData.customerName?.trim() || "",
+        customerPhone: quotationData.customerPhone?.trim() || "",
+        customerEmail: quotationData.customerEmail?.trim() || "",
+        customerDesignation: quotationData.customerDesignation?.trim() || "",
+        customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber?.trim() || "",
+        customerTaxRegistrationNumber: quotationData.customerTaxRegistrationNumber?.trim() || "",
+        
+        contact: quotationData.customerPhone?.trim() || quotationData.contact?.trim() || "",
+        
+        // Right side fields
+        ourFocalPoint: quotationData.ourFocalPoint?.trim() || "",
+        ourFocalPointDesignation: quotationData.ourFocalPointDesignation?.trim() || "",
+        ourContact: quotationData.ourContact?.trim() || "",
+        salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",
+        
         date: quotationData.date,
         expiryDate: quotationData.expiryDate,
-        ourRef: quotationData.ourRef,
-        ourContact: quotationData.ourContact,
-        salesManagerEmail: quotationData.salesManagerEmail,
-        paymentTerms: quotationData.paymentTerms,
-        deliveryTerms: quotationData.deliveryTerms,
-        tl: quotationData.tl,
-        trn: quotationData.trn,
+        queryDate: quotationData.queryDate || null,
+        
+        ourRef: quotationData.ourRef?.trim() || "",
+        paymentTerms: quotationData.paymentTerms?.trim() || "",
+        deliveryTerms: quotationData.deliveryTerms?.trim() || "",
+        tl: quotationData.tl?.trim() || "",
+        trn: quotationData.trn?.trim() || "",
         taxPercent: taxValue,
         discountPercent: discountValue,
         notes: quotationData.notes?.trim() || "",
         
-        // ✅ Send RAW text
         termsAndConditions: finalTermsAndConditions,
-        
-        // ✅ Send ALL terms images - include both existing and new
-        termsImages: termsImages,
+        termsImages: [...existingCloudinaryImages, ...newBase64Images],
         
         items: formattedItems,
         quotationImages: quotationImages,
@@ -742,59 +754,96 @@ const amountInWords = useMemo(() => {
           .map(doc => doc.description || '')
       };
   
-      console.log("📤 Sending payload with termsImages count:", termsImages.length);
-      console.log("📤 Payload termsImages:", payload.termsImages.map(img => ({ 
-        hasUrl: !!img.url, 
-        isBase64: img.url?.startsWith('data:'),
-        fileName: img.fileName 
-      })));
-  
       const result = await updateQuotation(originalQuotation._id, payload);
   
       if (result?.success) {
         const updatedQuotation = result.quotation;
-        
+  
         if (updatedQuotation) {
+          // Update fetchedQ with the complete updated quotation
           setFetchedQ(updatedQuotation);
-          const parsedData = parseQuotationData(updatedQuotation);
-          delete parsedData.termsImage;
-          setQuotationData(parsedData);
-          setQuotationItems(parseQuotationItems(updatedQuotation.items));
           
-          // Update terms images from server response
+          // Update all state with the complete data from server
+          setQuotationData({
+            // Left side fields
+            projectName: updatedQuotation.projectName || "",
+            scopeOfWork: updatedQuotation.scopeOfWork || "",
+            remark: updatedQuotation.remark || "",
+            
+            // Customer/Company fields
+            customer: updatedQuotation.customer || updatedQuotation.customerSnapshot?.name || "",
+            customerName: updatedQuotation.customerName || updatedQuotation.customerSnapshot?.contactName || updatedQuotation.customerSnapshot?.name || "",
+            customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
+            customerEmail: updatedQuotation.customerEmail || updatedQuotation.customerSnapshot?.email || "",
+            customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
+            customerTradeLicenseNumber: updatedQuotation.customerTradeLicenseNumber || updatedQuotation.customerSnapshot?.tradeLicenseNumber || "",
+            customerTaxRegistrationNumber: updatedQuotation.customerTaxRegistrationNumber || updatedQuotation.customerSnapshot?.vatNumber || updatedQuotation.trn || "",
+            
+            // Right side fields
+            ourFocalPoint: updatedQuotation.ourFocalPoint || updatedQuotation.createdBySnapshot?.name || "",
+            ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBySnapshot?.role || "",
+            ourContact: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
+            salesManagerEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
+            companyPhone: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
+            companyEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
+            
+            // Dates
+            date: updatedQuotation.date ? new Date(updatedQuotation.date).toISOString().split('T')[0] : "",
+            expiryDate: updatedQuotation.expiryDate ? new Date(updatedQuotation.expiryDate).toISOString().split('T')[0] : "",
+            queryDate: updatedQuotation.queryDate ? new Date(updatedQuotation.queryDate).toISOString().split('T')[0] : "",
+            
+            // Other fields
+            ourRef: updatedQuotation.ourRef || "",
+            paymentTerms: updatedQuotation.paymentTerms || "",
+            deliveryTerms: updatedQuotation.deliveryTerms || "",
+            tl: updatedQuotation.tl || "",
+            trn: updatedQuotation.trn || "",
+            tax: updatedQuotation.taxPercent || 0,
+            discount: updatedQuotation.discountPercent || 0,
+            notes: updatedQuotation.notes || "",
+            currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
+          });
+          
+          // Update items
+          const updatedItems = parseQuotationItems(updatedQuotation.items);
+          setQuotationItems(updatedItems);
+  
+          // Update terms images
           const serverTermsImages = updatedQuotation.termsImages || [];
           setTermsImages(serverTermsImages.map(img => ({
             id: img._id || `img-${Date.now()}`,
             url: img.url,
             publicId: img.publicId,
             fileName: img.fileName,
-            isTemp: false
+            isTemp: false,
+            uploadedAt: img.uploadedAt
           })));
-          
+  
+          // Update terms sections
           const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
-          setTcSections(sections);
-          
+          setTcSections(sections.length ? sections : [newSection()]);
+  
+          // Update documents
           setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
         }
-        
-        setSnackbar({ show: true, message: "Quotation updated successfully!", type: 'success' });
+  
+        showSnack("Quotation updated successfully!", 'success');
         setIsEditing(false);
         setEditingImgId(null);
         setNewImages({});
         setNewDocuments([]);
         setFieldErrors({});
       } else {
-        setSnackbar({ show: true, message: result?.error || "Failed to update quotation", type: 'error' });
+        showSnack(result?.error || "Failed to update quotation", 'error');
       }
     } catch (err) {
       console.error("Save error:", err);
-      setSnackbar({ show: true, message: "Error saving quotation: " + (err.message || "Unknown error"), type: 'error' });
+      showSnack("Error saving quotation: " + (err.message || "Unknown error"), 'error');
     } finally {
       setIsSaving(false);
     }
   }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, newDocuments,
-      internalDocuments, tcSections, termsImages, updateQuotation]);
-
+      internalDocuments, tcSections, termsImages, updateQuotation, showSnack]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
@@ -803,45 +852,37 @@ const amountInWords = useMemo(() => {
     if (result?.success) {
       navigate(-1);
     } else {
-      setSnackbar({ show: true, message: result?.error || "Failed to delete quotation", type: 'error' });
+      showSnack(result?.error || "Failed to delete quotation", 'error');
     }
-  }, [originalQuotation, deleteQuotation, navigate]);
+  }, [originalQuotation, deleteQuotation, navigate, showSnack]);
 
   const handleBack = useCallback(() => {
     navigate(-1);
   }, [navigate]);
 
-  const handleDocumentPreview = useCallback((docId) => {
-    const doc = [...internalDocuments, ...newDocuments].find(d => 
-      (d._id === docId || d.id === docId)
-    );
-    
-    if (!doc) return;
-    
-    if (doc.fileType?.startsWith('image/')) {
-      setPreviewDoc(doc);
-    } else {
-      handleDocumentDownload(docId);
-    }
-  }, [internalDocuments, newDocuments, handleDocumentDownload]);
-
-  // ✅ SIMPLIFIED generatePDF - uses the same buildPDFHTML as HomeScreen
-  const generatePDF = useCallback(async () => {
+  const generatePDF = useCallback(async (exportType = 'with_total') => {
     if (!validateBeforeSave()) return;
-    
+
     setIsExporting(true);
     try {
-      // Build the quotation object for PDF generation
       const pdfQuotation = {
         ...originalQuotation,
         projectName: quotationData.projectName,
+        scopeOfWork: quotationData.scopeOfWork,
+        remark: quotationData.remark,
         customer: quotationData.customer,
-        contact: quotationData.contact,
+        customerName: quotationData.customerName,
+        customerPhone: quotationData.customerPhone,
+        customerEmail: quotationData.customerEmail,
+        customerDesignation: quotationData.customerDesignation,
+        customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber,
+        ourFocalPoint: quotationData.ourFocalPoint,
+        ourFocalPointDesignation: quotationData.ourFocalPointDesignation,
+        ourContact: quotationData.ourContact,
+        salesManagerEmail: quotationData.salesManagerEmail,
         date: quotationData.date,
         expiryDate: quotationData.expiryDate,
         ourRef: quotationData.ourRef,
-        ourContact: quotationData.ourContact,
-        salesManagerEmail: quotationData.salesManagerEmail,
         paymentTerms: quotationData.paymentTerms,
         deliveryTerms: quotationData.deliveryTerms,
         tl: quotationData.tl,
@@ -849,32 +890,32 @@ const amountInWords = useMemo(() => {
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes,
-        termsAndConditions: sectionsToHTML(tcSections),  
+        termsAndConditions: sectionsToHTML(tcSections),
+        remark: quotationData.remark || originalQuotation?.remark || "",
         items: quotationItems.map(item => ({
           ...item,
-          imagePaths: [...(item.imagePaths || []), ...(newImages[item.id] || [])]
-        }))
+          imagePaths: [...(item.imagePaths || []), ...((newImages[item.id] || []).map(img => img.preview))]
+        })),
+        subtotal,
+        taxAmount,
+        discountAmount,
+        grandTotal,
+        amountInWords,
+        exportType: exportType
       };
-      
-      await downloadQuotationPDF(pdfQuotation, { newImages });
-      
-      setSnackbar({
-        show: true,
-        message: "PDF downloaded successfully!",
-        type: 'success'
-      });
+
+      await downloadQuotationPDF(pdfQuotation, { newImages, exportType });
+      showSnack("PDF downloaded successfully!", 'success');
     } catch (err) {
       console.error("PDF export error:", err);
-      setSnackbar({
-        show: true,
-        message: `Failed to generate PDF: ${err.message}`,
-        type: 'error'
-      });
+      showSnack(`Failed to generate PDF: ${err.message}`, 'error');
     } finally {
       setIsExporting(false);
     }
-  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, tcSections]);
+  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, tcSections, 
+      subtotal, taxAmount, discountAmount, grandTotal, amountInWords, showSnack]);
 
+  // Return all values
   return {
     isEditing,
     setIsEditing,
@@ -904,11 +945,11 @@ const amountInWords = useMemo(() => {
     items,
     previewDoc,
     setPreviewDoc,
-    handleDocumentPreview,
-    generatePDF,
     customerTaxTreatment,
     customerPlaceOfSupply,
     termsImages,
+    handleDocumentPreview,
+    generatePDF,
     handleDataChange,
     addItem,
     removeItem,

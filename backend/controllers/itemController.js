@@ -99,6 +99,10 @@ function mapZohoItem(item) {
 // ─────────────────────────────────────────────────────────────────────────
 // GET ALL ITEMS WITH FILTERS
 // ─────────────────────────────────────────────────────────────────────────
+// controllers/itemController.js
+
+// controllers/itemController.js - Update getAllItems function
+
 exports.getAllItems = async (req, res) => {
   try {
     const { 
@@ -109,16 +113,132 @@ exports.getAllItems = async (req, res) => {
       product_type
     } = req.query;
     
-    const companyId = req.headers['x-company-id'] || req.query.companyId;
+    let companyId = req.headers['x-company-id'] || req.query.companyId;
+    const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
     
-    if (!companyId) {
+    // For ALL COMPANIES, fetch items from all companies and combine
+    if (isAllCompanies) {
+      // Get all active companies
+      const companies = await Company.find({ isActive: true }).select('_id name code zohoOrganizationId');
+      
+      if (companies.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalItems: 0,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPreviousPage: false
+          },
+          isAllCompanies: true
+        });
+      }
+      
+      // Fetch items from all companies in parallel
+      const allItemsPromises = companies.map(async (company) => {
+        if (!company.zohoOrganizationId) {
+          return { companyId: company._id, companyName: company.name, items: [], error: 'No Zoho Org ID' };
+        }
+        
+        try {
+          zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+          
+          const result = await ItemSyncService.getItems({
+            companyId: company._id,
+            page: 1,
+            limit: 1000, // Get more items per company for combined view
+            search: search.trim(),
+            forceRefresh: forceRefresh === 'true',
+            product_type: product_type && product_type !== 'all' ? product_type : undefined
+          });
+          
+          return {
+            companyId: company._id,
+            companyName: company.name,
+            companyCode: company.code,
+            items: result.success ? result.data : [],
+            count: result.success ? result.data.length : 0
+          };
+        } catch (error) {
+          console.error(`Error fetching items for company ${company.name}:`, error.message);
+          return {
+            companyId: company._id,
+            companyName: company.name,
+            items: [],
+            error: error.message
+          };
+        }
+      });
+      
+      const results = await Promise.all(allItemsPromises);
+      
+      // Combine all items
+      let allItems = [];
+      results.forEach(result => {
+        allItems = allItems.concat(result.items);
+      });
+      
+      // Apply additional search filter if needed
+      if (search && search.trim()) {
+        const searchTerm = search.toLowerCase();
+        allItems = allItems.filter(item => 
+          (item.name || '').toLowerCase().includes(searchTerm) ||
+          (item.sku || '').toLowerCase().includes(searchTerm) ||
+          (item.description || '').toLowerCase().includes(searchTerm)
+        );
+      }
+      
+      // Apply product_type filter if needed
+      if (product_type && product_type !== 'all') {
+        allItems = allItems.filter(item => item.product_type === product_type);
+      }
+      
+      // Sort items
+      allItems.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      
+      // Pagination
+      const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+      const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+      const startIndex = (parsedPage - 1) * parsedLimit;
+      const paginatedItems = allItems.slice(startIndex, startIndex + parsedLimit);
+      const totalItems = allItems.length;
+      const totalPages = Math.ceil(totalItems / parsedLimit);
+      
+      return res.status(200).json({
+        success: true,
+        data: paginatedItems,
+        pagination: {
+          page: parsedPage,
+          limit: parsedLimit,
+          totalItems,
+          totalPages,
+          hasNextPage: parsedPage < totalPages,
+          hasPreviousPage: parsedPage > 1
+        },
+        source: 'all_companies',
+        isAllCompanies: true,
+        companiesSummary: results.map(r => ({
+          id: r.companyId,
+          name: r.companyName,
+          itemCount: r.count
+        }))
+      });
+    }
+    
+    // Regular single company logic (existing code)
+    const actualCompanyId = companyId;
+    
+    if (!actualCompanyId) {
       return res.status(400).json({
         success: false,
         message: 'Company ID is required. Please select a company first.'
       });
     }
     
-    const company = await Company.findById(companyId);
+    const company = await Company.findById(actualCompanyId);
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -159,6 +279,7 @@ exports.getAllItems = async (req, res) => {
       data: result.data,
       pagination: result.pagination,
       source: result.source,
+      isAllCompanies: false,
       company: {
         id: company._id,
         name: company.name,

@@ -1,132 +1,48 @@
-const {Quotation} = require('../models/quotation');
+const { Quotation } = require('../models/quotation');
 const mongoose = require('mongoose');
 
 // ─────────────────────────────────────────────────────────────
-// Shared populate helper - FIXED
+// Shared populate helper
 // ─────────────────────────────────────────────────────────────
 const fullPopulate = (q) =>
   q
-    .populate('customerId',    'name email phone address')
-    .populate('items.itemId',  'name price description imagePath')
-    .populate('createdBy',     'name email')
+    .populate('customerId', 'name email phone address')
+     .populate('createdBy', 'name email')
     .populate('opsApprovedBy', 'name email')
-    .populate('approvedBy',    'name email')
-    .populate('awardedBy',     'name email');
+    .populate('approvedBy', 'name email')
+    .populate('awardedBy', 'name email');
 
 // ─────────────────────────────────────────────────────────────
-// Reusable sanitization function
+// Sanitization function
 // ─────────────────────────────────────────────────────────────
 const sanitizeQuotation = (q) => {
   if (!q) return null;
-  
   return {
     ...q,
-    // Ensure numeric fields exist
-    total: typeof q.total === 'number' ? q.total : 0,
-    subtotal: typeof q.subtotal === 'number' ? q.subtotal : 0,
-    taxAmount: typeof q.taxAmount === 'number' ? q.taxAmount : 0,
-    discountAmount: typeof q.discountAmount === 'number' ? q.discountAmount : 0,
-    totalInBaseCurrency: typeof q.totalInBaseCurrency === 'number' ? q.totalInBaseCurrency : 0,
+    total: Number(q.total) || 0,
+    subtotal: Number(q.subtotal) || 0,
+    taxAmount: Number(q.taxAmount) || 0,
+    discountAmount: Number(q.discountAmount) || 0,
+    totalInBaseCurrency: Number(q.totalInBaseCurrency) || 0,
     
-    // Ensure items array is safe with full item details
     items: (q.items || []).map(item => ({
       ...item,
-      quantity: typeof item.quantity === 'number' ? item.quantity : 0,
-      unitPrice: typeof item.unitPrice === 'number' ? item.unitPrice : 0,
-      totalPrice: typeof item.totalPrice === 'number' ? item.totalPrice : 0,
-      unitPriceInBaseCurrency: typeof item.unitPriceInBaseCurrency === 'number' ? item.unitPriceInBaseCurrency : 0,
-      totalPriceInBaseCurrency: typeof item.totalPriceInBaseCurrency === 'number' ? item.totalPriceInBaseCurrency : 0,
+      quantity: Number(item.quantity) || 0,
+      unitPrice: Number(item.unitPrice) || 0,
+      totalPrice: Number(item.totalPrice) || 0,
+      unitPriceInBaseCurrency: Number(item.unitPriceInBaseCurrency) || 0,
+      totalPriceInBaseCurrency: Number(item.totalPriceInBaseCurrency) || 0,
       description: item.description || '',
       imagePaths: item.imagePaths || [],
-      imagePublicIds: item.imagePublicIds || [],
-      // Ensure itemId has all fields
-      itemId: item.itemId ? {
-        ...item.itemId,
-        name: item.itemId.name || '',
-        price: typeof item.itemId.price === 'number' ? item.itemId.price : 0,
-        description: item.itemId.description || '',
-        imagePath: item.itemId.imagePath || null
-      } : null
     })),
+
+    currency: q.currency || { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham' },
+    customerSnapshot: q.customerSnapshot || { name: 'N/A' },
+    companySnapshot: q.companySnapshot || { name: 'N/A' },
     
-    // Ensure currency object exists
-    currency: q.currency || {
-      code: 'AED',
-      symbol: 'د.إ',
-      name: 'UAE Dirham',
-      decimalPlaces: 2,
-      exchangeRate: {
-        rate: 1,
-        baseCurrency: 'AED',
-        fetchedAt: new Date()
-      }
-    },
-    
-    // Ensure customerSnapshot exists
-    customerSnapshot: q.customerSnapshot || {
-      name: q.customer || 'N/A',
-      email: '',
-      phone: '',
-      address: '',
-      country: 'UAE'
-    },
-    
-    // Ensure companySnapshot exists
-    companySnapshot: q.companySnapshot || {
-      name: 'N/A',
-      code: 'N/A',
-      address: '',
-      phone: '',
-      email: '',
-      vatNumber: '',
-      crNumber: '',
-      logo: null,
-      bankDetails: {}
-    },
-    
-    // Ensure internalDocuments is an array
-    internalDocuments: q.internalDocuments || [],
-    
-    // Ensure dates are strings
-    date: q.date ? new Date(q.date).toISOString() : new Date().toISOString(),
-    expiryDate: q.expiryDate ? new Date(q.expiryDate).toISOString() : new Date().toISOString(),
-    createdAt: q.createdAt ? new Date(q.createdAt).toISOString() : new Date().toISOString(),
-    updatedAt: q.updatedAt ? new Date(q.updatedAt).toISOString() : new Date().toISOString(),
-    
-    // Ensure string fields exist
+    status: q.status || 'pending',
     quotationNumber: q.quotationNumber || '',
     projectName: q.projectName || '',
-    contact: q.contact || '',
-    ourRef: q.ourRef || '',
-    ourContact: q.ourContact || '',
-    salesOffice: q.salesOffice || '',
-    paymentTerms: q.paymentTerms || '',
-    deliveryTerms: q.deliveryTerms || '',
-    tl: q.tl || '',
-    trn: q.trn || '',
-    notes: q.notes || '',
-    termsAndConditions: q.termsAndConditions || '',
-    termsImage: q.termsImage || null,
-    termsImagePublicId: q.termsImagePublicId || null,
-    status: q.status || 'pending',
-    
-    // Ensure createdBy is populated
-    createdBy: q.createdBy || { 
-      _id: null,
-      name: 'Unknown', 
-      email: '' 
-    },
-    
-    // Ensure approval fields exist
-    opsApprovedBy: q.opsApprovedBy || null,
-    opsApprovedAt: q.opsApprovedAt || null,
-    opsRejectionReason: q.opsRejectionReason || '',
-    approvedBy: q.approvedBy || null,
-    approvedAt: q.approvedAt || null,
-    rejectionReason: q.rejectionReason || '',
-    awardedBy: q.awardedBy || null,
-    awardedAt: q.awardedAt || null,
-    awardNote: q.awardNote || ''
   };
 };
 
@@ -134,8 +50,6 @@ const sanitizeQuotation = (q) => {
 // OPS MANAGER CONTROLLERS
 // ═══════════════════════════════════════════════════════════════
 
-// @desc  Get quotations pending ops-manager review
-// @route GET /api/admin/quotations/ops-pending
 exports.getOpsPendingQuotations = async (req, res) => {
   try {
     const quotations = await fullPopulate(
@@ -145,43 +59,29 @@ exports.getOpsPendingQuotations = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-    res.status(500).json({ 
-      message: 'Error fetching pending quotations', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error fetching pending quotations', error: error.message });
   }
 };
 
-// @desc  Get ALL quotations relevant to Ops Manager (pending, ops_approved, ops_rejected, rejected, approved, awarded)
-// @route GET /api/admin/quotations/ops-all
 exports.getAllOpsQuotations = async (req, res) => {
   try {
     const { status, search, fromDate, toDate } = req.query;
     
-    // Build query - Ops can see all quotations except 'draft' maybe
     const query = {
-      status: { 
-        $in: ['pending', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] 
-      }
+      status: { $in: ['pending', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] }
     };
     
-    // Apply status filter if provided
-    if (status && status !== 'all') {
-      query.status = status;
-    }
+    if (status && status !== 'all') query.status = status;
     
-    // Apply search filter
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
       query.$or = [
         { quotationNumber: searchRegex },
         { 'customerSnapshot.name': searchRegex },
-        { 'customerId.name': searchRegex },
         { projectName: searchRegex }
       ];
     }
     
-    // Apply date filters
     if (fromDate || toDate) {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
@@ -194,7 +94,6 @@ exports.getAllOpsQuotations = async (req, res) => {
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     
-    // Calculate counts for tabs
     const counts = {
       all: sanitizedQuotations.length,
       pending: sanitizedQuotations.filter(q => q.status === 'pending').length,
@@ -212,113 +111,78 @@ exports.getAllOpsQuotations = async (req, res) => {
       total: sanitizedQuotations.length
     });
   } catch (error) {
-    res.status(500).json({ 
-      message: 'Error fetching quotations', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Error fetching quotations', error: error.message });
   }
 };
 
-// @desc  Ops manager approves quotation
-// @route PUT /api/admin/quotations/:id/ops-approve
 exports.opsApproveQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id);
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
-
-    if (quotation.status !== 'pending')
-      return res.status(400).json({
-        message: `Quotation cannot be ops-approved. Current status: ${quotation.status}`,
-      });
+    if (quotation.status !== 'pending') {
+      return res.status(400).json({ message: `Cannot approve. Current status: ${quotation.status}` });
+    }
 
     quotation.status = 'ops_approved';
     quotation.opsApprovedBy = req.user.id;
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = '';
-    
-    // Store ops manager snapshot
+
+    // ✅ Fix: Update opsApprovedBySnapshot properly
     quotation.opsApprovedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
-      role: req.user.role
+      role: req.user.role,
+      approvedAt: new Date()
     };
-    
+
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
-    const sanitized = sanitizeQuotation(updated);
 
     res.json({
       success: true,
-      message: 'Quotation approved by operations manager — now awaiting admin approval',
-      quotation: sanitized,
+      message: 'Quotation approved by operations manager',
+      quotation: sanitizeQuotation(updated),
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error approving quotation (ops)', error: error.message });
+    res.status(500).json({ message: 'Error approving quotation', error: error.message });
   }
 };
 
-// @desc  Ops manager rejects quotation
-// @route PUT /api/admin/quotations/:id/ops-reject
 exports.opsRejectQuotation = async (req, res) => {
   try {
     const { reason } = req.body;
-
-    if (!reason?.trim())
-      return res.status(400).json({ message: 'Rejection reason is required' });
+    if (!reason?.trim()) return res.status(400).json({ message: 'Rejection reason is required' });
 
     const quotation = await Quotation.findById(req.params.id);
-
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
-
-    if (quotation.status !== 'pending')
-      return res.status(400).json({
-        message: `Quotation cannot be ops-rejected. Current status: ${quotation.status}`,
-      });
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     quotation.status = 'ops_rejected';
     quotation.opsApprovedBy = req.user.id;
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = reason.trim();
+
+    // ✅ Fix: Update opsApprovedBySnapshot properly for rejection
+    quotation.opsApprovedBySnapshot = {
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role,
+      approvedAt: new Date()
+    };
+
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
-    const sanitized = sanitizeQuotation(updated);
 
     res.json({
       success: true,
       message: 'Quotation rejected by operations manager',
-      quotation: sanitized,
+      quotation: sanitizeQuotation(updated),
     });
   } catch (error) {
-    res.status(500).json({ message: 'Error rejecting quotation (ops)', error: error.message });
-  }
-};
-
-// @desc  Get ops review history (ops_approved, ops_rejected, and rejected by admin)
-// @route GET /api/admin/quotations/ops-history
-exports.getOpsReviewHistory = async (req, res) => {
-  try {
-    const quotations = await fullPopulate(
-      Quotation.find({
-        status: { $in: ['ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded'] }
-      }).sort({ updatedAt: -1 })
-    ).lean();
-
-    const sanitizedQuotations = quotations.map(sanitizeQuotation);
-    res.json({
-      success: true,
-      quotations: sanitizedQuotations,
-      total: sanitizedQuotations.length
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: 'Error fetching ops review history',
-      error: error.message
-    });
+    res.status(500).json({ message: 'Error rejecting quotation', error: error.message });
   }
 };
 
@@ -326,8 +190,6 @@ exports.getOpsReviewHistory = async (req, res) => {
 // ADMIN CONTROLLERS
 // ═══════════════════════════════════════════════════════════════
 
-// @desc  Get quotations pending admin approval
-// @route GET /api/admin/quotations/pending
 exports.getPendingQuotations = async (req, res) => {
   try {
     const quotations = await fullPopulate(
@@ -337,44 +199,35 @@ exports.getPendingQuotations = async (req, res) => {
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     res.json(sanitizedQuotations);
   } catch (error) {
-     
     res.status(500).json({ message: 'Error fetching pending quotations', error: error.message });
   }
 };
 
-// @desc  Admin approves quotation
-// @route PUT /api/admin/quotations/:id/approve
 exports.approveQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id);
-
-    if (!quotation) {
-      return res.status(404).json({ message: 'Quotation not found' });
-    }
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Only admin can approve quotation' });
     }
 
     const allowedStatuses = ['ops_approved', 'pending_admin'];
-
     if (!allowedStatuses.includes(quotation.status)) {
-      return res.status(400).json({
-        message: `Quotation cannot be approved in current status: ${quotation.status}`,
-      });
+      return res.status(400).json({ message: `Quotation cannot be approved in current status: ${quotation.status}` });
     }
 
     quotation.status = 'approved';
     quotation.approvedBy = req.user.id;
     quotation.approvedAt = new Date();
     
-    // ✅ Store admin approval snapshot
     quotation.approvedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
-      role: req.user.role
+      role: req.user.role,
+      approvedAt: new Date()
     };
-    
+
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
@@ -382,40 +235,38 @@ exports.approveQuotation = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Quotation approved — ready to be sent to client',
+      message: 'Quotation approved successfully',
       quotation: sanitized,
     });
   } catch (error) {
-    res.status(500).json({
-      message: 'Error approving quotation',
-      error: error.message,
-    });
+    res.status(500).json({ message: 'Error approving quotation', error: error.message });
   }
 };
 
-// @desc  Admin rejects quotation
-// @route PUT /api/admin/quotations/:id/reject
 exports.rejectQuotation = async (req, res) => {
   try {
     const { reason } = req.body;
-
-    if (!reason?.trim())
-      return res.status(400).json({ message: 'Rejection reason is required' });
+    if (!reason?.trim()) return res.status(400).json({ message: 'Rejection reason is required' });
 
     const quotation = await Quotation.findById(req.params.id);
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
-
-    if (!['pending', 'ops_approved', 'pending_admin'].includes(quotation.status))
-      return res.status(400).json({
-        message: `Quotation cannot be rejected. Current status: ${quotation.status}`,
-      });
+    if (!['pending', 'ops_approved', 'pending_admin'].includes(quotation.status)) {
+      return res.status(400).json({ message: `Quotation cannot be rejected. Current status: ${quotation.status}` });
+    }
 
     quotation.status = 'rejected';
     quotation.rejectionReason = reason.trim();
     quotation.approvedBy = req.user.id;
     quotation.approvedAt = new Date();
+    
+    quotation.approvedBySnapshot = {
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role,
+      approvedAt: new Date()
+    };
+
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
@@ -423,11 +274,10 @@ exports.rejectQuotation = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Quotation rejected',
+      message: 'Quotation rejected successfully',
       quotation: sanitized,
     });
   } catch (error) {
-     
     res.status(500).json({ message: 'Error rejecting quotation', error: error.message });
   }
 };
@@ -436,29 +286,82 @@ exports.rejectQuotation = async (req, res) => {
 // ALL QUOTATIONS (admin)
 // ═══════════════════════════════════════════════════════════════
 
-// @desc  Get all quotations with filters (admin)
+// @desc  Get all quotations with filters and pagination (admin)
 // @route GET /api/admin/quotations
 exports.getAllQuotationsAdmin = async (req, res) => {
   try {
-    const { status, fromDate, toDate, userId } = req.query;
+    const { 
+      status, 
+      fromDate, 
+      toDate, 
+      userId, 
+      companyId,
+      page = 1,
+      limit = 20,
+      search = ''
+    } = req.query;
 
-    const query = {};
-    if (status) query.status = status;
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (parsedPage - 1) * parsedLimit;
+    
+    let query = {};
+    
+    // Handle company filter - if no companyId or 'all', don't filter by company
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        query.companyId = companyId;
+      }
+    }
+    
+    if (status && status !== 'all') query.status = status;
     if (userId) query.createdBy = userId;
+    
     if (fromDate || toDate) {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
       if (toDate) query.createdAt.$lte = new Date(toDate);
     }
+    
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { quotationNumber: searchRegex },
+        { 'customerSnapshot.name': searchRegex },
+        { projectName: searchRegex }
+      ];
+    }
 
+    // Get total count for pagination
+    const totalCount = await Quotation.countDocuments(query);
+    
+    // Get paginated results
     const quotations = await fullPopulate(
-      Quotation.find(query).sort({ createdAt: -1 })
+      Quotation.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parsedLimit)
     ).lean();
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
-    res.json(sanitizedQuotations);
+    const totalPages = Math.ceil(totalCount / parsedLimit);
+    
+    res.json({
+      success: true,
+      quotations: sanitizedQuotations,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total: totalCount,
+        totalPages,
+        hasNextPage: parsedPage < totalPages,
+        hasPreviousPage: parsedPage > 1
+      },
+      filters: { status, fromDate, toDate, userId, companyId, search },
+      isAllCompanies: !companyId || companyId === 'all'
+    });
   } catch (error) {
-     
+    console.error('Get all quotations error:', error);
     res.status(500).json({ 
       message: 'Error fetching quotations', 
       error: error.message 
@@ -474,8 +377,15 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 // @route GET /api/admin/dashboard/stats
 exports.getAdminDashboardStats = async (req, res) => {
   try {
-    const { companyId } = req.query;
-    const matchStage = companyId ? { companyId: new mongoose.Types.ObjectId(companyId) } : {};
+    let { companyId } = req.query;
+    let matchStage = {};
+    
+    // Handle "All Companies" - don't filter by companyId
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+      }
+    }
 
     const [
       totalQuotations,
@@ -579,11 +489,12 @@ exports.getAdminDashboardStats = async (req, res) => {
         conversionRate: conversionRateData.rate || 0,
         rejected: counts.rejected || 0,
         statusCounts: counts,
-        conversionDetails: conversionRateData
+        conversionDetails: conversionRateData,
+        isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
       }
     });
   } catch (err) {
-     
+    console.error('Admin stats error:', err);
     res.status(500).json({ 
       success: false,
       message: 'Error fetching admin dashboard stats', 
@@ -596,8 +507,14 @@ exports.getAdminDashboardStats = async (req, res) => {
 // @route GET /api/admin/ops-dashboard/stats
 exports.getOpsDashboardStats = async (req, res) => {
   try {
-    const { companyId } = req.query;
-    const matchStage = companyId ? { companyId: new mongoose.Types.ObjectId(companyId) } : {};
+    let { companyId } = req.query;
+    let matchStage = {};
+    
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+      }
+    }
 
     const [
       totalQuotations,
@@ -632,6 +549,7 @@ exports.getOpsDashboardStats = async (req, res) => {
       awaitingAdmin: opsApprovedCount || 0,
       returnedByMe: opsRejectedCount || 0,
       totalValue: totalValue[0]?.total || 0,
+      isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
     };
 
     res.json({
@@ -639,7 +557,7 @@ exports.getOpsDashboardStats = async (req, res) => {
       stats
     });
   } catch (err) {
-     
+    console.error('Ops stats error:', err);
     res.status(500).json({ 
       success: false,
       message: 'Error fetching ops dashboard stats', 
@@ -650,23 +568,21 @@ exports.getOpsDashboardStats = async (req, res) => {
 
 exports.getUserQuotationStats = async (req, res) => {
   try {
-    const companyId = req.companyId || req.headers['x-company-id'];
+    let companyId = req.companyId || req.headers['x-company-id'];
+    let matchStage = {};
     
-    if (!companyId) {
-      return res.status(400).json({ message: 'Company ID is required' });
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+      }
     }
 
-    // Check if user is admin (only admins can see user stats)
     if (req.user?.role !== 'admin') {
       return res.status(403).json({ message: 'Unauthorized to view user statistics' });
     }
 
-    // Use 'new' keyword with ObjectId
-    const companyObjectId = new mongoose.Types.ObjectId(companyId);
-
-    // Aggregate quotations by createdBy user - MongoDB compatible version
     const userStats = await Quotation.aggregate([
-      { $match: { companyId: companyObjectId } },
+      { $match: matchStage },
       {
         $group: {
           _id: '$createdBy',
@@ -688,8 +604,7 @@ exports.getUserQuotationStats = async (req, res) => {
           as: 'userInfo'
         }
       },
-      // FIX: Remove preserveNullAndEmptyValues - use $unwind with { path: '$userInfo' }
-      { $unwind: { path: '$userInfo' } },
+      { $unwind: { path: '$userInfo', preserveNullAndEmptyArrays: true } },
       {
         $project: {
           userId: '$_id',
@@ -743,8 +658,7 @@ exports.getUserQuotationStats = async (req, res) => {
       { $sort: { totalQuotations: -1 } }
     ]);
 
-    // Get total counts
-    const totalQuotations = await Quotation.countDocuments({ companyId: companyObjectId });
+    const totalQuotations = await Quotation.countDocuments(matchStage);
     const totalUsers = userStats.length;
 
     res.json({
@@ -753,7 +667,8 @@ exports.getUserQuotationStats = async (req, res) => {
       summary: {
         totalQuotations,
         totalUsers,
-        averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0
+        averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0,
+        isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
       }
     });
 

@@ -6,8 +6,7 @@ const {
   getOpsPendingQuotations,
   opsApproveQuotation,
   opsRejectQuotation,
-  getOpsReviewHistory,
-  getAllOpsQuotations,
+   getAllOpsQuotations,
   // Admin level
   getPendingQuotations,
   getAllQuotationsAdmin,
@@ -34,8 +33,7 @@ router.get('/quotations/ops-all', opsManagerOrAdmin, getAllOpsQuotations);
 router.get('/quotations/ops-pending',      opsManagerOrAdmin, getOpsPendingQuotations);
 router.put('/quotations/:id/ops-approve',  opsManagerOrAdmin, opsApproveQuotation);
 router.put('/quotations/:id/ops-reject',   opsManagerOrAdmin, opsRejectQuotation);
-router.get('/quotations/ops-history',     opsManagerOrAdmin, getOpsReviewHistory);
-
+ 
 // ── Admin-only review routes ────────────────────────────────
 router.get('/quotations/pending',     adminOnly, getPendingQuotations);
 router.get('/quotations',             adminOnly, getAllQuotationsAdmin);

@@ -6,6 +6,9 @@ const SyncLogger = require('../utils/syncLogger');
 const { Customer } = require('../models/customer');
 const { Item } = require('../models/items');
 const Company = require('../models/company');
+const SyncProgressManager = require('../utils/syncProgress');
+
+  const customerSyncCancelMap = new Map();
 
 class ZohoBooksService {
   constructor() {
@@ -345,13 +348,21 @@ class ZohoBooksService {
     const perPage = 200;
     let hasMorePages = true;
     
-    // console.log(`\n🔍 Starting customer fetch for company ${companyId}`);
+    console.log(`\n🔍 Starting customer fetch for company ${companyId}`);
+    console.log(`📅 Mode: ${lastSyncDate ? 'INCREMENTAL' : 'FULL SYNC'}`);
     
     while (hasMorePages && page <= 50) {
       try {
         let url = `/contacts?page=${page}&per_page=${perPage}&filter_by=Status.All`;
         
-        // console.log(`📡 Fetching page ${page}...`);
+        // ONLY add date filter if lastSyncDate is provided (incremental sync)
+        if (lastSyncDate) {
+          url += `&last_modified_time=after.${lastSyncDate}`;
+          console.log(`📡 Fetching page ${page} (modified after ${lastSyncDate})...`);
+        } else {
+          console.log(`📡 Fetching page ${page} (ALL customers)...`);
+        }
+        
         const result = await this._request('GET', url);
         
         if (result.success && result.data?.contacts) {
@@ -361,33 +372,20 @@ class ZohoBooksService {
           // Filter customers
           const customers = contacts.filter(contact => contact.contact_type === 'customer');
           
-          // console.log(`📥 Page ${page}: ${contacts.length} total contacts, ${customers.length} customers`);
+          console.log(`📥 Page ${page}: ${contacts.length} total contacts, ${customers.length} customers`);
           
-          // Check for duplicates within this page
-          const pageContactIds = new Set();
+          // Deduplicate
           for (const customer of customers) {
-            if (pageContactIds.has(customer.contact_id)) {
-              // console.log(`⚠️ Duplicate found within same page: ${customer.contact_id} - ${customer.contact_name}`);
-            }
-            pageContactIds.add(customer.contact_id);
-            
-            // Check against previously fetched customers
-            if (uniqueCustomers.has(customer.contact_id)) {
-              const existing = uniqueCustomers.get(customer.contact_id);
-              // console.log(`⚠️ DUPLICATE DETECTED: ${customer.contact_id} - ${customer.contact_name}`);
-              // console.log(`   First seen on page: ${existing.page}`);
-              // console.log(`   Duplicate on page: ${page}`);
+            if (!uniqueCustomers.has(customer.contact_id)) {
+              uniqueCustomers.set(customer.contact_id, customer);
             } else {
-              uniqueCustomers.set(customer.contact_id, {
-                customer,
-                page
-              });
+              console.log(`⚠️ Duplicate skipped: ${customer.contact_id} - ${customer.contact_name}`);
             }
           }
           
           allCustomers.push(...customers);
-          
           hasMorePages = pageContext.has_more_page === true;
+          
           if (hasMorePages) {
             page++;
             await new Promise(resolve => setTimeout(resolve, 400));
@@ -396,339 +394,489 @@ class ZohoBooksService {
           hasMorePages = false;
         }
       } catch (error) {
-        // console.error(`❌ Error fetching page ${page}:`, error.message);
+        console.error(`❌ Error fetching page ${page}:`, error.message);
         hasMorePages = false;
       }
     }
     
-    // console.log(`\n📊 FINAL RESULT for company ${companyId}:`);
-    // console.log(`   Total customers fetched (including duplicates): ${allCustomers.length}`);
-    // console.log(`   Unique customers: ${uniqueCustomers.size}`);
+    console.log(`\n📊 FINAL RESULT for company ${companyId}:`);
+    console.log(`   Total customers fetched (including duplicates): ${allCustomers.length}`);
+    console.log(`   Unique customers: ${uniqueCustomers.size}`);
     
-    // Log duplicate details if any
-    if (allCustomers.length > uniqueCustomers.size) {
-      console.log(`\n⚠️ DUPLICATES FOUND: ${allCustomers.length - uniqueCustomers.size} duplicate(s)`);
-      
-      // Find and log duplicates
-      const seen = new Map();
-      for (const customer of allCustomers) {
-        if (seen.has(customer.contact_id)) {
-          console.log(`   Duplicate: ${customer.contact_id} - ${customer.contact_name}`);
-        } else {
-          seen.set(customer.contact_id, true);
-        }
-      }
-    }
-    
-    // Return unique customers only
     return { 
       success: true, 
-      customers: Array.from(uniqueCustomers.values()).map(item => item.customer),
+      customers: Array.from(uniqueCustomers.values()),
       totalUnique: uniqueCustomers.size,
       totalWithDuplicates: allCustomers.length
     };
   }
+  
+  // ============================================================
+  // UPDATED: syncContactsToDatabase - Handle both incremental and full sync
+  // ============================================================
+ 
+async syncContactsToDatabase(company, incremental = true, syncJobId = null, onProgress = null, companyIdForCancel = null) {
+  try {
+    this.setCompany(company._id, company.zohoOrganizationId);
+    const startTime = Date.now();  
+    const CustomerModel = Customer;
+    
+    console.log(`\n${'='.repeat(70)}`);
+    console.log(`🔄 Starting Customer Sync for Company: ${company.name} (${company.code})`);
+    console.log(`📅 Mode: ${incremental ? 'INCREMENTAL' : 'FULL SYNC'}`);
+    console.log(`${'='.repeat(70)}`);
 
-  async syncContactsToDatabase(company, incremental = true) {
-    try {
-      this.setCompany(company._id, company.zohoOrganizationId);
-      const startTime = Date.now();
-      const CustomerModel = Customer;
-      
-      // console.log(`\n${'='.repeat(70)}`);
-      // console.log(`🔄 Starting Customer Sync for Company: ${company.name} (${company.code})`);
-      // console.log(`📅 Mode: ${incremental ? 'INCREMENTAL' : 'FULL'}`);
-      // console.log(`${'='.repeat(70)}`);
-      
-      let lastSyncDate = null;
-      if (incremental) {
-        const lastSyncedCustomer = await CustomerModel.findOne({ 
-          companyId: company._id,
-          zohoSyncDate: { $ne: null },
-          zohoSynced: true 
-        }).sort({ zohoSyncDate: -1 });
-        
-        if (lastSyncedCustomer && lastSyncedCustomer.zohoSyncDate) {
-          const syncDate = new Date(lastSyncedCustomer.zohoSyncDate);
-          syncDate.setHours(syncDate.getHours() - 1);
-          lastSyncDate = syncDate.toISOString().split('T')[0];
-          // console.log(`📅 Last sync: ${lastSyncedCustomer.zohoSyncDate.toISOString()}`);
-          // console.log(`📅 Fetching customers modified after: ${lastSyncDate}`);
-        } else {
-          const ninetyDaysAgo = new Date();
-          ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-          lastSyncDate = ninetyDaysAgo.toISOString().split('T')[0];
-          // console.log(`📅 First sync - fetching customers from last 90 days: ${lastSyncDate}`);
-        }
-      } else {
-        // console.log(`📅 Full sync - fetching ALL customers from Zoho`);
-      }
-      
-      console.log(`\n📡 Fetching customers from Zoho...`);
-      const fetchResult = await this.getAllCustomersPaginated(company._id, lastSyncDate);
-      
-      if (!fetchResult.success) {
-        throw new Error(fetchResult.error || 'Failed to fetch customers from Zoho');
-      }
-      
-      const zohoCustomers = fetchResult.customers || [];
-      // console.log(`✅ Fetched ${zohoCustomers.length} customers from Zoho`);
-      
-      if (zohoCustomers.length === 0) {
-        return {
-          success: true,
-          message: 'No customers found to sync',
-          totalFromZoho: 0,
-          created: 0,
-          updated: 0,
-          unchanged: 0,
-          errors: 0
-        };
-      }
-      
-      const nonVatCustomers = [];
-      const vatCustomers = [];
-      
-      for (const zc of zohoCustomers) {
-        const isVatRegistered = zc.tax_treatment === 'vat_registered' || 
-                                 zc.gcc_vat_treatment === 'vat_registered' ||
-                                 zc.contact_category === 'vat_registered';
-        if (isVatRegistered) {
-          vatCustomers.push(zc);
-        } else {
-          nonVatCustomers.push(zc);
-        }
-      }
-      
-      // console.log(`\n📊 Customer Breakdown:`);
-      // console.log(`   Non-VAT Customers: ${nonVatCustomers.length}`);
-      // console.log(`   VAT Customers: ${vatCustomers.length}`);
-      // console.log(`   Total: ${zohoCustomers.length}`);
-      
-      // console.log(`\n🔄 Processing ${nonVatCustomers.length} Non-VAT Customers...`);
-      let created = 0;
-      let updated = 0;
-      let unchanged = 0;
-      let errors = 0;
-      
-      const batchSize = 50;
-      for (let i = 0; i < nonVatCustomers.length; i += batchSize) {
-        const batch = nonVatCustomers.slice(i, i + batchSize);
-        await Promise.all(batch.map(async (zc) => {
-          try {
-            const result = await this.processCustomerRecord(company._id, zc, null);
-            if (result.action === 'created') created++;
-            else if (result.action === 'updated') updated++;
-            else if (result.action === 'unchanged') unchanged++;
-            if (result.error) errors++;
-          } catch (error) {
-            // console.error(`❌ Error processing ${zc.contact_name}:`, error.message);
-            errors++;
-          }
-        }));
-        // console.log(`   Non-VAT Progress: ${Math.min(i + batchSize, nonVatCustomers.length)}/${nonVatCustomers.length} (Created: ${created}, Updated: ${updated})`);
-      }
-      
-      // console.log(`\n🔄 Processing ${vatCustomers.length} VAT Customers (fetching TRN)...`);
-      let vatCreated = 0;
-      let vatUpdated = 0;
-      let vatUnchanged = 0;
-      let vatErrors = 0;
-      let trnFetched = 0;
-      let trnFailed = 0;
-      
-      const vatBatchSize = 10;
-      for (let i = 0; i < vatCustomers.length; i += vatBatchSize) {
-        const batch = vatCustomers.slice(i, i + vatBatchSize);
-        const batchResults = await Promise.all(batch.map(async (zc) => {
-          try {
-            // console.log(`🔍 Fetching TRN for: ${zc.contact_name} (Zoho ID: ${zc.contact_id})`);
-            const contactResult = await this.getContact(zc.contact_id);
-            if (contactResult.success && contactResult.contact) {
-              trnFetched++;
-              const trn = contactResult.contact.tax_reg_no || '';
-              // console.log(`✅ TRN fetched for ${zc.contact_name}: ${trn || 'No TRN'}`);
-              const result = await this.processCustomerRecord(company._id, zc, contactResult.contact);
-              return result;
-            } else {
-              trnFailed++;
-              // console.warn(`⚠️ Could not fetch TRN for ${zc.contact_name}, using basic data`);
-              const result = await this.processCustomerRecord(company._id, zc, null);
-              return result;
-            }
-          } catch (error) {
-            trnFailed++;
-            // console.error(`❌ Error fetching TRN for ${zc.contact_name}:`, error.message);
-            const result = await this.processCustomerRecord(company._id, zc, null);
-            return result;
-          }
-        }));
-        
-        for (const result of batchResults) {
-          if (result.action === 'created') vatCreated++;
-          else if (result.action === 'updated') vatUpdated++;
-          else if (result.action === 'unchanged') vatUnchanged++;
-          if (result.error) vatErrors++;
-        }
-         await new Promise(resolve => setTimeout(resolve, 500));
-      }
-      
-      const totalCreated = created + vatCreated;
-      const totalUpdated = updated + vatUpdated;
-      const totalUnchanged = unchanged + vatUnchanged;
-      const totalErrors = errors + vatErrors;
-      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-   
-       this._clearCache(this.CACHE_KEYS.ALL_CONTACTS(company._id));
-       
-      return {
-        success: true,
-        totalFromZoho: zohoCustomers.length,
-        created: totalCreated,
-        updated: totalUpdated,
-        unchanged: totalUnchanged,
-        errors: totalErrors,
-        vatCount: vatCustomers.length,
-        trnFetched,
-        trnFailed,
-        duration: `${duration}s`,
-        lastSyncDate: new Date().toISOString()
-      };
-    } catch (error) {
-      // console.error('❌ Sync error:', error);
-      return { success: false, error: error.message };
+    // Initialize Progress
+    if (onProgress) {
+      onProgress({
+        stage: 'starting',
+        message: 'Starting customer sync...',
+        fetched: 0,
+        total: 0,
+        startTime: startTime
+      });
     }
+
+    await this.clearContactsCache();
+
+    let lastSyncDate = null;
+    if (incremental) {
+      const lastSyncedCustomer = await CustomerModel.findOne({ 
+        companyId: company._id,
+        zohoSyncDate: { $ne: null },
+        zohoSynced: true 
+      }).sort({ zohoSyncDate: -1 });
+      
+      if (lastSyncedCustomer && lastSyncedCustomer.zohoSyncDate) {
+        const syncDate = new Date(lastSyncedCustomer.zohoSyncDate);
+        syncDate.setHours(syncDate.getHours() - 1);
+        lastSyncDate = syncDate.toISOString().split('T')[0];
+      } else {
+        const ninetyDaysAgo = new Date();
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+        lastSyncDate = ninetyDaysAgo.toISOString().split('T')[0];
+      }
+    }
+
+    if (onProgress) {
+      onProgress({
+        stage: 'fetching',
+        message: 'Fetching customers from Zoho...',
+        fetched: 0,
+        total: 0,
+        startTime: startTime
+      });
+    }
+
+    console.log(`\n📡 Fetching customers from Zoho...`);
+    const fetchResult = await this.getAllCustomersPaginated(company._id, lastSyncDate);
+    
+    if (!fetchResult.success) {
+      throw new Error(fetchResult.error || 'Failed to fetch customers from Zoho');
+    }
+    
+    const zohoCustomers = fetchResult.customers || [];
+    console.log(`✅ Fetched ${zohoCustomers.length} customers from Zoho`);
+
+    if (zohoCustomers.length === 0) {
+      if (onProgress) {
+        onProgress({ stage: 'completed', message: 'No customers found to sync', fetched: 0, total: 0 });
+      }
+      return { success: true, message: 'No customers found to sync', totalFromZoho: 0, created: 0, updated: 0, unchanged: 0, errors: 0 };
+    }
+
+    // ============================================================
+    // Process Customers with Progress + Cancellation Check
+    // ============================================================
+    let created = 0;
+    let updated = 0;
+    let unchanged = 0;
+    let errors = 0;
+    let totalContactPersons = 0;
+    
+    const batchSize = 10;
+    const totalCustomers = zohoCustomers.length;
+
+    if (onProgress) {
+      onProgress({
+        stage: 'processing',
+        message: `Processing ${totalCustomers} customers...`,
+        fetched: 0,
+        total: totalCustomers,
+        startTime: startTime
+      });
+    }
+
+ 
+    
+    const checkCancellation = () => {
+      if (companyIdForCancel && customerSyncCancelMap && customerSyncCancelMap.get(companyIdForCancel) === true) {
+        console.log(`🚨 CANCELLATION DETECTED for company ${companyIdForCancel}`);
+        return true;
+      }
+      return false;
+    };
+
+    for (let i = 0; i < totalCustomers; i += batchSize) {
+      // ✅ CANCELLATION CHECK before each batch
+      if (checkCancellation()) {
+        console.log(`⛔ Sync cancelled by user for company ${companyIdForCancel} at batch ${Math.floor(i / batchSize) + 1}`);
+        if (onProgress) {
+          onProgress({
+            stage: 'cancelled',
+            message: 'Sync was cancelled by user',
+            fetched: Math.min(i, totalCustomers),
+            total: totalCustomers,
+            startTime: startTime
+          });
+        }
+        // Clear the cancel flag
+        if (customerSyncCancelMap) {
+          customerSyncCancelMap.delete(companyIdForCancel);
+        }
+        return { success: false, message: 'Sync cancelled by user', cancelled: true };
+      }
+
+      const batch = zohoCustomers.slice(i, i + batchSize);
+      
+      const batchResults = await Promise.all(batch.map(async (zc) => {
+        // Optional: Check cancellation inside batch for faster response
+        if (checkCancellation()) {
+          return { action: 'cancelled', error: 'Sync cancelled' };
+        }
+        
+        try {
+          const contactResult = await this.getContact(zc.contact_id, true); 
+          
+          let result;
+          if (contactResult.success && contactResult.contact) {
+            const contactPersonsCount = contactResult.contact.contact_persons?.length || 0;
+            result = await this.processCustomerRecord(company._id, zc, contactResult.contact);
+            if (result.contactPersonsCount) totalContactPersons += result.contactPersonsCount;
+          } else {
+            result = await this.processCustomerRecord(company._id, zc, zc);
+          }
+          return result;
+        } catch (error) {
+          console.error(`❌ Error processing ${zc.contact_name}:`, error.message);
+          return { action: 'error', error: error.message };
+        }
+      }));
+
+      // Aggregate results (skip cancelled ones)
+      for (const result of batchResults) {
+        if (result.action === 'cancelled') {
+          // If any item was cancelled, stop everything
+          console.log(`⛔ Cancellation detected during batch processing`);
+          return { success: false, message: 'Sync cancelled by user', cancelled: true };
+        }
+        if (result.action === 'created') created++;
+        else if (result.action === 'updated') updated++;
+        else if (result.action === 'unchanged') unchanged++;
+        if (result.error) errors++;
+      }
+
+      const processedSoFar = Math.min(i + batchSize, totalCustomers);
+
+      if (onProgress) {
+        onProgress({
+          stage: 'processing',
+          message: `Processing ${processedSoFar}/${totalCustomers} customers...`,
+          fetched: processedSoFar,
+          total: totalCustomers,
+          created,
+          updated,
+          unchanged,
+          errors,
+          startTime: startTime
+        });
+      }
+
+      if (i + batchSize < totalCustomers) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    if (onProgress) {
+      onProgress({
+        stage: 'completed',
+        message: `Sync completed! ${created} created, ${updated} updated, ${unchanged} unchanged`,
+        fetched: totalCustomers,
+        total: totalCustomers,
+        created,
+        updated,
+        unchanged,
+        errors,
+        duration: `${duration}s`,
+        startTime: startTime
+      });
+    }
+
+    this._clearCache(this.CACHE_KEYS.ALL_CONTACTS(company._id));
+    await this.clearContactsCache();
+
+    const finalResult = {
+      success: true,
+      totalFromZoho: totalCustomers,
+      created,
+      updated,
+      unchanged,
+      errors,
+      totalContactPersons,
+      duration: `${duration}s`,
+      lastSyncDate: new Date().toISOString(),
+      syncType: incremental ? 'incremental' : 'full'
+    };
+
+    return finalResult;
+      
+  } catch (error) {
+    console.error('❌ Sync error:', error);
+   
+    const syncStartTime = typeof startTime !== 'undefined' ? startTime : Date.now();
+    
+    if (onProgress) {
+      onProgress({
+        stage: 'error',
+        message: `Sync failed: ${error.message}`,
+        error: error.message,
+        startTime: syncStartTime
+      });
+    }
+    return { success: false, error: error.message };
   }
+}
 
   async processCustomerRecord(companyId, zc, fullContact = null) {
     try {
-      const contactData = fullContact || zc;
-      const mapped = this._mapZohoContactToCustomer(contactData);
+      let contactData = fullContact;
       
-      if (!mapped.email || mapped.email.trim() === '') {
-        mapped.email = null;
+      if (!contactData) {
+        const fetched = await this.getContact(zc.contact_id, true);
+        contactData = (fetched.success && fetched.contact) ? fetched.contact : zc;
       }
-      mapped.companyId = companyId;
       
-      // ✅ Process contact persons - preserve ALL fields
-      const contactPersons = (contactData.contact_persons || []).map(cp => ({
+      if (!contactData.contact_persons) {
+        contactData.contact_persons = [];
+      }
+      
+      const mappedCustomer = {
+        name: (contactData.contact_name || 'Unnamed Customer').trim().toUpperCase(),
+        email: this._extractPrimaryEmail(contactData),
+        phone: this._extractPrimaryPhone(contactData),
+        address: contactData.billing_address?.address || '',
+        city: contactData.billing_address?.city || '',
+        state: contactData.billing_address?.state || '',
+        zip: contactData.billing_address?.zip || '',
+        companyName: (contactData.company_name || contactData.contact_name || '').trim(),
+        website: contactData.website || '',
+        notes: contactData.notes || '',
+        taxTreatment: this._mapTaxTreatment(contactData),
+        taxRegistrationNumber: contactData.tax_reg_no || '',
+        placeOfSupply: contactData.place_of_contact || 'Dubai',
+        defaultCurrency: this._buildCurrencyObject(contactData.currency_code || 'AED'),
+        zohoId: contactData.contact_id,
+        isActive: contactData.status === 'active',
+        lastModifiedTime: contactData.last_modified_time,
+        companyId: companyId,
+        zohoSynced: true,
+        zohoSyncDate: new Date(),
+        zohoSyncError: null
+      };
+      
+      const contactPersons = this._mapContactPersons(contactData.contact_persons);
+      
+      if (contactPersons.length === 0 && mappedCustomer.name) {
+        contactPersons.push(this._createDefaultContact(mappedCustomer));
+      }
+      
+      this._ensurePrimaryContact(contactPersons);
+      mappedCustomer.contactPersons = contactPersons;
+      
+      const existingCustomer = await Customer.findOne({
+        companyId: companyId,
+        zohoId: mappedCustomer.zohoId
+      });
+      
+      if (!existingCustomer) {
+        const newCustomer = new Customer(mappedCustomer);
+        await newCustomer.save({ validateBeforeSave: false });
+        return { action: 'created', contactPersonsCount: contactPersons.length };
+      }
+      
+      const mergedContactPersons = this._mergeContactPersons(
+        existingCustomer.contactPersons || [],
+        contactPersons
+      );
+      
+      const hasChanges = this._hasCustomerChanged(existingCustomer, mappedCustomer, mergedContactPersons);
+      
+      if (!hasChanges) {
+        await Customer.updateOne(
+          { _id: existingCustomer._id },
+          {
+            $set: {
+              zohoSynced: true,
+              zohoSyncDate: new Date(),
+              zohoSyncError: null
+            }
+          }
+        );
+        return { action: 'unchanged', contactPersonsCount: contactPersons.length };
+      }
+      
+      await Customer.updateOne(
+        { _id: existingCustomer._id },
+        {
+          $set: {
+            ...mappedCustomer,
+            contactPersons: mergedContactPersons,
+            zohoData: contactData
+          }
+        },
+        { runValidators: false }
+      );
+      
+      return { action: 'updated', contactPersonsCount: contactPersons.length };
+      
+    } catch (error) {
+      console.error(`Error processing customer:`, error.message);
+      return { action: 'error', error: error.message, contactPersonsCount: 0 };
+    }
+  }
+  
+  _extractPrimaryEmail(contactData) {
+    const primaryContact = contactData.contact_persons?.find(cp => cp.is_primary_contact === true);
+    if (primaryContact?.email) return primaryContact.email.trim().toLowerCase();
+    if (contactData.email) return contactData.email.trim().toLowerCase();
+    const anyContactWithEmail = contactData.contact_persons?.find(cp => cp.email);
+    if (anyContactWithEmail?.email) return anyContactWithEmail.email.trim().toLowerCase();
+    return null;
+  }
+  
+  _extractPrimaryPhone(contactData) {
+    const primaryContact = contactData.contact_persons?.find(cp => cp.is_primary_contact === true);
+    if (primaryContact?.phone) return primaryContact.phone.trim();
+    if (primaryContact?.mobile) return primaryContact.mobile.trim();
+    if (contactData.phone) return contactData.phone.trim();
+    const anyContact = contactData.contact_persons?.find(cp => cp.phone || cp.mobile);
+    if (anyContact?.phone) return anyContact.phone.trim();
+    if (anyContact?.mobile) return anyContact.mobile.trim();
+    return '';
+  }
+  
+  _mapTaxTreatment(contactData) {
+    const taxTreatment = contactData.tax_treatment || contactData.contact_category;
+    if (taxTreatment === 'vat_registered') return 'vat_registered';
+    if (taxTreatment === 'gcc_vat_registered') return 'gcc_vat_registered';
+    if (taxTreatment === 'gcc_vat_not_registered') return 'gcc_non_vat_registered';
+    return 'non_vat_registered';
+  }
+  
+  _buildCurrencyObject(currencyCode) {
+    const currencies = {
+      AED: { code: 'AED', symbol: 'د.إ', name: 'United Arab Emirates Dirham' },
+      USD: { code: 'USD', symbol: '$', name: 'US Dollar' },
+      EUR: { code: 'EUR', symbol: '€', name: 'Euro' },
+      GBP: { code: 'GBP', symbol: '£', name: 'British Pound' },
+      SAR: { code: 'SAR', symbol: 'ر.س', name: 'Saudi Riyal' },
+      KWD: { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar' },
+      QAR: { code: 'QAR', symbol: 'ر.ق', name: 'Qatari Riyal' },
+      BHD: { code: 'BHD', symbol: 'د.ب', name: 'Bahraini Dinar' },
+      OMR: { code: 'OMR', symbol: 'ر.ع', name: 'Omani Rial' }
+    };
+    return currencies[currencyCode] || currencies.AED;
+  }
+  
+  _mapContactPersons(zohoContactPersons) {
+    if (!Array.isArray(zohoContactPersons)) return [];
+    
+    return zohoContactPersons
+      .filter(cp => cp.first_name && cp.first_name.trim())
+      .map(cp => ({
         salutation: cp.salutation || '',
-        firstName: cp.first_name || '',
-        lastName: cp.last_name || '',
-        email: cp.email || '',
-        workPhone: cp.phone || '',      // Preserve full phone with country code
-        mobile: cp.mobile || '',         // Preserve full mobile with country code
+        firstName: cp.first_name.trim(),
+        lastName: (cp.last_name || '').trim(),
+        email: (cp.email || '').trim().toLowerCase(),
+        workPhone: (cp.phone || '').trim(),
+        mobile: (cp.mobile || '').trim(),
         designation: cp.designation || '',
         department: cp.department || '',
+        isPrimaryContact: cp.is_primary_contact === true,
         notes: cp.notes || '',
-        zohoContactPersonId: cp.contact_person_id,
+        zohoContactPersonId: cp.contact_person_id || null,
         createdAt: new Date(),
         updatedAt: new Date()
       }));
-      
-      // If no contact persons were mapped but we have main contact data, create one
-      if (contactPersons.length === 0 && mapped.name) {
-        contactPersons.push({
-          salutation: mapped.mainContactSalutation || '',
-          firstName: mapped.name,
-          lastName: '',
-          email: mapped.email || '',
-          workPhone: mapped.phone || '',
-          mobile: '',
-          designation: '',
-          department: '',
-          notes: '',
-          zohoContactPersonId: null,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
-      }
-      
-      mapped.contactPersons = contactPersons;
-      
-      // Remove temporary field
-      delete mapped.mainContactSalutation;
-      
-      const existingCustomer = await Customer.findOne({ 
-        companyId: companyId,
-        zohoId: mapped.zohoId 
-      });
-      
-      if (existingCustomer) {
-        const zohoLastModified = contactData.last_modified_time;
-        const storedLastModified = existingCustomer.lastModifiedTime;
-        
-        // Preserve existing contact person MongoDB IDs
-        const existingContactMap = new Map();
-        existingCustomer.contactPersons?.forEach(contact => {
-          if (contact.zohoContactPersonId) {
-            existingContactMap.set(contact.zohoContactPersonId, contact);
-          }
-        });
-        
-        // Merge existing MongoDB IDs with new contact data
-        const mergedContactPersons = contactPersons.map(contact => {
-          if (contact.zohoContactPersonId && existingContactMap.has(contact.zohoContactPersonId)) {
-            const existing = existingContactMap.get(contact.zohoContactPersonId);
-            return {
-              ...contact,
-              _id: existing._id,  // Preserve MongoDB _id
-              createdAt: existing.createdAt,
-              updatedAt: new Date()
-            };
-          }
-          return contact;
-        });
-        
-        mapped.contactPersons = mergedContactPersons;
-        
-        if (zohoLastModified !== storedLastModified) {
-          await Customer.findOneAndUpdate(
-            { companyId: companyId, zohoId: mapped.zohoId },
-            {
-              $set: {
-                ...mapped,
-                contactPersons: mergedContactPersons,
-                zohoSynced: true,
-                zohoSyncDate: new Date(),
-                zohoSyncError: null,
-                lastModifiedTime: zohoLastModified,
-                zohoData: contactData
-              }
-            },
-            { new: true, runValidators: false }
-          );
-          return { action: 'updated' };
-        } else {
-          await Customer.findOneAndUpdate(
-            { companyId: companyId, zohoId: mapped.zohoId },
-            {
-              $set: {
-                zohoSynced: true,
-                zohoSyncDate: new Date(),
-                zohoSyncError: null
-              }
-            }
-          );
-          return { action: 'unchanged' };
-        }
-      } else {
-        const customer = new Customer({
-          ...mapped,
-          zohoSynced: true,
-          zohoSyncDate: new Date(),
-          zohoSyncError: null,
-          lastModifiedTime: contactData.last_modified_time,
-          zohoData: contactData
-        });
-        await customer.save({ validateBeforeSave: false }); 
-        return { action: 'created' };
-      }
-    } catch (error) {
-      console.error(`   ❌ Error: ${error.message}`);
-      return { action: 'error', error: error.message };
+  }
+  
+  _createDefaultContact(customer) {
+    return {
+      salutation: 'Mr.',
+      firstName: customer.name,
+      lastName: '',
+      email: customer.email,
+      workPhone: customer.phone,
+      mobile: '',
+      designation: '',
+      department: '',
+      isPrimaryContact: true,
+      notes: '',
+      zohoContactPersonId: null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+  }
+  
+  _ensurePrimaryContact(contactPersons) {
+    const hasPrimary = contactPersons.some(cp => cp.isPrimaryContact === true);
+    if (!hasPrimary && contactPersons.length > 0) {
+      contactPersons[0].isPrimaryContact = true;
     }
   }
+  
+  _mergeContactPersons(existingContacts, newContacts) {
+    const existingMap = new Map();
+    existingContacts.forEach(contact => {
+      if (contact.zohoContactPersonId) {
+        existingMap.set(contact.zohoContactPersonId, {
+          _id: contact._id,
+          createdAt: contact.createdAt
+        });
+      }
+    });
+    
+    return newContacts.map(contact => {
+      if (contact.zohoContactPersonId && existingMap.has(contact.zohoContactPersonId)) {
+        const existing = existingMap.get(contact.zohoContactPersonId);
+        return {
+          ...contact,
+          _id: existing._id,
+          createdAt: existing.createdAt,
+          updatedAt: new Date()
+        };
+      }
+      return contact;
+    });
+  }
+  
+  _hasCustomerChanged(existing, updated, mergedContactPersons) {
+    const existingCount = existing.contactPersons?.length || 0;
+    const newCount = mergedContactPersons.length;
+    
+    if (existingCount !== newCount) return true;
+    if (updated.lastModifiedTime !== existing.lastModifiedTime) return true;
+    
+    const criticalFields = ['name', 'email', 'phone', 'taxTreatment', 'taxRegistrationNumber', 'placeOfSupply'];
+    for (const field of criticalFields) {
+      if (updated[field] !== existing[field]) return true;
+    }
+    
+    return false;
+  }
+  
 
   async getAllItemsPaginated(companyId, lastSyncDate = null) {
     const allItems = [];
@@ -913,6 +1061,9 @@ class ZohoBooksService {
       email: finalEmail,
       phone: (phone || '').trim(),
       address: zohoContact.billing_address?.address || '',
+      city: zohoContact.billing_address?.city || '',
+      state: zohoContact.billing_address?.state || '',
+      zip: zohoContact.billing_address?.zip || '',
       companyName: (zohoContact.company_name || '').trim(),
       website: zohoContact.website || '',
       notes: zohoContact.notes || '',
@@ -986,41 +1137,68 @@ class ZohoBooksService {
     return names[currencyCode] || 'United Arab Emirates Dirham';
   }
 
-  async getContact(contactId) {
+  async getContact(contactId, bypassCache = false) {
     const { companyId } = this.getCompanyContext();
     const cacheKey = this.CACHE_KEYS.CONTACT(contactId, companyId);
     
     try {
-      // Check memory cache first
-      const cachedData = this._getFromCache(cacheKey);
-      if (cachedData) {
-        return { success: true, contact: cachedData, source: 'cache' };
+      // Skip cache if bypassCache is true
+      if (!bypassCache) {
+        // Check memory cache first
+        const cachedData = this._getFromCache(cacheKey);
+        if (cachedData) {
+          // CRITICAL: Validate that cached data has contact_persons
+          if (cachedData.contact_persons && Array.isArray(cachedData.contact_persons)) {
+            console.log(`   📦 Cache hit for ${contactId} with ${cachedData.contact_persons.length} contact persons`);
+            return { success: true, contact: cachedData, source: 'cache' };
+          } else {
+            console.log(`   ⚠️ Cache miss for ${contactId} - cached data missing contact_persons`);
+            // Remove invalid cache entry
+            this._removeFromCache(cacheKey);
+          }
+        }
       }
       
-      // Check Redis cache (commented out)
-      // const cachedData = await redisService.get(cacheKey);
-      // if (cachedData) {
-      //   return { success: true, contact: cachedData, source: 'cache' };
-      // }
-      
+      // Fetch fresh from Zoho API
+      console.log(`   🌐 Fetching fresh data for ${contactId} from Zoho API`);
       const result = await this._request('GET', `/contacts/${contactId}`);
+      
       if (result.success && result.data?.contact) {
         const contact = result.data.contact;
-        this._setToCache(cacheKey, contact, 600);
-        // await redisService.set(cacheKey, contact, 600);
+        
+        // Ensure contact_persons is always an array
+        if (!contact.contact_persons) {
+          console.log(`   ⚠️ Zoho API returned no contact_persons for ${contactId}`);
+          contact.contact_persons = [];
+        } else {
+          console.log(`   ✅ Retrieved ${contact.contact_persons.length} contact persons from Zoho API`);
+          // Log each contact person for debugging
+          contact.contact_persons.forEach((cp, idx) => {
+            console.log(`      Person ${idx + 1}: ${cp.first_name} (ID: ${cp.contact_person_id}, Primary: ${cp.is_primary_contact})`);
+          });
+        }
+        
+        // Only cache if we have valid data
+        if (contact.contact_persons && contact.contact_persons.length > 0) {
+          this._setToCache(cacheKey, contact, 300); // Shorter TTL (5 minutes) for contacts
+        } else {
+          // Cache with shorter TTL if no contact persons (to allow updates)
+          this._setToCache(cacheKey, contact, 60); // 1 minute TTL
+        }
+        
         return { success: true, contact, source: 'api' };
       }
       return result;
     } catch (error) {
-      // Try fallback cache
+      console.error(`❌ Error fetching contact ${contactId}:`, error.message);
+      
+      // Try fallback cache only if we have valid data
       const fallbackCache = this._getFromCache(cacheKey);
-      if (fallbackCache) {
+      if (fallbackCache && fallbackCache.contact_persons && Array.isArray(fallbackCache.contact_persons)) {
+        console.log(`   📦 Using fallback cache for ${contactId} with ${fallbackCache.contact_persons.length} contact persons`);
         return { success: true, contact: fallbackCache, source: 'cache-fallback' };
       }
-      // const fallbackCache = await redisService.get(cacheKey).catch(() => null);
-      // if (fallbackCache) {
-      //   return { success: true, contact: fallbackCache, source: 'cache-fallback' };
-      // }
+      
       return { success: false, error: error.message };
     }
   }
@@ -1098,23 +1276,34 @@ class ZohoBooksService {
       if (fallbackCache) {
         return { success: true, contacts: fallbackCache, source: 'cache-fallback' };
       }
-      // const fallbackCache = await redisService.get(cacheKey).catch(() => null);
-      // if (fallbackCache) {
-      //   return { success: true, contacts: fallbackCache, source: 'cache-fallback' };
-      // }
+ 
       return { success: false, error: error.message };
     } finally {
       if (isLoadingFlagSet) {
         this._clearCache(loadingFlagKey);
-        // await redisService.del(loadingFlagKey).catch(() => {});
-      }
+       }
     }
   }
 
   async createContact(customerData) {
-    const { taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber, currencyCode, contactPersons } = customerData;
-    let effectivePlaceOfSupply = placeOfSupply;
+    const { 
+      taxTreatment, 
+      placeOfSupply, 
+      uaeEmirate, 
+      taxRegistrationNumber, 
+      currencyCode, 
+      contactPersons = [],
+      address,
+      city,
+      state,
+      zipcode,
+      phone,
+      street2,
+      attention
+    } = customerData;
     
+    // Calculate effective place of supply
+    let effectivePlaceOfSupply = placeOfSupply;
     if (taxTreatment === 'vat_registered' && uaeEmirate) {
       effectivePlaceOfSupply = uaeEmirate;
     }
@@ -1137,37 +1326,65 @@ class ZohoBooksService {
     
     if (currencyId) contactPayload.currency_id = currencyId;
     
-    // ✅ Handle both naming conventions
+    // Handle contact persons (same pattern as updateContact)
     if (contactPersons && Array.isArray(contactPersons) && contactPersons.length > 0) {
       const validContactPersons = contactPersons.filter(person => {
-        // Check both camelCase and snake_case
         const firstName = person.firstName || person.first_name;
         return firstName && firstName.trim();
       });
       
       if (validContactPersons.length > 0) {
-        contactPayload.contact_persons = validContactPersons.map(person => ({
-          first_name: (person.firstName || person.first_name || '').trim(),
-          last_name: (person.lastName || person.last_name || '').trim(),
-          email: (person.email || '').trim(),
-          phone: (person.workPhone || person.phone || '').trim(),
-          mobile: (person.mobile || '').trim(),
-          salutation: (person.salutation || '').trim(),
-          designation: (person.designation || '').trim(),
-          department: (person.department || '').trim(),
-          notes: (person.notes || '').trim(),
-   
-        }));
+        contactPayload.contact_persons = validContactPersons.map((p) => {
+          const obj = {
+            salutation: (p.salutation || "Mr.").trim(),
+            first_name: (p.firstName || "").trim(),
+            last_name: (p.lastName || "").trim(),
+            phone: (p.workPhone || p.phone || "").trim(),
+            mobile: (p.mobile || "").trim(),
+            designation: (p.designation || "").trim(),
+            department: (p.department || "").trim()
+          };
+    
+          if (p.email && p.email.trim()) {
+            obj.email = p.email.trim().toLowerCase();
+          }
+    
+          // Same as updateContact - only add for primary contact
+          if (p.isPrimaryContact === true) {
+            obj.is_primary_contact = true;
+          }
+    
+          if (p.zohoContactPersonId) {
+            obj.contact_person_id = p.zohoContactPersonId;
+          }
+    
+          return obj;
+        });
       }
     }
     
-    const address = this._buildAddress(customerData);
-    if (address && Object.values(address).some(v => v)) {
-      contactPayload.billing_address = address;
+    // Add billing address (same as updateContact)
+    const billingAddress = this._buildAddress({
+      address,
+      street2,
+      city,
+      state,
+      zipcode,
+      phone,
+      attention,
+      country: 'United Arab Emirates'
+    });
+    
+    if (billingAddress && Object.keys(billingAddress).length > 0) {
+      contactPayload.billing_address = billingAddress;
+      // Add shipping address (optional)
+      contactPayload.shipping_address = { ...billingAddress };
     }
     
+    // Add tax registration number
     if ((taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
       contactPayload.tax_reg_no = taxRegistrationNumber;
+      contactPayload.vat_reg_no = taxRegistrationNumber;
     }
     
     const cleanPayload = this._cleanPayload(contactPayload);
@@ -1175,7 +1392,8 @@ class ZohoBooksService {
     
     const result = await this._request('POST', '/contacts', cleanPayload);
     
-    console.log("result of zoho",result);
+    console.log("📥 Zoho Create Response:", JSON.stringify(result, null, 2));
+    
     if (result.success && result.data?.contact) {
       await this.clearContactsCache();
       return {
@@ -1185,21 +1403,41 @@ class ZohoBooksService {
         contact: result.data.contact
       };
     }
-    return result;
+    
+    return {
+      success: false,
+      message: result.error || 'Failed to create contact in Zoho',
+      error: result.error,
+      details: result.details
+    };
   }
   
   async updateContact(contactId, customerData) {
     const { 
       taxTreatment, 
       placeOfSupply, 
+      uaeEmirate, 
       taxRegistrationNumber, 
       currencyCode, 
-      contactPersons = [] 
+      contactPersons = [],
+      address,
+      city,
+      state,
+      zipcode,
+      phone,
+      street2,
+      attention
     } = customerData;
   
-    console.log(`🔍 Total Contact Persons received: ${contactPersons.length}`);
+    // Calculate effective place of supply
+    let effectivePlaceOfSupply = placeOfSupply;
+    if (taxTreatment === 'vat_registered' && uaeEmirate) {
+      effectivePlaceOfSupply = uaeEmirate;
+    }
+    
+    const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(taxTreatment, effectivePlaceOfSupply);
   
-    // === DEDUPLICATION LOGIC ===
+    // Deduplication logic
     const seen = new Set();
     const uniqueContacts = [];
   
@@ -1209,41 +1447,34 @@ class ZohoBooksService {
       const key2 = `${(p.firstName || "").trim().toLowerCase()}-${(p.mobile || p.workPhone || "").trim()}`;
   
       if ((key1 && seen.has(key1)) || seen.has(key2)) {
-        console.log(`⏭️ Skipping duplicate: ${p.firstName} (${email || p.mobile})`);
         continue;
       }
   
       if (key1) seen.add(key1);
       seen.add(key2);
-  
       uniqueContacts.push(p);
     }
-  
-    console.log(`✅ After deduplication: ${uniqueContacts.length} contacts`);
-  
-    // === BUILD PAYLOAD ===
-    const mainEmail = (customerData.email || "").trim().toLowerCase();
   
     const contactPayload = {
       contact_name: customerData.name,
       company_name: customerData.companyName || customerData.name,
       contact_type: "customer",
-      tax_treatment: this._mapTaxTreatmentToZoho?.(taxTreatment) || "vat_not_registered",
-      country_code: "DU",
+      tax_treatment: this._mapTaxTreatmentToZoho(taxTreatment) || "vat_not_registered",
+      country_code: countryCode,
+      place_of_contact: placeOfSupplyCode,
       contact_persons: uniqueContacts.map((p) => {
         const obj = {
+          salutation: (p.salutation || "Mr.").trim(),
           first_name: (p.firstName || "").trim(),
           last_name: (p.lastName || "").trim(),
           phone: (p.workPhone || p.phone || "").trim(),
           mobile: (p.mobile || "").trim(),
-          salutation: (p.salutation || "Mr.").trim(),
           designation: (p.designation || "").trim(),
           department: (p.department || "").trim()
         };
   
-        // Email only for primary or unique emails
-        if (p.isPrimaryContact || (p.email && p.email.trim().toLowerCase() !== mainEmail)) {
-          obj.email = (p.email || "").trim().toLowerCase();
+        if (p.email && p.email.trim()) {
+          obj.email = p.email.trim().toLowerCase();
         }
   
         if (p.isPrimaryContact === true) {
@@ -1258,8 +1489,31 @@ class ZohoBooksService {
       })
     };
   
+    // Add billing address
+    const billingAddress = this._buildAddress({
+      address,
+      street2,
+      city,
+      state,
+      zipcode,
+      phone,
+      attention,
+      country: 'United Arab Emirates'
+    });
+    
+    if (billingAddress && Object.keys(billingAddress).length > 0) {
+      contactPayload.billing_address = billingAddress;
+    }
+  
+    // Add tax registration number
+    if ((taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
+      contactPayload.tax_reg_no = taxRegistrationNumber;
+      contactPayload.vat_reg_no = taxRegistrationNumber;
+    }
+  
+    // Add currency
     if (currencyCode) {
-      const currencyId = await this._getCurrencyId?.(currencyCode);
+      const currencyId = await this._getCurrencyId(currencyCode);
       if (currencyId) contactPayload.currency_id = currencyId;
     }
   
@@ -1705,15 +1959,27 @@ class ZohoBooksService {
   }
 
   _buildAddress(data, prefix = '') {
-    const address = {
-      address: data[`${prefix}address`] || data.address,
-      city: data[`${prefix}city`] || data.city,
-      state: data[`${prefix}state`] || data.state,
-      zip: data[`${prefix}zipCode`] || data.zipCode,
-      country: data[`${prefix}country`] || data.country,
-      phone: data[`${prefix}phone`] || data.phone
+    console.log('🔍 _buildAddress received:', JSON.stringify(data, null, 2));
+     const address = {
+      address: data[`${prefix}address`] || data.address || '',
+      street2: data[`${prefix}street2`] || data.street2 || '',
+      city: data[`${prefix}city`] || data.city || '',
+      state: data[`${prefix}state`] || data.state || '',
+      state_code: data[`${prefix}state_code`] || data.state_code || '',
+      zip: data[`${prefix}zip`] || data[`${prefix}zipCode`] || data[`${prefix}zipcode`] || data.zipCode || data.zipcode || '',
+      country: data[`${prefix}country`] || data.country || '',
+      phone: data[`${prefix}phone`] || data.phone || '',
+      fax: data[`${prefix}fax`] || data.fax || '',
+      attention: data[`${prefix}attention`] || data.attention || ''
     };
-    return Object.values(address).some(v => v) ? address : null;
+    
+     Object.keys(address).forEach(key => {
+      if (!address[key] || address[key].toString().trim() === '') {
+        delete address[key];
+      }
+    });
+    
+     return Object.keys(address).length > 0 ? address : null;
   }
 
   _buildContactPerson(data) {

@@ -1,21 +1,38 @@
-// screens/CustomersScreen.jsx (CLEAN VERSION - NO FILTER PANEL)
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useRef , useMemo, useCallback, useEffect } from 'react';
 import { 
   Plus, Edit2, Trash2, ArrowLeft, Search, RefreshCw, AlertCircle, ChevronDown, 
-  CheckCircle, Users, Building2, Tag, User, X, Save, Globe, DollarSign, 
-  Mail, Phone, MapPin, Shield, ChevronLeft, ChevronRight, Download, Upload, Clock,
-  Filter, Calendar, TrendingUp, Activity, Zap, Loader, Star,
-  Briefcase
+  CheckCircle, Users, Building2, Tag, User, X,  
+  Mail, Phone, MapPin, Shield, ChevronLeft, ChevronRight, Download,  
+  Filter,  Loader, Star,
+  Briefcase,
+  CreditCard,
+  ChevronUp
 } from 'lucide-react';
 import { useCustomers, usePaginatedCustomers, useCustomerSearch, useCustomerStats, useZohoSync } from '../hooks/customerHooks';
 import { customerAPI } from '../services/api';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import { useAppStore } from '../services/store';
 import CommonSelect from '../components/CommonSelect';
 import ConfirmModal from '../components/ConfirmModal';
 import { COUNTRY_CODES } from '../utils/constants';
+import SyncProgressModal from './SyncProgressModal';
+import CustomerModal from '../components/CustomerModel';
 
-const PRIMARY_COLOR = '#0f172a';
+const PRIMARY_COLOR = '#000';
+const ANIMATION_DURATION = 0.2;
+
+// Animation variants
+const fadeInUp = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -20 }
+};
+
+const staggerContainer = {
+  animate: { transition: { staggerChildren: 0.05 } }
+};
+
 
 // Toast Component
 const Toast = ({ message, type = 'success', onClose }) => {
@@ -32,26 +49,70 @@ const Toast = ({ message, type = 'success', onClose }) => {
 };
 
 // StatCard Component
-const StatCard = ({ label, value, icon: Icon, color, loading }) => (
-  <div style={{ background: 'white', borderRadius: '20px', padding: '1.25rem', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.2s, box-shadow 0.2s' }} 
-       onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 10px 25px -5px rgba(0,0,0,0.1)'; }} 
-       onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'; }}>
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-      <div style={{ width: '44px', height: '44px', borderRadius: '14px', background: `${color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Icon size={22} color={color} />
+const StatCard = ({ label, value, icon: Icon, color, loading, trend, trendValue }) => (
+  <motion.div
+    initial={{ opacity: 0, scale: 0.95 }}
+    animate={{ opacity: 1, scale: 1 }}
+    whileHover={{ y: -4, transition: { duration: 0.2 } }}
+    style={{
+      background: 'white',
+      borderRadius: '20px',
+      padding: '1.25rem',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1)',
+      border: '1px solid rgba(226, 232, 240, 0.6)',
+      transition: 'all 0.2s ease'
+    }}
+  >
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+      <div style={{
+        width: '40px',
+        height: '40px',
+        borderRadius: '12px',
+        background: `${color}10`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        <Icon size={20} color={color} />
       </div>
-      {loading && <Loader size={16} color="#94a3b8" style={{ animation: 'spin 1s linear infinite' }} />}
+      {trend && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '4px 8px',
+          borderRadius: '20px',
+          background: trend > 0 ? '#10b98110' : '#ef444410',
+          color: trend > 0 ? '#10b981' : '#ef4444',
+          fontSize: '0.7rem',
+          fontWeight: '600'
+        }}>
+          {trend > 0 ? '↑' : '↓'} {Math.abs(trend)}%
+        </div>
+      )}
     </div>
-    <p style={{ margin: 0, color: '#64748b', fontSize: '0.75rem', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</p>
-    <p style={{ margin: '0.25rem 0 0', color: PRIMARY_COLOR, fontSize: '1.75rem', fontWeight: '800' }}>{loading ? '—' : value}</p>
-  </div>
+    <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: '500', marginBottom: '0.25rem' }}>
+      {label}
+    </div>
+    <div style={{ fontSize: '1.75rem', fontWeight: '800', color: '#1e293b' }}>
+      {loading ? (
+        <div style={{ width: '40px', height: '28px', background: '#e2e8f0', borderRadius: '8px', animation: 'pulse 1.5s ease-in-out infinite' }} />
+      ) : (
+        value?.toLocaleString() || 0
+      )}
+    </div>
+  </motion.div>
 );
+ 
+ 
 
-// PaginationControls Component
-const PaginationControls = ({ pagination, onPageChange, loading }) => {
+const PaginationControls = ({ pagination, onPageChange, loading, isMobile = false }) => {
   if (!pagination || pagination.totalPages <= 1) return null;
+  
   const { page, totalPages, totalItems, limit } = pagination;
-  const maxButtons = 5;
+  
+  // Adjust number of buttons based on screen size
+  const maxButtons = isMobile ? 3 : 5;
   let startPage = Math.max(1, page - Math.floor(maxButtons / 2));
   let endPage = Math.min(totalPages, startPage + maxButtons - 1);
   if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
@@ -59,624 +120,497 @@ const PaginationControls = ({ pagination, onPageChange, loading }) => {
   const startItem = (page - 1) * limit + 1;
   const endItem = Math.min(page * limit, totalItems);
   
+  // Button size based on screen
+  const buttonSize = isMobile ? 28 : 32;
+  const iconSize = isMobile ? 12 : 14;
+  
   return (
     <div style={{ 
       display: 'flex', 
+      flexDirection: isMobile ? 'column' : 'row',
       alignItems: 'center', 
       justifyContent: 'space-between',
-      padding: '1rem 1.5rem',
+      gap: isMobile ? '0.75rem' : '0',
+      padding: isMobile ? '0.75rem 1rem' : '1rem 1.5rem',
       borderTop: '1px solid #f1f5f9',
       background: '#fafafa'
     }}>
-      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-        Showing {startItem} to {endItem} of {totalItems} customers
-      </div>
+      {/* Info text - centered on mobile */}
+      {/* <div style={{ 
+        fontSize: isMobile ? '0.7rem' : '0.75rem', 
+        color: '#64748b',
+        textAlign: 'center'
+      }}>
+        {isMobile ? (
+          `${startItem}-${endItem} of ${totalItems}`
+        ) : (
+          `Showing ${startItem} to ${endItem} of ${totalItems} customers`
+        )}
+      </div> */}
       
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      {/* Pagination buttons */}
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: isMobile ? '0.35rem' : '0.5rem',
+        flexWrap: 'wrap',
+        justifyContent: 'center'
+      }}>
+        {/* Previous button */}
         <button 
           onClick={() => onPageChange(page - 1)} 
           disabled={page === 1 || loading} 
           style={{ 
-            width: '32px', height: '32px', borderRadius: '8px', border: '1px solid #e2e8f0', 
-            background: 'white', cursor: page === 1 || loading ? 'not-allowed' : 'pointer', 
+            width: `${buttonSize}px`, 
+            height: `${buttonSize}px`, 
+            borderRadius: '8px', 
+            border: '1px solid #e2e8f0', 
+            background: 'white', 
+            cursor: page === 1 || loading ? 'not-allowed' : 'pointer', 
             opacity: page === 1 || loading ? 0.5 : 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            if (page !== 1 && !loading) {
+              e.currentTarget.style.background = '#f8fafc';
+              e.currentTarget.style.borderColor = PRIMARY_COLOR;
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'white';
+            e.currentTarget.style.borderColor = '#e2e8f0';
           }}
         >
-          <ChevronLeft size={14} />
+          <ChevronLeft size={iconSize} />
         </button>
         
+        {/* Page numbers */}
         {Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i).map(num => (
           <button 
             key={num} 
             onClick={() => onPageChange(num)} 
             disabled={loading} 
             style={{ 
-              minWidth: '32px', height: '32px', borderRadius: '8px', 
+              minWidth: `${buttonSize}px`, 
+              height: `${buttonSize}px`, 
+              borderRadius: '8px', 
               border: num === page ? 'none' : '1px solid #e2e8f0', 
               background: num === page ? PRIMARY_COLOR : 'white', 
               color: num === page ? 'white' : '#475569', 
               fontWeight: num === page ? '600' : '500',
-              cursor: loading ? 'not-allowed' : 'pointer'
+              fontSize: isMobile ? '0.75rem' : '0.875rem',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              if (num !== page && !loading) {
+                e.currentTarget.style.background = '#f8fafc';
+                e.currentTarget.style.borderColor = PRIMARY_COLOR;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (num !== page && !loading) {
+                e.currentTarget.style.background = 'white';
+                e.currentTarget.style.borderColor = '#e2e8f0';
+              }
             }}
           >
             {num}
           </button>
         ))}
         
+        {/* Next button */}
         <button 
           onClick={() => onPageChange(page + 1)} 
           disabled={page === totalPages || loading} 
           style={{ 
-            width: '32px', height: '32px', borderRadius: '8px', border: '1px solid #e2e8f0', 
-            background: 'white', cursor: page === totalPages || loading ? 'not-allowed' : 'pointer', 
+            width: `${buttonSize}px`, 
+            height: `${buttonSize}px`, 
+            borderRadius: '8px', 
+            border: '1px solid #e2e8f0', 
+            background: 'white', 
+            cursor: page === totalPages || loading ? 'not-allowed' : 'pointer', 
             opacity: page === totalPages || loading ? 0.5 : 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            transition: 'all 0.2s ease'
+          }}
+          onMouseEnter={(e) => {
+            if (page !== totalPages && !loading) {
+              e.currentTarget.style.background = '#f8fafc';
+              e.currentTarget.style.borderColor = PRIMARY_COLOR;
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'white';
+            e.currentTarget.style.borderColor = '#e2e8f0';
           }}
         >
-          <ChevronRight size={14} />
+          <ChevronRight size={iconSize} />
         </button>
       </div>
     </div>
   );
 };
- 
-// Phone Input Component
-const PhoneInput = ({ value, onChange, placeholder }) => {
-  const [selectedCode, setSelectedCode] = useState('+971');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
 
-  useEffect(() => {
-    if (value) {
-      // Check if value has country code format (starts with + and has dash)
-      const countryCodeMatch = COUNTRY_CODES.find(c => value.startsWith(c.code + '-'));
-      if (countryCodeMatch) {
-        setSelectedCode(countryCodeMatch.code);
-        setPhoneNumber(value.substring(countryCodeMatch.code.length + 1)); // +1 for the dash
-      } else if (value.startsWith('+')) {
-        // Handle case without dash
-        const matchedCountry = COUNTRY_CODES.find(c => value.startsWith(c.code));
-        if (matchedCountry) {
-          setSelectedCode(matchedCountry.code);
-          setPhoneNumber(value.substring(matchedCountry.code.length));
-        } else {
-          setPhoneNumber(value);
-        }
-      } else {
-        setPhoneNumber(value);
-      }
-    }
-  }, [value]);
+  
 
-  const handleCodeChange = (code) => {
-    setSelectedCode(code);
-    setShowCountryDropdown(false);
-    // Format with dash when country code is selected
-    if (phoneNumber) {
-      onChange(`${code}-${phoneNumber}`);
-    } else {
-      onChange(code + '-');
-    }
-  };
-
-  const handleNumberChange = (e) => {
-    const newNumber = e.target.value.replace(/[^0-9]/g, '');
-    setPhoneNumber(newNumber);
-    if (selectedCode && newNumber) {
-      onChange(`${selectedCode}-${newNumber}`);
-    } else if (selectedCode) {
-      onChange(selectedCode + '-');
-    } else {
-      onChange(newNumber);
-    }
-  };
-
-  const handleBlur = () => {
-    // Clean up: if phoneNumber is empty, remove the trailing dash
-    if (!phoneNumber && value === selectedCode + '-') {
-      onChange('');
-    }
-  };
-
+// CustomerCard Component
+const CustomerCard = ({ customer, onEdit, onDelete, deletingId }) => {
+  const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+  const [isHovered, setIsHovered] = useState(false);
+  
   return (
-    <div style={{ display: 'flex', gap: '0.5rem' }}>
-      <div style={{ position: 'relative' }}>
-        <button
-          type="button"
-          onClick={() => setShowCountryDropdown(!showCountryDropdown)}
-          style={{
-            padding: '0.75rem 1rem',
-            border: '1.5px solid #e2e8f0',
-            borderRadius: '14px',
-            background: 'white',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.875rem'
-          }}
-        >
-          <span>{selectedCode}</span>
-          <ChevronDown size={14} />
-        </button>
-        {showCountryDropdown && (
-          <div style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            background: 'white',
-            border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            maxHeight: '250px',
-            overflowY: 'auto',
-            zIndex: 100,
-            minWidth: '200px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+    <motion.div
+      variants={fadeInUp}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      whileHover={{ y: -4 }}
+      onHoverStart={() => setIsHovered(true)}
+      onHoverEnd={() => setIsHovered(false)}
+      style={{
+        background: 'white',
+        borderRadius: '20px',
+        padding: 'clamp(1rem, 4vw, 1.25rem)',
+        boxShadow: isHovered 
+          ? '0 20px 25px -12px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.02)'
+          : '0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1)',
+        border: `1px solid ${isHovered ? `${PRIMARY_COLOR}20` : '#e2e8f0'}`,
+        transition: 'all 0.2s ease',
+        position: 'relative',
+        overflow: 'hidden',
+        width: '100%',
+        boxSizing: 'border-box'
+      }}
+    >
+      {/* Status Badge - Responsive */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        padding: '0.25rem 0.75rem',
+        background: customer.isActive ? '#10b981' : '#ef4444',
+        color: 'white',
+        fontSize: '0.65rem',
+        fontWeight: '600',
+        borderRadius: '0 20px 0 12px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        zIndex: 1
+      }}>
+        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'white', opacity: 0.8 }} />
+        <span style={{ whiteSpace: 'nowrap' }}>{customer.isActive ? 'Active' : 'Inactive'}</span>
+      </div>
+
+      {/* Header - Responsive */}
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '12px', 
+        marginBottom: '1rem',
+        flexWrap: 'wrap'
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          borderRadius: '16px',
+          background: `linear-gradient(135deg, ${PRIMARY_COLOR}15, ${PRIMARY_COLOR}05)`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0
+        }}>
+          <Users size={24} color={PRIMARY_COLOR} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ 
+            margin: 0, 
+            fontSize: 'clamp(0.9rem, 4vw, 1rem)', 
+            fontWeight: '700', 
+            color: '#1e293b',
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+            lineHeight: 1.3
           }}>
-            {COUNTRY_CODES.map(country => (
-              <button
-                key={country.code}
-                type="button"
-                onClick={() => handleCodeChange(country.code)}
-                style={{
-                  width: '100%',
-                  padding: '0.5rem 1rem',
-                  textAlign: 'left',
-                  background: 'white',
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  fontSize: '0.875rem'
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-              >
-                <span>{country.flag}</span>
-                <span>{country.code}</span>
-                <span style={{ color: '#64748b', fontSize: '0.75rem' }}>{country.name}</span>
-              </button>
-            ))}
+            {customer.name}
+          </h3>
+          {customer.companyName && (
+            <p style={{ 
+              margin: '0.25rem 0 0', 
+              fontSize: '0.7rem', 
+              color: '#64748b',
+              wordBreak: 'break-word'
+            }}>
+              {customer.companyName}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Contact Info - Responsive */}
+      <div style={{ marginBottom: '1rem' }}>
+        {customer.email && (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'flex-start', 
+            gap: '8px', 
+            marginBottom: '0.5rem', 
+            fontSize: '0.8rem', 
+            color: '#475569'
+          }}>
+            <Mail size={14} color="#94a3b8" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span style={{ 
+              flex: 1, 
+              wordBreak: 'break-all',
+              overflowWrap: 'break-word'
+            }}>
+              {customer.email}
+            </span>
+          </div>
+        )}
+        {customer.phone && (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px', 
+            fontSize: '0.8rem', 
+            color: '#475569',
+            flexWrap: 'wrap'
+          }}>
+            <Phone size={14} color="#94a3b8" style={{ flexShrink: 0 }} />
+            <span style={{ wordBreak: 'break-word' }}>{customer.phone}</span>
           </div>
         )}
       </div>
-      <input
-        type="tel"
-        placeholder={placeholder}
-        value={phoneNumber}
-        onChange={handleNumberChange}
-        onBlur={handleBlur}
-        style={{
-          flex: 1,
-          padding: '0.75rem 1rem',
-          border: '1.5px solid #e2e8f0',
-          borderRadius: '14px',
-          fontSize: '0.875rem',
-          outline: 'none'
-        }}
-      />
-    </div>
+
+      {/* Tax & Location - Responsive */}
+      <div style={{ 
+        display: 'flex', 
+        flexWrap: 'wrap', 
+        gap: '8px', 
+        marginBottom: '1rem',
+        padding: '0.75rem',
+        background: '#f8fafc',
+        borderRadius: '12px'
+      }}>
+        <span style={{
+          padding: '0.25rem 0.5rem',
+          borderRadius: '8px',
+          fontSize: '0.7rem',
+          fontWeight: '600',
+          background: isVatRegistered ? '#d1fae5' : '#f1f5f9',
+          color: isVatRegistered ? '#065f46' : '#475569',
+          whiteSpace: 'nowrap'
+        }}>
+          {isVatRegistered ? 'VAT Registered' : 'Non-VAT'}
+        </span>
+        {customer.placeOfSupply && (
+          <span style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '0.25rem 0.5rem',
+            borderRadius: '8px',
+            fontSize: '0.7rem',
+            background: '#e0e7ff',
+            color: '#4338ca',
+            whiteSpace: 'nowrap'
+          }}>
+            <MapPin size={10} />
+            {customer.placeOfSupply}
+          </span>
+        )}
+        {customer.defaultCurrency?.code && (
+          <span style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '0.25rem 0.5rem',
+            borderRadius: '8px',
+            fontSize: '0.7rem',
+            background: '#fef3c7',
+            color: '#92400e',
+            whiteSpace: 'nowrap'
+          }}>
+            <CreditCard size={10} />
+            {customer.defaultCurrency.code}
+          </span>
+        )}
+      </div>
+
+      {/* Actions - Responsive buttons */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '8px', 
+        justifyContent: 'flex-end', 
+        borderTop: '1px solid #e2e8f0', 
+        paddingTop: '0.75rem',
+        flexWrap: 'wrap'
+      }}>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => onEdit(customer)}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: '10px',
+            border: '1px solid #e2e8f0',
+            background: 'white',
+            cursor: 'pointer',
+            fontSize: '0.75rem',
+            fontWeight: '500',
+            color: '#475569',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flex: '1 0 auto',
+            justifyContent: 'center'
+          }}
+        >
+          <Edit2 size={12} /> Edit
+        </motion.button>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => onDelete(customer)}
+          disabled={deletingId === customer._id}
+          style={{
+            padding: '0.5rem 1rem',
+            borderRadius: '10px',
+            border: '1px solid #fee2e2',
+            background: '#fef2f2',
+            cursor: deletingId === customer._id ? 'not-allowed' : 'pointer',
+            fontSize: '0.75rem',
+            fontWeight: '500',
+            color: '#dc2626',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flex: '1 0 auto',
+            justifyContent: 'center'
+          }}
+        >
+          {deletingId === customer._id ? (
+            <div style={{ width: '12px', height: '12px', border: '2px solid #dc2626', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+          ) : (
+            <Trash2 size={12} />
+          )}
+          Delete
+        </motion.button>
+      </div>
+    </motion.div>
   );
 };
 
-const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmitting }) => {
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    companyName: '',
-    website: '',
-    notes: '',
-    taxTreatment: 'non_vat_registered',
-    taxRegistrationNumber: '',
-    placeOfSupply: 'Dubai',
-    defaultCurrency: 'AED',
-    contactPersons: [],           // Additional contacts
-    mainContactSalutation: 'Mr.'
-  });
+// Mobile Stats Card - Compact like HomeScreen
+const MobileStatsCard = ({ stats, loading }) => {
+  const [expanded, setExpanded] = useState(false);
 
-  const [errors, setErrors] = useState({});
-  const [showContactForm, setShowContactForm] = useState(false);
-  const [editingContactIndex, setEditingContactIndex] = useState(null);
-  
-  const [contactForm, setContactForm] = useState({
-    salutation: '', 
-    firstName: '', 
-    lastName: '', 
-    email: '', 
-    workPhone: '', 
-    mobile: '', 
-    designation: '', 
-    department: '', 
-    notes: ''
-  });
+  const statusItems = [
+    { label: 'Total Customers', value: stats?.totalCustomers, icon: Users, color: '#6366f1', bg: '#e0e7ff' },
+    { label: 'VAT Registered', value: stats?.vatRegistered, icon: Building2, color: '#10b981', bg: '#d1fae5' },
+    { label: 'Non-VAT', value: stats?.nonVatRegistered, icon: Tag, color: '#f59e0b', bg: '#fef3c7' },
+    { label: 'Active', value: stats?.activeCustomers, icon: User, color: '#8b5cf6', bg: '#ede9fe' },
+  ];
 
-  const SALUTATIONS = ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Prof.', 'Miss', 'Master'];
-  const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
-  const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
-
-  // Initialize form
-  useEffect(() => {
-    if (initialData) {
-      const mainContact = initialData.contactPersons?.[0] || {};
-      
-      setFormData({
-        name: initialData.name || '',
-        email: initialData.email || '',
-        phone: initialData.phone || '',
-        address: initialData.address || '',
-        companyName: initialData.companyName || '',
-        website: initialData.website || '',
-        notes: initialData.notes || '',
-        taxTreatment: initialData.taxTreatment || 'non_vat_registered',
-        taxRegistrationNumber: initialData.taxRegistrationNumber || '',
-        placeOfSupply: initialData.placeOfSupply || 'Dubai',
-        defaultCurrency: initialData.defaultCurrency?.code || 'AED',
-        contactPersons: initialData.contactPersons?.slice(1) || [],
-        mainContactSalutation: mainContact.salutation || 'Mr.'
-      });
-    } else {
-      setFormData({
-        name: '', email: '', phone: '', address: '', companyName: '', website: '', notes: '',
-        taxTreatment: 'non_vat_registered', taxRegistrationNumber: '', placeOfSupply: 'Dubai',
-        defaultCurrency: 'AED', contactPersons: [], mainContactSalutation: 'Mr.'
-      });
-    }
-    setErrors({});
-    setShowContactForm(false);
-    setEditingContactIndex(null);
-  }, [initialData, isOpen]);
-
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    if (name === 'taxRegistrationNumber') {
-      const cleaned = value.replace(/[^0-9]/g, '').slice(0, 15);
-      setFormData(prev => ({ ...prev, [name]: cleaned }));
-    } else if (name === 'taxTreatment') {
-      const defaultPlace = (value === 'vat_registered' || value === 'non_vat_registered') ? 'Dubai' : 'Saudi Arabia';
-      setFormData(prev => ({ ...prev, [name]: value, taxRegistrationNumber: '', placeOfSupply: defaultPlace }));
-    } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
-    }
-    if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
-  };
-
-  const handlePhoneChange = (phoneWithCode) => {
-    setFormData(prev => ({ ...prev, phone: phoneWithCode }));
-  };
-
-  // Additional Contact Phone Handlers
-  const handleContactWorkPhoneChange = (phoneWithCode) => {
-    setContactForm(prev => ({ ...prev, workPhone: phoneWithCode }));
-  };
-
-  const handleContactMobileChange = (phoneWithCode) => {
-    setContactForm(prev => ({ ...prev, mobile: phoneWithCode }));
-  };
-
-  // Contact Person Handlers
-  const openAddContact = () => {
-    setContactForm({ 
-      salutation: '', firstName: '', lastName: '', email: '', 
-      workPhone: '', mobile: '', designation: '', department: '', notes: '' 
-    });
-    setEditingContactIndex(null);
-    setShowContactForm(true);
-  };
-
-  const handleEditContact = (index) => {
-    setContactForm(formData.contactPersons[index] || {});
-    setEditingContactIndex(index);
-    setShowContactForm(true);
-  };
-
-  const handleSaveContact = () => {
-    if (!contactForm.firstName?.trim()) {
-      alert("First Name is required for contact person");
-      return;
-    }
-
-    const newContact = { ...contactForm };
-
-    if (editingContactIndex !== null) {
-      const updated = [...formData.contactPersons];
-      updated[editingContactIndex] = newContact;
-      setFormData(prev => ({ ...prev, contactPersons: updated }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        contactPersons: [...prev.contactPersons, newContact]
-      }));
-    }
-
-    setShowContactForm(false);
-    setEditingContactIndex(null);
-  };
-
-  const handleDeleteContact = (index) => {
-    setFormData(prev => ({
-      ...prev,
-      contactPersons: prev.contactPersons.filter((_, i) => i !== index)
-    }));
-  };
-
-  const validateForm = () => {
-    const newErrors = {};
-    if (!formData.name?.trim()) newErrors.name = 'Customer name is required';
-    if (!formData.email?.trim()) newErrors.email = 'Email is required';
-    return newErrors;
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    const validationErrors = validateForm();
-    if (Object.keys(validationErrors).length > 0) {
-      setErrors(validationErrors);
-      return;
-    }
-    onSubmit(formData);
-  };
-
-  if (!isOpen) return null;
-
-  const isVatRegistered = formData.taxTreatment === 'vat_registered' || formData.taxTreatment === 'gcc_vat_registered';
-  const showUaeEmirates = formData.taxTreatment === 'vat_registered' || formData.taxTreatment === 'non_vat_registered';
-  const placeOfSupplyOptions = showUaeEmirates ? UAE_EMIRATES : GCC_COUNTRIES;
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem', overflowY: 'auto' }} 
-         onClick={(e) => { if (e.target === e.currentTarget && !isSubmitting) onClose(); }}>
-
-      <div style={{ background: 'white', borderRadius: '28px', width: '100%', maxWidth: '920px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
-
-        {/* Header */}
-        <div style={{ position: 'sticky', top: 0, padding: '1.5rem 2rem', borderBottom: '1px solid #f1f5f9', background: 'white', zIndex: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '800', color: PRIMARY_COLOR }}>
-                {initialData ? 'Edit Customer' : 'Add New Customer'}
-              </h2>
-              <p style={{ margin: '0.25rem 0 0', color: '#64748b', fontSize: '0.85rem' }}>
-                {initialData ? 'Update customer information' : 'Enter customer details'}
-              </p>
-            </div>
-            <button onClick={onClose} disabled={isSubmitting} style={{ width: '40px', height: '40px', borderRadius: '12px', background: '#f1f5f9', border: 'none', cursor: 'pointer' }}>
-              <X size={20} color="#64748b" />
-            </button>
+    <div style={{
+      background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+      borderRadius: '16px',
+      padding: '1rem',
+      marginBottom: '1rem',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+    }}>
+      {/* Main stats row - 3 items */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ flex: 1, textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <Users size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
+            Total
+          </div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
+            {loading ? '...' : (stats?.totalCustomers?.toLocaleString() || 0)}
           </div>
         </div>
-
-        <form onSubmit={handleSubmit} style={{ padding: '2rem' }}>
-          {/* Customer Name with Salutation */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
-              Customer Name <span style={{ color: '#ef4444' }}>*</span>
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '1rem' }}>
-              <select
-                name="mainContactSalutation"
-                value={formData.mainContactSalutation}
-                onChange={handleChange}
-                style={{ padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', background: 'white' }}
-              >
-                {SALUTATIONS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <input
-                type="text"
-                name="name"
-                placeholder="Enter customer / company name"
-                value={formData.name}
-                onChange={handleChange}
-                style={{ padding: '0.75rem 1rem', border: `1.5px solid ${errors.name ? '#ef4444' : '#e2e8f0'}`, borderRadius: '14px' }}
-              />
-            </div>
-            {errors.name && <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>{errors.name}</p>}
+        
+        <div style={{ width: '1px', height: '35px', background: '#334155' }} />
+        
+        <div style={{ flex: 1, textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <Building2 size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
+            VAT
           </div>
-
-          {/* Email & Phone */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Email Address <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="email" name="email" value={formData.email} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px' }} />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Phone Number</label>
-              <PhoneInput value={formData.phone} onChange={handlePhoneChange} />
-            </div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
+            {loading ? '...' : (stats?.vatRegistered?.toLocaleString() || 0)}
           </div>
-
-          {/* Address, Company Name, Website */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Address</label>
-            <input type="text" name="address" value={formData.address} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px' }} />
+        </div>
+        
+        <div style={{ width: '1px', height: '35px', background: '#334155' }} />
+        
+        <div style={{ flex: 1, textAlign: 'center' }}>
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <Tag size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
+            Non-VAT
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Company Name</label>
-              <input type="text" name="companyName" value={formData.companyName} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px' }} />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Website</label>
-              <input type="text" name="website" value={formData.website} onChange={handleChange} style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px' }} />
-            </div>
+          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
+            {loading ? '...' : (stats?.nonVatRegistered?.toLocaleString() || 0)}
           </div>
-
-   
-          {/* Tax Treatment - Same as before */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.75rem', fontSize: '0.8rem' }}>Tax Treatment <span style={{ color: '#ef4444' }}>*</span></label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem' }}>
-              {[
-                { value: 'vat_registered', label: 'VAT Registered', desc: 'UAE VAT registered' },
-                { value: 'non_vat_registered', label: 'Non-VAT Registered', desc: 'UAE non-VAT registered' },
-                { value: 'gcc_vat_registered', label: 'GCC VAT Registered', desc: 'GCC country VAT registered' },
-                { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT', desc: 'GCC country non-VAT' }
-              ].map(treatment => (
-                <div key={treatment.value} onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '' }))} 
-                     style={{ padding: '0.75rem', borderRadius: '14px', border: `2px solid ${formData.taxTreatment === treatment.value ? PRIMARY_COLOR : '#e2e8f0'}`, background: formData.taxTreatment === treatment.value ? `${PRIMARY_COLOR}10` : 'white', cursor: 'pointer', textAlign: 'center' }}>
-                  <div style={{ fontWeight: '600', fontSize: '0.75rem', color: formData.taxTreatment === treatment.value ? PRIMARY_COLOR : '#0f172a' }}>{treatment.label}</div>
-                  <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.25rem' }}>{treatment.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* TRN Field */}
-          {isVatRegistered && (
-            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f0f9ff', borderRadius: '16px', border: '1px solid #bae6fd' }}>
-              <label style={{ display: 'block', fontWeight: '600', color: '#0c4a6e', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Tax Registration Number (TRN) <span style={{ color: '#ef4444' }}>*</span></label>
-              <input type="text" name="taxRegistrationNumber" placeholder="123456789012345" value={formData.taxRegistrationNumber} onChange={handleChange} disabled={isSubmitting} maxLength={15} 
-                     style={{ width: '100%', padding: '0.75rem 1rem', border: `1.5px solid ${errors.taxRegistrationNumber ? '#ef4444' : '#bae6fd'}`, borderRadius: '14px', fontSize: '0.875rem', fontFamily: 'monospace', outline: 'none' }} />
-              {errors.taxRegistrationNumber && <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>{errors.taxRegistrationNumber}</p>}
-            </div>
-          )}
-
-          {/* Place of Supply & Currency */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>{showUaeEmirates ? 'UAE Emirate' : 'GCC Country'} <span style={{ color: '#ef4444' }}>*</span></label>
-              <select name="placeOfSupply" value={formData.placeOfSupply} onChange={handleChange} disabled={isSubmitting} 
-                      style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
-                <option value="">Select</option>
-                {placeOfSupplyOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Default Currency <span style={{ color: '#ef4444' }}>*</span></label>
-              <select name="defaultCurrency" value={formData.defaultCurrency} onChange={handleChange} disabled={isSubmitting} 
-                      style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', background: 'white', cursor: 'pointer' }}>
-                <option value="AED">AED - UAE Dirham</option>
-                <option value="SAR">SAR - Saudi Riyal</option>
-                <option value="KWD">KWD - Kuwaiti Dinar</option>
-                <option value="QAR">QAR - Qatari Riyal</option>
-                <option value="BHD">BHD - Bahraini Dinar</option>
-                <option value="OMR">OMR - Omani Rial</option>
-                <option value="USD">USD - US Dollar</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Company Name & Website */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.5rem' }}>
-            <div><label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Company Name</label>
-              <input type="text" name="companyName" placeholder="Company name (optional)" value={formData.companyName} onChange={handleChange} disabled={isSubmitting} 
-                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
-            </div>
-            <div><label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem', fontSize: '0.8rem' }}>Website</label>
-              <input type="text" name="website" placeholder="https://example.com" value={formData.website} onChange={handleChange} disabled={isSubmitting} 
-                     style={{ width: '100%', padding: '0.75rem 1rem', border: '1.5px solid #e2e8f0', borderRadius: '14px', fontSize: '0.875rem', outline: 'none' }} />
-            </div>
-          </div>
-
-          {/* Additional Contact Persons Section */}
-          <div style={{ marginBottom: '2rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0 }}>Additional Contact Persons ({formData.contactPersons.length})</h3>
-              <button type="button" onClick={openAddContact} style={{ padding: '8px 16px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Plus size={16} /> Add Contact Person
-              </button>
-            </div>
-
-            {formData.contactPersons.length === 0 ? (
-              <div style={{ padding: '2rem', textAlign: 'center', background: '#f8fafc', borderRadius: '12px', border: '1px dashed #e2e8f0' }}>
-                No additional contact persons added.<br />
-                <small>The main customer will be added as primary contact</small>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {formData.contactPersons.map((contact, idx) => (
-                  <div key={idx} style={{ padding: '1rem', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <strong>{contact.salutation} {contact.firstName} {contact.lastName}</strong><br />
-                      <small style={{ color: '#64748b' }}>
-                        {contact.email} • {contact.workPhone || contact.mobile}
-                      </small>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button type="button" onClick={() => handleEditContact(idx)} style={{ padding: '6px 12px', background: '#e0e7ff', color: '#4f46e5', border: 'none', borderRadius: '8px' }}>Edit</button>
-                      <button type="button" onClick={() => handleDeleteContact(idx)} style={{ padding: '6px 12px', background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '8px' }}>Delete</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Notes */}
-          <div style={{ marginBottom: '2rem' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '0.5rem' }}>Notes</label>
-            <textarea name="notes" rows={4} value={formData.notes} onChange={handleChange} style={{ width: '100%', padding: '1rem', borderRadius: '14px', border: '1px solid #e2e8f0' }} />
-          </div>
-
-          {/* Footer */}
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', paddingTop: '1rem', borderTop: '1px solid #e2e8f0' }}>
-            <button type="button" onClick={onClose} disabled={isSubmitting} style={{ padding: '12px 24px', borderRadius: '12px', background: '#f1f5f9', border: 'none', cursor: 'pointer' }}>
-              Cancel
-            </button>
-            <button type="submit" disabled={isSubmitting} style={{ padding: '12px 32px', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>
-              {isSubmitting ? 'Saving...' : initialData ? 'Update Customer' : 'Create Customer'}
-            </button>
-          </div>
-        </form>
+        </div>
+        
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            background: 'rgba(255,255,255,0.1)',
+            border: 'none',
+            borderRadius: '8px',
+            padding: '0.3rem',
+            cursor: 'pointer',
+            color: '#94a3b8',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+        >
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
       </div>
 
-      {/* Contact Person Add/Edit Modal */}
-      {showContactForm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
-             onClick={() => setShowContactForm(false)}>
-          <div style={{ background: 'white', borderRadius: '20px', width: '560px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ padding: '1.5rem', borderBottom: '1px solid #eee' }}>
-              <h3>{editingContactIndex !== null ? 'Edit Contact Person' : 'Add New Contact Person'}</h3>
+       {expanded && (
+        <div style={{
+          marginTop: '1rem',
+          paddingTop: '1rem',
+          borderTop: '1px solid #334155'
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.5rem',
+            backgroundColor: 'rgba(255,255,255,0.05)',
+            borderRadius: '8px'
+          }}>
+            <div style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '6px',
+              backgroundColor: '#ede9fe',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <User size={14} color="#8b5cf6" />
             </div>
-            <div style={{ padding: '1.5rem' }}>
-              {/* Salutation + Names */}
-              <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                <select value={contactForm.salutation} onChange={e => setContactForm(prev => ({ ...prev, salutation: e.target.value }))} 
-                        style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd' }}>
-                  {SALUTATIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <input type="text" placeholder="First Name *" value={contactForm.firstName} 
-                       onChange={e => setContactForm(prev => ({ ...prev, firstName: e.target.value }))} 
-                       style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd' }} />
-                <input type="text" placeholder="Last Name" value={contactForm.lastName} 
-                       onChange={e => setContactForm(prev => ({ ...prev, lastName: e.target.value }))} 
-                       style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Active Customers</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'white' }}>
+                {loading ? '...' : (stats?.activeCustomers?.toLocaleString() || 0)}
               </div>
-
-              <input type="email" placeholder="Email Address" value={contactForm.email} 
-                     onChange={e => setContactForm(prev => ({ ...prev, email: e.target.value }))} 
-                     style={{ width: '100%', padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd', marginBottom: '1rem' }} />
-
-              {/* Phone Fields with Country Code */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: '500' }}>Work Phone</label>
-                  <PhoneInput value={contactForm.workPhone} onChange={handleContactWorkPhoneChange} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem', fontWeight: '500' }}>Mobile Number</label>
-                  <PhoneInput value={contactForm.mobile} onChange={handleContactMobileChange} />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <input type="text" placeholder="Designation" value={contactForm.designation} 
-                       onChange={e => setContactForm(prev => ({ ...prev, designation: e.target.value }))} 
-                       style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd' }} />
-                <input type="text" placeholder="Department" value={contactForm.department} 
-                       onChange={e => setContactForm(prev => ({ ...prev, department: e.target.value }))} 
-                       style={{ padding: '0.75rem', borderRadius: '10px', border: '1px solid #ddd' }} />
-              </div>
-            </div>
-
-            <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-              <button onClick={() => setShowContactForm(false)} style={{ padding: '10px 20px', borderRadius: '10px', border: '1px solid #ddd' }}>Cancel</button>
-              <button onClick={handleSaveContact} style={{ padding: '10px 20px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '10px' }}>
-                {editingContactIndex !== null ? 'Update Contact' : 'Add Contact'}
-              </button>
             </div>
           </div>
         </div>
@@ -685,174 +619,575 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
   );
 };
  
-
-const styles = {
-  input: { width: '100%', padding: '0.5rem 0.75rem', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '0.875rem', outline: 'none' },
-  select: { width: '100%', padding: '0.5rem 0.75rem', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '0.875rem', background: 'white' },
-  textarea: { width: '100%', padding: '0.5rem 0.75rem', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '0.875rem', resize: 'vertical' }
-};
-
-// CustomerCard Component
-const CustomerCard = ({ customer, onEdit, onDelete, deletingId }) => {
-  const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+// Mobile Filter Drawer Component
+const FilterDrawer = ({ isOpen, onClose, filters, onFilterChange, onReset, currentPagination, onLimitChange, sortOption, onSortChange, viewMode, onViewChange }) => {
+  if (!isOpen) return null;
   
   return (
-    <div style={{ border: '1px solid #f1f5f9', borderRadius: '16px', overflow: 'hidden', background: 'white', padding: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-        <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: `${PRIMARY_COLOR}10`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Users size={20} color={PRIMARY_COLOR} />
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={() => onEdit(customer)} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <Edit2 size={12} />
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          zIndex: 999,
+          animation: 'fadeIn 0.2s ease-out'
+        }}
+      />
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: '85%',
+          maxWidth: '320px',
+          background: 'white',
+          zIndex: 1000,
+          boxShadow: '-4px 0 20px rgba(0,0,0,0.1)',
+          display: 'flex',
+          flexDirection: 'column',
+          animation: 'slideInRight 0.3s ease-out'
+        }}
+      >
+        <div style={{ 
+          padding: '1.25rem', 
+          borderBottom: '1px solid #e2e8f0', 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center' 
+        }}>
+          <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: '600' }}>Filters</h3>
+          <button 
+            onClick={onClose} 
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              cursor: 'pointer',
+              padding: '4px',
+              borderRadius: '8px'
+            }}
+          >
+            <X size={20} />
           </button>
-          <button onClick={() => onDelete(customer)} disabled={deletingId === customer._id} style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}>
-            <Trash2 size={12} />
+        </div>
+        
+        <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem' }}>
+          {/* Status Filter */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              Status
+            </label>
+            <CommonSelect
+              value={filters.status || 'all'}
+              onChange={(value) => onFilterChange('status', value)}
+              options={[
+                { value: 'all', label: 'All Status' },
+                { value: 'active', label: 'Active' },
+                { value: 'inactive', label: 'Inactive' }
+              ]}
+              size="md"
+            />
+          </div>
+          
+          {/* Tax Status Filter */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              Tax Status
+            </label>
+            <CommonSelect
+              value={filters.taxStatus || 'all'}
+              onChange={(value) => onFilterChange('taxStatus', value)}
+              options={[
+                { value: 'all', label: 'All Tax' },
+                { value: 'vat_registered', label: 'VAT Registered' },
+                { value: 'non_vat_registered', label: 'Non-VAT' },
+                { value: 'gcc_vat_registered', label: 'GCC VAT' },
+                { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT' }
+              ]}
+              size="md"
+            />
+          </div>
+          
+          {/* Place of Supply Filter */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              Place of Supply
+            </label>
+            <CommonSelect
+              value={filters.placeOfSupply || 'all'}
+              onChange={(value) => onFilterChange('placeOfSupply', value)}
+              options={[
+                { value: 'all', label: 'All Places' },
+                { value: 'Dubai', label: 'Dubai' },
+                { value: 'Abu Dhabi', label: 'Abu Dhabi' },
+                { value: 'Sharjah', label: 'Sharjah' },
+                { value: 'Saudi Arabia', label: 'Saudi Arabia' },
+                { value: 'Kuwait', label: 'Kuwait' },
+                { value: 'Qatar', label: 'Qatar' }
+              ]}
+              size="md"
+            />
+          </div>
+          
+          {/* Items per page */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              Items per page
+            </label>
+            <CommonSelect
+              value={currentPagination?.limit || 10}
+              onChange={(value) => onLimitChange(value)}
+              options={[
+                { value: '10', label: '10 / page' },
+                { value: '25', label: '25 / page' },
+                { value: '50', label: '50 / page' },
+                { value: '100', label: '100 / page' }
+              ]}
+              size="md"
+            />
+          </div>
+          
+          {/* Sort By */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              Sort By
+            </label>
+            <CommonSelect
+              value={sortOption}
+              onChange={(value) => onSortChange(value)}
+              options={[
+                { value: 'newest', label: 'Newest First' },
+                { value: 'oldest', label: 'Oldest First' },
+                { value: 'az', label: 'A to Z' },
+                { value: 'za', label: 'Z to A' }
+              ]}
+              size="md"
+            />
+          </div>
+          
+          {/* View Mode */}
+          <div style={{ marginBottom: '1.25rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: '600', marginBottom: '0.5rem', color: '#64748b' }}>
+              View Mode
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {['card', 'table'].map(v => (
+                <button
+                  key={v}
+                  onClick={() => onViewChange(v)}
+                  style={{
+                    flex: 1,
+                    padding: '0.5rem',
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    background: viewMode === v ? PRIMARY_COLOR : 'white',
+                    color: viewMode === v ? 'white' : '#64748b',
+                    cursor: 'pointer',
+                    fontWeight: '500',
+                    fontSize: '0.75rem'
+                  }}
+                >
+                  {v === 'card' ? 'Cards' : 'Table'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        
+        <div style={{ padding: '1rem', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '0.75rem' }}>
+          <button
+            onClick={onReset}
+            style={{
+              flex: 1,
+              padding: '0.75rem',
+              borderRadius: '12px',
+              border: '1px solid #e2e8f0',
+              background: 'white',
+              cursor: 'pointer',
+              fontWeight: '500',
+              fontSize: '0.875rem'
+            }}
+          >
+            Reset All
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1,
+              padding: '0.75rem',
+              borderRadius: '12px',
+              background: PRIMARY_COLOR,
+              color: 'white',
+              border: 'none',
+              cursor: 'pointer',
+              fontWeight: '500',
+              fontSize: '0.875rem'
+            }}
+          >
+            Apply
           </button>
         </div>
       </div>
-      
-      <h3 style={{ margin: '0.5rem 0 0.25rem', fontSize: '0.9rem', fontWeight: '700', color: PRIMARY_COLOR }}>{customer.name}</h3>
-      <p style={{ margin: '0 0 0.25rem', color: '#64748b', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-        <Mail size={10} /> {customer.email}
-      </p>
-      
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.65rem', fontWeight: '600', background: isVatRegistered ? '#d1fae5' : '#f1f5f9', color: isVatRegistered ? '#065f46' : '#475569' }}>
-          {isVatRegistered ? 'VAT' : 'Non-VAT'}
-        </span>
-        {customer.placeOfSupply && (
-          <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.65rem', fontWeight: '500', background: '#f1f5f9', color: '#475569' }}>
-            {customer.placeOfSupply.substring(0, 8)}
-          </span>
-        )}
-      </div>
-    </div>
+    </>
   );
 };
 
-// Main CustomersScreen Component
+ const Toolbar = ({
+  searchValue,
+  onSearchChange,
+  filters,
+  onFilterChange,
+  onResetFilters,
+  currentPagination,
+  onLimitChange,
+  sortOption,
+  onSortChange,
+  viewMode,
+  onViewChange,
+  onAddClick,
+  isMobile = false
+}) => {
+  const [showFilterDrawer, setShowFilterDrawer] = useState(false);
+
+  return (
+    <>
+      <div style={{
+        padding: 'clamp(12px, 3vw, 16px) clamp(16px, 4vw, 20px)',
+        background: '#ffffff',
+        borderBottom: '1px solid #e5e7eb'
+      }}>
+        {/* Search Bar - Full width on top */}
+        <div style={{ position: 'relative', marginBottom: '1rem' }}>
+          <Search size={16} style={{
+            position: 'absolute',
+            left: '12px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: '#9ca3af',
+            pointerEvents: 'none'
+          }} />
+          <input
+            type="text"
+            placeholder="Search by name, email or phone..."
+            value={searchValue}
+            onChange={(e) => onSearchChange(e.target.value)}
+            style={{
+              width: '100%',
+              padding: isMobile ? '0.6rem 0.6rem 0.6rem 2.2rem' : '0.7rem 0.7rem 0.7rem 2.5rem',
+              borderRadius: '12px',
+              border: '1px solid #e5e7eb',
+              fontSize: isMobile ? '0.85rem' : '0.9rem',
+              background: '#f9fafb',
+              outline: 'none',
+              transition: 'all 0.2s ease'
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = PRIMARY_COLOR;
+              e.target.style.background = 'white';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = '#e5e7eb';
+              e.target.style.background = '#f9fafb';
+            }}
+          />
+        </div>
+
+        {/* Filters Row - Below search */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          flexWrap: 'wrap'
+        }}>
+          {/* Left side - Filters */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+            flex: isMobile ? '1' : 'auto'
+          }}>
+            {isMobile ? (
+              <button
+                onClick={() => setShowFilterDrawer(true)}
+                style={{
+                  background: '#f9fafb',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '10px',
+                  padding: '0.5rem 1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer'
+                }}
+              >
+                <Filter size={14} />
+                <span style={{ fontSize: '0.8rem', fontWeight: '500' }}>Filters</span>
+              </button>
+            ) : (
+              <>
+                <CommonSelect
+                  value={filters.status || 'all'}
+                  onChange={(value) => onFilterChange('status', value)}
+                  options={[
+                    { value: 'all', label: 'All Status' },
+                    { value: 'active', label: 'Active' },
+                    { value: 'inactive', label: 'Inactive' }
+                  ]}
+                  size="md"
+                />
+
+                <CommonSelect
+                  value={filters.taxStatus || 'all'}
+                  onChange={(value) => onFilterChange('taxStatus', value)}
+                  options={[
+                    { value: 'all', label: 'All Tax' },
+                    { value: 'vat_registered', label: 'VAT Registered' },
+                    { value: 'non_vat_registered', label: 'Non-VAT' },
+                    { value: 'gcc_vat_registered', label: 'GCC VAT' },
+                    { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT' }
+                  ]}
+                  size="md"
+                />
+
+                <CommonSelect
+                  value={filters.placeOfSupply || 'all'}
+                  onChange={(value) => onFilterChange('placeOfSupply', value)}
+                  options={[
+                    { value: 'all', label: 'All Places' },
+                    { value: 'Dubai', label: 'Dubai' },
+                    { value: 'Abu Dhabi', label: 'Abu Dhabi' },
+                    { value: 'Sharjah', label: 'Sharjah' },
+                    { value: 'Saudi Arabia', label: 'Saudi Arabia' },
+                    { value: 'Kuwait', label: 'Kuwait' },
+                    { value: 'Qatar', label: 'Qatar' }
+                  ]}
+                  size="md"
+                />
+
+                <CommonSelect
+                  value={currentPagination?.limit || 10}
+                  onChange={(value) => onLimitChange(value)}
+                  options={[
+                    { value: '10', label: '10 / page' },
+                    { value: '25', label: '25 / page' },
+                    { value: '50', label: '50 / page' },
+                    { value: '100', label: '100 / page' }
+                  ]}
+                  size="md"
+                />
+
+                <CommonSelect
+                  value={sortOption}
+                  onChange={(value) => onSortChange(value)}
+                  options={[
+                    { value: 'newest', label: 'Newest First' },
+                    { value: 'oldest', label: 'Oldest First' },
+                    { value: 'az', label: 'A to Z' },
+                    { value: 'za', label: 'Z to A' }
+                  ]}
+                  size="md"
+                />
+
+                {/* View Toggle */}
+                <div style={{
+                  display: 'flex',
+                  background: '#f1f5f9',
+                  borderRadius: '12px',
+                  padding: '3px',
+                  gap: '2px'
+                }}>
+                  {['card', 'table'].map(v => (
+                    <button
+                      key={v}
+                      onClick={() => onViewChange(v)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '9px',
+                        border: 'none',
+                        fontSize: '0.75rem',
+                        fontWeight: '500',
+                        background: viewMode === v ? '#fff' : 'transparent',
+                        boxShadow: viewMode === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                        cursor: 'pointer',
+                        color: viewMode === v ? PRIMARY_COLOR : '#64748b',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {v === 'card' ? 'Cards' : 'Table'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Reset Filters Button */}
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={onResetFilters}
+                  style={{
+                    background: '#f1f5f9',
+                    color: '#64748b',
+                    border: 'none',
+                    borderRadius: '10px',
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.75rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <X size={14} />
+                  Reset
+                </motion.button>
+              </>
+            )}
+          </div>
+
+          {/* Right side - Add Customer Button */}
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onAddClick}
+            style={{
+              background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`,
+              color: '#fff',
+              border: 'none',
+              borderRadius: '10px',
+              padding: isMobile ? '0.5rem 1rem' : '0.6rem 1.2rem',
+              fontSize: isMobile ? '0.8rem' : '0.85rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <Plus size={isMobile ? 14 : 16} />
+            {isMobile ? 'Add' : 'Add Customer'}
+          </motion.button>
+        </div>
+      </div>
+
+      {/* Mobile Filter Drawer */}
+      <FilterDrawer
+        isOpen={showFilterDrawer}
+        onClose={() => setShowFilterDrawer(false)}
+        filters={filters}
+        onFilterChange={onFilterChange}
+        onReset={onResetFilters}
+        currentPagination={currentPagination}
+        onLimitChange={onLimitChange}
+        sortOption={sortOption}
+        onSortChange={onSortChange}
+        viewMode={viewMode}
+        onViewChange={onViewChange}
+      />
+    </>
+  );
+};
+
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(false);
+  
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    if (media.matches !== matches) {
+      setMatches(media.matches);
+    }
+    const listener = (e) => setMatches(e.matches);
+    media.addEventListener('change', listener);
+    return () => media.removeEventListener('change', listener);
+  }, [query]);
+  
+  return matches;
+};
+
 export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const { selectedCompany: contextCompanyId } = useCompanyCurrency();
   const effectiveCompanyId = propCompanyId || contextCompanyId;
-
-  // Hooks
-  const pagination = usePaginatedCustomers(1, effectiveCompanyId);
-  const stats = useCustomerStats(effectiveCompanyId);
-  const { syncCustomers, syncing: isSyncing, getSyncStatus } = useZohoSync();
+  
+  // Store subscriptions
+  const customerFilters = useAppStore((state) => state.customerFilters);
+  const setCustomerFilters = useAppStore((state) => state.setCustomerFilters);
+  const fetchFilteredCustomers = useAppStore((state) => state.fetchFilteredCustomers);
+  const fetchCustomerStats = useAppStore((state) => state.fetchCustomerStats);
+  const addCustomerToStore = useAppStore((state) => state.addCustomer);
+  const updateCustomerInStore = useAppStore((state) => state.updateCustomer);
+  const deleteCustomerFromStore = useAppStore((state) => state.deleteCustomer);
+  const customers = useAppStore((state) => state.customers);
+  const customersPagination = useAppStore((state) => state.customersPagination);
+  const loading = useAppStore((state) => state.loading);
+  const customerStats = useAppStore((state) => state.customerStats);
   
   // Local state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [progressData, setProgressData] = useState(null);
+  const [showProgressModal, setShowProgressModal] = useState(false);
   const [toast, setToast] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [syncType, setSyncType] = useState(null);
   const [viewMode, setViewMode] = useState('card');
-  const [showSyncOptions, setShowSyncOptions] = useState(false);
   const [sortOption, setSortOption] = useState('newest');
   const [deleteModal, setDeleteModal] = useState({ open: false, customer: null });
-  // Store
-  const customerFilters = useAppStore((state) => state.customerFilters);
-  const setCustomerFilters = useAppStore((state) => state.setCustomerFilters);
-  const fetchFilteredCustomers = useAppStore((state) => state.fetchFilteredCustomers);
-  const addCustomerToStore = useAppStore((state) => state.addCustomer);
-  const updateCustomerInStore = useAppStore((state) => state.updateCustomer);
-  const deleteCustomerFromStore = useAppStore((state) => state.deleteCustomer);
-  const fetchAllData = useAppStore((state) => state.fetchAllData);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showFilterDrawer, setShowFilterDrawer] = useState(false);
+  const [searchInput, setSearchInput] = useState(customerFilters.search || '');
   
-  const { customers, customersPagination, loading, fetchCustomerStats } = useAppStore();
+  const isMobile = useMediaQuery('(max-width: 768px)');
+  const searchTimer = useRef(null);
   
-  // Memoized values
   const currentCustomers = useMemo(() => customers || [], [customers]);
   const currentLoading = loading;
   const currentPagination = customersPagination;
-  useEffect(() => {
-    if (!contextCompanyId) return;
   
+  // Load initial data when company changes
+  useEffect(() => {
+    if (!effectiveCompanyId) return;
+    
     const loadData = async () => {
       let sortBy = 'createdAt';
       let sortOrder = 'desc';
-  
-      switch(sortOption) {
-        case 'newest': sortBy = 'createdAt'; sortOrder = 'desc'; break;
-        case 'oldest': sortBy = 'createdAt'; sortOrder = 'asc'; break;
-        case 'az':     sortBy = 'name'; sortOrder = 'asc'; break;
-        case 'za':     sortBy = 'name'; sortOrder = 'desc'; break;
-      }
-  
-       await Promise.all([
-        fetchCustomerStats(customerFilters),                  
-        fetchFilteredCustomers({ 
-          ...customerFilters, 
-          sortBy, 
-          sortOrder 
-        }, { page: 1 })
-      ]);
-    };
-  
-    loadData();
-  }, [contextCompanyId, customerFilters, sortOption]);
-  
-  // Helper functions
-  const getSortFromOption = (option) => {
-    switch(option) {
-      case 'newest': return 'createdAt';
-      case 'oldest': return 'createdAt';
-      case 'az': return 'name';
-      case 'za': return 'name';
-      default: return 'createdAt';
-    }
-  };
-  
-  const getOrderFromOption = (option) => {
-    switch(option) {
-      case 'newest': return 'desc';
-      case 'oldest': return 'asc';
-      case 'az': return 'asc';
-      case 'za': return 'desc';
-      default: return 'desc';
-    }
-  };
-
-  useEffect(() => {
-    if (contextCompanyId) {
-      const loadSavedFilters = async () => {
-        let sortBy = 'createdAt';
-        let sortOrder = 'desc';
-        switch(sortOption) {
-          case 'newest': sortBy = 'createdAt'; sortOrder = 'desc'; break;
-          case 'oldest': sortBy = 'createdAt'; sortOrder = 'asc'; break;
-          case 'az': sortBy = 'name'; sortOrder = 'asc'; break;
-          case 'za': sortBy = 'name'; sortOrder = 'desc'; break;
-          default: break;
-        }
-         await fetchFilteredCustomers({ ...customerFilters, sortBy, sortOrder }, { page: 1 });
-      };
       
-      loadSavedFilters();
-    }
-  }, []); 
-
-  useEffect(() => {
-    if (contextCompanyId) {
-      let sortBy = 'createdAt';
-      let sortOrder = 'desc';
       switch(sortOption) {
         case 'newest': sortBy = 'createdAt'; sortOrder = 'desc'; break;
         case 'oldest': sortBy = 'createdAt'; sortOrder = 'asc'; break;
         case 'az': sortBy = 'name'; sortOrder = 'asc'; break;
         case 'za': sortBy = 'name'; sortOrder = 'desc'; break;
-        default: break;
       }
-      fetchFilteredCustomers({ ...customerFilters, sortBy, sortOrder }, { page: 1 });
-    }
-  }, [sortOption]);
-
-  // Handlers
-  const handleSearch = useCallback((value) => {
-    setCustomerFilters({ search: value?.trim() || '' });
-  }, [setCustomerFilters]);
+      
+      // Pass companyId as 'all' if effectiveCompanyId is 'all'
+      const filters = { ...customerFilters, sortBy, sortOrder };
+      if (effectiveCompanyId === 'all') {
+        filters.companyId = 'all';
+      }
+      
+      await Promise.all([
+        fetchCustomerStats(filters),
+        fetchFilteredCustomers(filters, { page: 1, limit: isMobile ? 10 : 20 })
+      ]);
+    };
+    
+    loadData();
+  }, [effectiveCompanyId, sortOption]);
+  
+  // Debounced search
+  const handleSearchChange = useCallback((value) => {
+    setSearchInput(value);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setCustomerFilters({ ...customerFilters, search: value?.trim() || '' });
+    }, 500);
+  }, [setCustomerFilters, customerFilters]);
   
   const handleLimitChange = useCallback((newLimit) => {
     fetchFilteredCustomers(customerFilters, { page: 1, limit: parseInt(newLimit, 10) });
@@ -868,15 +1203,15 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     setEditingCustomer(null); 
     setIsSubmitting(false); 
   }, []);
-
+  
   const handleSortChange = useCallback((option) => {
     setSortOption(option);
   }, []);
-
+  
   const handlePageChange = useCallback((newPage) => {
     fetchFilteredCustomers(customerFilters, { page: newPage });
   }, [fetchFilteredCustomers, customerFilters]);
-
+  
   const handleSubmit = useCallback(async (formData) => {
     setIsSubmitting(true);
     try {
@@ -886,28 +1221,28 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
         result = await updateCustomerInStore(editingCustomer._id, formData);
         if (result?.success) {
           handleCloseModal();
-          setToast({ message: '✅ Customer updated successfully', type: 'success' });
-          await fetchAllData();
+          showToast('✅ Customer updated successfully', 'success');
+          await refreshData();
         } else {
-          setToast({ message: result?.error || 'Error updating customer', type: 'error' });
+          showToast(result?.error || 'Error updating customer', 'error');
         }
       } else {
         result = await addCustomerToStore(formData);
         if (result?.success) {
           handleCloseModal();
-          setToast({ message: '✅ Customer added successfully', type: 'success' });
-          await fetchAllData();
+          showToast('✅ Customer added successfully', 'success');
+          await refreshData();
         } else {
-          setToast({ message: result?.error || 'Error adding customer', type: 'error' });
+          showToast(result?.error || 'Error adding customer', 'error');
         }
       }
     } catch (error) { 
-      setToast({ message: error?.response?.data?.message || error?.message || 'Error saving customer', type: 'error' }); 
+      showToast(error?.response?.data?.message || error?.message || 'Error saving customer', 'error'); 
     } finally { 
       setIsSubmitting(false); 
     }
-  }, [editingCustomer, addCustomerToStore, updateCustomerInStore, fetchAllData, handleCloseModal]);
-
+  }, [editingCustomer, addCustomerToStore, updateCustomerInStore, handleCloseModal]);
+  
   const handleDeleteClick = (customer) => {
     setDeleteModal({ open: true, customer });
   };
@@ -919,19 +1254,14 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     try {
       const result = await deleteCustomerFromStore(deleteModal.customer._id);
       if (result?.success) {
-        setToast({ message: 'Customer deleted successfully', type: 'success' });
-         if (pagination?.refetch) await pagination.refetch();
-        if (stats?.refetch) await stats.refetch();
+        showToast('Customer deleted successfully', 'success');
+        await refreshData();
       } else {
-         const errorMsg = result?.error || 'Failed to delete customer';
-        setToast({ message: errorMsg, type: 'error' });
+        showToast(result?.error || 'Failed to delete customer', 'error');
       }
-      
       setDeleteModal({ open: false, customer: null });
-      if (pagination?.refetch) await pagination.refetch();
-      if (stats?.refetch) await stats.refetch();
     } catch (error) {
-      setToast({ message: error?.message || 'Failed to delete', type: 'error' });
+      showToast(error?.message || 'Failed to delete', 'error');
     } finally {
       setDeletingId(null);
     }
@@ -940,46 +1270,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const handleDeleteCancel = () => {
     setDeleteModal({ open: false, customer: null });
   };
-
-  const handleSync = useCallback(async (fullSync = false) => {
-    setSyncType(fullSync ? 'full' : 'incremental');
-    setToast({ message: fullSync ? '🔄 Performing full sync from Zoho...' : '🔄 Performing incremental sync from Zoho...', type: 'info' });
-    
-    try {
-      const result = await syncCustomers(fullSync, effectiveCompanyId);
-      if (result.success) {
-        setToast({ message: `✅ Sync complete!`, type: 'success' });
-        await fetchAllData();
-      }
-    } catch (error) {
-      setToast({ message: `❌ ${error.message || 'Sync failed'}`, type: 'error' });
-    } finally {
-      setSyncType(null);
-      setShowSyncOptions(false);
-    }
-  }, [syncCustomers, fetchAllData, effectiveCompanyId]);
-
-  const handleApplyFilters = useCallback(async () => {
-    setIsFilterLoading(true);
-    try {
-      let sortBy = 'createdAt';
-      let sortOrder = 'desc';
-      switch(sortOption) {
-        case 'newest': sortBy = 'createdAt'; sortOrder = 'desc'; break;
-        case 'oldest': sortBy = 'createdAt'; sortOrder = 'asc'; break;
-        case 'az': sortBy = 'name'; sortOrder = 'asc'; break;
-        case 'za': sortBy = 'name'; sortOrder = 'desc'; break;
-        default: break;
-      }
-      await fetchFilteredCustomers({ ...customerFilters, sortBy, sortOrder }, { page: 1 });
-      setToast({ message: 'Filters applied successfully', type: 'success' });
-    } catch (error) {
-      setToast({ message: 'Failed to apply filters', type: 'error' });
-    } finally {
-      setIsFilterLoading(false);
-    }
-  }, [fetchFilteredCustomers, customerFilters, sortOption]);
-
+  
   const handleResetFilters = useCallback(async () => {
     const resetFilters = {
       status: 'all',
@@ -994,548 +1285,497 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
       zohoSyncStatus: 'all'
     };
     setCustomerFilters(resetFilters);
+    setSearchInput('');
     setSortOption('newest');
     await fetchFilteredCustomers({ ...resetFilters, sortBy: 'createdAt', sortOrder: 'desc' }, { page: 1 });
-    setToast({ message: 'All filters reset', type: 'success' });
+    showToast('All filters reset', 'success');
   }, [setCustomerFilters, fetchFilteredCustomers]);
-
-  // Add animation styles
-  useEffect(() => {
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } 
-      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-    `;
-    document.head.appendChild(style);
-    return () => document.head.removeChild(style);
-  }, []);
-
-  return (
-    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4ff 0%, #e8edf5 100%)', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem 1.5rem' }}>
-        {/* Header */}
-   {/* Header - Modern & Responsive */}
-<div style={{ 
-  display: 'flex', 
-  justifyContent: 'space-between', 
-  alignItems: 'center', 
-  marginBottom: '2rem', 
-  flexWrap: 'wrap', 
-  gap: '1.5rem',
-  position: 'relative'
-}}>
-  {/* Left Section - Title & Description */}
-  <div>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '0.5rem' }}>
-      <div style={{ 
-        width: '48px', 
-        height: '48px', 
-        background: `linear-gradient(135deg, ${PRIMARY_COLOR}15, ${PRIMARY_COLOR}05)`,
-        borderRadius: '16px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        border: `1px solid ${PRIMARY_COLOR}20`
-      }}>
-        <Users size={24} color={PRIMARY_COLOR} />
-      </div>
-      <div>
-        <h1 style={{ 
-          margin: 0, 
-          fontSize: 'clamp(1.5rem, 5vw, 2rem)', 
-          fontWeight: '800', 
-          background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, 
-          WebkitBackgroundClip: 'text', 
-          WebkitTextFillColor: 'transparent',
-          letterSpacing: '-0.02em'
-        }}>
-          Customers
-        </h1>
-        <p style={{ 
-          margin: '0.25rem 0 0', 
-          color: '#64748b', 
-          fontSize: '0.875rem',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px'
-        }}>
-          <span style={{ 
-            display: 'inline-block', 
-            width: '6px', 
-            height: '6px', 
-            background: '#10b981', 
-            borderRadius: '50%',
-            animation: 'pulse 2s infinite'
-          }} />
-          Manage your customer relationships and tax information
-        </p>
-      </div>
-    </div>
-  </div>
-
-  {/* Right Section - Actions */}
-  <div style={{ 
-    display: 'flex', 
-    gap: '0.75rem', 
-    alignItems: 'center',
-    flexWrap: 'wrap'
-  }}>
-    {/* Sync Button with Dropdown */}
-    <div style={{ position: 'relative' }}>
-      <button 
-        onClick={() => setShowSyncOptions(!showSyncOptions)} 
-        disabled={isSyncing} 
-        style={{ 
-          background: isSyncing 
-            ? '#9ca3af' 
-            : `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, 
-          border: 'none', 
-          borderRadius: '14px', 
-          padding: '0.7rem 1.4rem', 
-          cursor: isSyncing ? 'not-allowed' : 'pointer', 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '0.6rem', 
-          color: 'white', 
-          fontWeight: '600', 
-          fontSize: '0.85rem', 
-          boxShadow: isSyncing 
-            ? 'none' 
-            : `0 4px 12px ${PRIMARY_COLOR}30`,
-          transition: 'all 0.2s ease',
-          opacity: isSyncing ? 0.7 : 1
-        }}
-        onMouseEnter={(e) => {
-          if (!isSyncing) {
-            e.currentTarget.style.transform = 'translateY(-2px)';
-            e.currentTarget.style.boxShadow = `0 6px 16px ${PRIMARY_COLOR}40`;
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0)';
-          if (!isSyncing) {
-            e.currentTarget.style.boxShadow = `0 4px 12px ${PRIMARY_COLOR}30`;
-          }
-        }}
-      >
-        {isSyncing ? (
-          <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} />
-        ) : (
-          <RefreshCw size={16} />
-        )}
-        <span style={{ whiteSpace: 'nowrap' }}>
-          {isSyncing 
-            ? (syncType === 'full' ? 'Full Sync...' : 'Syncing...') 
-            : 'Sync from Zoho'}
-        </span>
-        <ChevronDown size={14} style={{ 
-          transition: 'transform 0.2s',
-          transform: showSyncOptions ? 'rotate(180deg)' : 'rotate(0deg)'
-        }} />
-      </button>
+  
+  const handleFilterChange = (key, value) => {
+    setCustomerFilters({ ...customerFilters, [key]: value });
+  };
+  
+  const handleExportCustomers = useCallback(async (format = 'xlsx') => {
+    showToast('Preparing export...', 'info');
+    try {
+      const exportParams = {
+        status: customerFilters.status !== 'all' ? customerFilters.status : undefined,
+        taxStatus: customerFilters.taxStatus !== 'all' ? customerFilters.taxStatus : undefined,
+        placeOfSupply: customerFilters.placeOfSupply !== 'all' ? customerFilters.placeOfSupply : undefined,
+        search: customerFilters.search || undefined,
+      };
       
-      {showSyncOptions && !isSyncing && (
-        <div style={{
-          position: 'absolute', 
-          top: 'calc(100% + 8px)', 
-          right: 0, 
-          background: 'white', 
-          borderRadius: '16px', 
-          boxShadow: '0 20px 35px -10px rgba(0,0,0,0.15)',
-          border: '1px solid #e2e8f0', 
-          zIndex: 10, 
-          minWidth: '240px', 
-          overflow: 'hidden',
-          animation: 'fadeInDown 0.2s ease'
-        }}>
-          <button 
-            onClick={() => handleSync(true)} 
-            style={{ 
-              width: '100%', 
-              padding: '0.875rem 1.25rem', 
-              background: 'white', 
-              border: 'none', 
-              textAlign: 'left', 
-              cursor: 'pointer', 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '12px',
-              transition: 'background 0.2s',
-              fontSize: '0.875rem',
-              fontWeight: '500',
-              color: '#374151'
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-            onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-          >
-            <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '10px',
-              background: '#e0e7ff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <RefreshCw size={14} color="#6366f1" />
-            </div>
-            <div>
-              <div style={{ fontWeight: '600' }}>Full Sync</div>
-              <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Sync all customers from Zoho</div>
-            </div>
-          </button>
-          <div style={{ height: '1px', background: '#e2e8f0' }} />
-          
-        </div>
-      )}
-    </div>
-
-    {/* Back Button */}
-    <button 
-      onClick={onBack} 
-      style={{ 
-        background: 'white', 
-        border: '1px solid #e2e8f0', 
-        borderRadius: '14px', 
-        padding: '0.7rem 1.4rem', 
-        cursor: 'pointer', 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '0.6rem', 
-        fontWeight: '600', 
-        fontSize: '0.85rem',
-        color: '#475569',
-        transition: 'all 0.2s ease',
-        boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = '#f8fafc';
-        e.currentTarget.style.transform = 'translateY(-2px)';
-        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'white';
-        e.currentTarget.style.transform = 'translateY(0)';
-        e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.05)';
-      }}
-    >
-      <ArrowLeft size={16} />
-      <span>Back</span>
-    </button>
-  </div>
-</div>
- 
-<style>
-  {`
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.8); }
+      // Add companyId if not 'all'
+      if (effectiveCompanyId && effectiveCompanyId !== 'all') {
+        exportParams.companyId = effectiveCompanyId;
+      }
+      
+      Object.keys(exportParams).forEach(key => 
+        exportParams[key] === undefined && delete exportParams[key]
+      );
+      
+      const response = await customerAPI.exportCustomers(exportParams, format);
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const fileExtension = format === 'xlsx' ? 'xlsx' : 'csv';
+      link.setAttribute('download', `customers_export_${new Date().toISOString().split('T')[0]}.${fileExtension}`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      showToast('Customers exported successfully!', 'success');
+    } catch (error) {
+      console.error('Export failed:', error);
+      showToast(error?.response?.data?.message || 'Failed to export customers', 'error');
+    }
+  }, [customerFilters, effectiveCompanyId]);
+  
+  const handleSync = useCallback(async (fullSync = false) => {
+    setIsSyncing(true);
+    try {
+      const response = await customerAPI.syncFromZoho(fullSync, effectiveCompanyId);
+      const data = response.data;
+      
+      if (data.success) {
+        setProgressData({
+          stage: 'starting',
+          message: fullSync ? 'Starting Full Sync from Zoho...' : 'Starting Incremental Sync...',
+          fetched: 0,
+          total: 0
+        });
+        setShowProgressModal(true);
+        showToast(fullSync ? '🔄 Full sync started...' : '🔄 Incremental sync started...', 'success');
+      } else {
+        showToast(data.message || 'Failed to start sync', 'error');
+      }
+    } catch (error) {
+      console.error(error);
+      showToast('Failed to start sync', 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [effectiveCompanyId]);
+  
+  const refreshData = useCallback(async () => {
+    setIsRefreshing(true);
+    let sortBy = 'createdAt';
+    let sortOrder = 'desc';
+    switch(sortOption) {
+      case 'newest': sortBy = 'createdAt'; sortOrder = 'desc'; break;
+      case 'oldest': sortBy = 'createdAt'; sortOrder = 'asc'; break;
+      case 'az': sortBy = 'name'; sortOrder = 'asc'; break;
+      case 'za': sortBy = 'name'; sortOrder = 'desc'; break;
     }
     
-    @keyframes fadeInDown {
-      from {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+    const currentPage = currentPagination?.page || 1;
+    const currentLimit = currentPagination?.limit || (isMobile ? 10 : 20);
+    
+    const filters = { ...customerFilters, sortBy, sortOrder };
+    if (effectiveCompanyId === 'all') {
+      filters.companyId = 'all';
     }
-  `}
-</style>
-
-        {/* Stats Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
-          <StatCard label="Total Customers" value={stats.data?.totalCustomers || 0} icon={Users} color="#6366f1" loading={stats.loading} />
-          <StatCard label="VAT Registered" value={stats.data?.vatRegistered || 0} icon={Building2} color="#10b981" loading={stats.loading} />
-          <StatCard label="Non-VAT Registered" value={stats.data?.nonVatRegistered || 0} icon={Tag} color="#f59e0b" loading={stats.loading} />
-          <StatCard label="Active Customers" value={stats.data?.activeCustomers || 0} icon={User} color="#8b5cf6" loading={stats.loading} />
-        </div>
-
-        {/* Main Content Card */}
-        <div style={{ background: 'white', borderRadius: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-        
-<div style={{
-  display: 'flex',
-  alignItems: 'center',
-  gap: '12px',
-  padding: '16px 20px',
-  background: '#ffffff',
-  borderBottom: '1px solid #e5e7eb',
-  flexWrap: 'wrap'
-}}>
-  {/* Search Input */}
-  <div style={{ position: 'relative', flex: '2', minWidth: '240px' }}>
-    <Search size={16} style={{
-      position: 'absolute',
-      left: '12px',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      color: '#9ca3af'
-    }} />
-    <input
-      type="text"
-      placeholder="Search customers by name, email or phone..."
-      onChange={(e) => handleSearch(e.target.value)}
-      style={{
-        width: '100%',
-        padding: '8px 12px 8px 36px',
-        borderRadius: '10px',
-        border: '1px solid #e5e7eb',
-        fontSize: '13px',
-        background: '#f9fafb',
-        outline: 'none',
-        transition: 'all 0.2s'
+    
+    await Promise.all([
+      fetchFilteredCustomers(filters, { page: currentPage, limit: currentLimit }),
+      fetchCustomerStats(filters)
+    ]);
+    
+    setIsRefreshing(false);
+    showToast('Data refreshed!', 'success');
+  }, [fetchFilteredCustomers, fetchCustomerStats, customerFilters, sortOption, currentPagination, effectiveCompanyId, isMobile]);
+  
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+  
+  // Progress Polling
+  useEffect(() => {
+    let interval;
+    
+    if (showProgressModal && effectiveCompanyId) {
+      interval = setInterval(async () => {
+        try {
+          const res = await customerAPI.getSyncProgress(effectiveCompanyId);
+          const data = res.data;
+          
+          if (data.success) {
+            setProgressData(data.progress);
+            
+            if (data.progress.stage === 'completed' || data.progress.stage === 'error') {
+              clearInterval(interval);
+              setTimeout(async () => {
+                setShowProgressModal(false);
+                setProgressData(null);
+                await refreshData();
+              }, 1500);
+            }
+          }
+        } catch (err) {
+          console.error("Progress polling error:", err);
+        }
+      }, 1200);
+    }
+    
+    return () => clearInterval(interval);
+  }, [showProgressModal, effectiveCompanyId, refreshData]);
+  
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => clearTimeout(searchTimer.current);
+  }, []);
+  
+  // Stats data for display
+  const statsData = {
+    totalCustomers: customerStats?.totalCustomers || 0,
+    vatRegistered: customerStats?.vatRegistered || 0,
+    nonVatRegistered: customerStats?.nonVatRegistered || 0,
+    activeCustomers: customerStats?.activeCustomers || 0
+  };
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      style={{ 
+        minHeight: '100vh', 
+        background: 'linear-gradient(135deg, #f0f4ff 0%, #e8edf5 100%)',
+        fontFamily: 'system-ui, -apple-system, sans-serif'
       }}
-      onFocus={(e) => e.target.style.borderColor = PRIMARY_COLOR}
-      onBlur={(e) => e.target.style.borderColor = '#e5e7eb'}
-    />
-  </div>
-
-  <CommonSelect
-  value={customerFilters.status || 'all'}
-  onChange={(value) => setCustomerFilters({ ...customerFilters, status: value })}
-  options={[
-    { value: 'all', label: 'All Status' },
-    { value: 'active', label: 'Active' },
-    { value: 'inactive', label: 'Inactive' }
-  ]}
-  size="md"
-/>
-
-{/* Tax Status Filter */}
-<CommonSelect
-  value={customerFilters.taxStatus || 'all'}
-  onChange={(value) => setCustomerFilters({ ...customerFilters, taxStatus: value })}
-  options={[
-    { value: 'all', label: 'All Tax' },
-    { value: 'vat_registered', label: 'VAT Registered' },
-    { value: 'non_vat_registered', label: 'Non-VAT' },
-    { value: 'gcc_vat_registered', label: 'GCC VAT' },
-    { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT' }
-  ]}
-  size="md"
-/>
-
-{/* Place of Supply Filter */}
-<CommonSelect
-  value={customerFilters.placeOfSupply || 'all'}
-  onChange={(value) => setCustomerFilters({ ...customerFilters, placeOfSupply: value })}
-  options={[
-    { value: 'all', label: 'All Places' },
-    { value: 'Dubai', label: 'Dubai' },
-    { value: 'Abu Dhabi', label: 'Abu Dhabi' },
-    { value: 'Sharjah', label: 'Sharjah' },
-    { value: 'Saudi Arabia', label: ' Saudi Arabia' },
-    { value: 'Kuwait', label: 'Kuwait' },
-    { value: 'Qatar', label: 'Qatar' }
-  ]}
-  size="md"
-/>
-
-  {/* Per Page Selector */}
-  <CommonSelect
-  value={currentPagination?.limit || 10}
-  onChange={(value) => handleLimitChange(value)}
-  options={[
-    { value: '10', label: '10 / page' },
-    { value: '25', label: '25 / page' },
-    { value: '50', label: '50 / page' },
-    { value: '100', label: '100 / page' }
-  ]}
-  size="md"
-/>
-
-{/* Sort */}
-<CommonSelect
-  value={sortOption}
-  onChange={(value) => handleSortChange(value)}
-  options={[
-    { value: 'newest', label: 'Newest First' },
-    { value: 'oldest', label: 'Oldest First' },
-    { value: 'az', label: 'A to Z' },
-    { value: 'za', label: 'Z to A' }
-  ]}
-  size="md"
-/>
-
-  {/* View Toggle */}
-  <div style={{
-    display: 'flex',
-    background: '#f1f5f9',
-    borderRadius: '10px',
-    padding: '3px',
-    gap: '2px'
-  }}>
-    {['card', 'table'].map(v => (
-      <button
-        key={v}
-        onClick={() => setViewMode(v)}
-        style={{
-          padding: '6px 14px',
-          borderRadius: '8px',
-          border: 'none',
-          fontSize: '12px',
-          fontWeight: '500',
-          background: viewMode === v ? '#fff' : 'transparent',
-          boxShadow: viewMode === v ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-          cursor: 'pointer',
-          color: viewMode === v ? PRIMARY_COLOR : '#64748b',
-          transition: 'all 0.2s'
-        }}
-      >
-        {v === 'card' ? 'Cards' : 'Table'}
-      </button>
-    ))}
-  </div>
-   
-  {/* Reset Filters Button */}
-  <button
-    onClick={handleResetFilters}
-    style={{
-      background: '#f1f5f9',
-      color: '#64748b',
-      border: 'none',
-      borderRadius: '10px',
-      padding: '7px 14px',
-      fontSize: '12px',
-      fontWeight: '500',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px'
-    }}
-  >
-    <X size={14} />
-    Reset
-  </button>
-
-  {/* Add Customer Button */}
-  <button
-    onClick={() => handleOpenModal()}
-    style={{
-      background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`,
-      color: '#fff',
-      border: 'none',
-      borderRadius: '10px',
-      padding: '7px 16px',
-      fontSize: '12px',
-      fontWeight: '600',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      marginLeft: 'auto'
-    }}
-  >
-    <Plus size={14} />
-    Add Customer
-  </button>
-</div>
-
-          {/* Content Area */}
-          {currentLoading ? (
-            <div style={{ textAlign: 'center', padding: '4rem' }}>
-              <Loader size={48} color={PRIMARY_COLOR} style={{ animation: 'spin 1s linear infinite', margin: '0 auto 1rem' }} />
-              <p style={{ color: '#64748b' }}>Loading customers...</p>
-            </div>
-          ) : !currentCustomers?.length ? (
-            <div style={{ textAlign: 'center', padding: '4rem' }}>
-              <Users size={64} style={{ color: '#cbd5e1', margin: '0 auto 1rem' }} />
-              <p style={{ color: '#64748b', fontWeight: '500' }}>No customers found</p>
-              <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                <button onClick={() => handleSync(false)} style={{ padding: '0.75rem 1.5rem', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '14px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <RefreshCw size={16} /> Sync from Zoho
-                </button>
-                <button onClick={() => handleOpenModal()} style={{ padding: '0.75rem 1.5rem', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '14px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Plus size={16} /> Add Customer
-                </button>
+    >
+      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: 'clamp(1rem, 5vw, 2rem) clamp(1rem, 4vw, 1.5rem)' }}>
+        
+        {/* Header Section */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'flex-start', 
+            marginBottom: '2rem', 
+            flexWrap: 'wrap', 
+            gap: '1.5rem'
+          }}
+        >
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '0.5rem' }}>
+              <motion.div
+                whileHover={{ rotate: 5, scale: 1.05 }}
+                style={{ 
+                  width: '52px', 
+                  height: '52px', 
+                  background: `linear-gradient(135deg, ${PRIMARY_COLOR}15, ${PRIMARY_COLOR}05)`,
+                  borderRadius: '18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: `1px solid ${PRIMARY_COLOR}20`
+                }}
+              >
+                <Users size={26} color={PRIMARY_COLOR} />
+              </motion.div>
+              <div>
+                <h1 style={{ 
+                  margin: 0, 
+                  fontSize: 'clamp(1.5rem, 5vw, 2rem)', 
+                  fontWeight: '800', 
+                  background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, 
+                  WebkitBackgroundClip: 'text', 
+                  WebkitTextFillColor: 'transparent',
+                  letterSpacing: '-0.02em'
+                }}>
+                  Customers
+                </h1>
+                <p style={{ 
+                  margin: '0.25rem 0 0', 
+                  color: '#64748b', 
+                  fontSize: '0.875rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  <span style={{ 
+                    display: 'inline-block', 
+                    width: '6px', 
+                    height: '6px', 
+                    background: '#10b981', 
+                    borderRadius: '50%',
+                    animation: 'pulse 2s infinite'
+                  }} />
+                  Manage your customer relationships
+                </p>
               </div>
             </div>
-          ) : viewMode === 'card' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem', padding: '1.5rem' }}>
-              {currentCustomers.map((customer) => (
-                <CustomerCard key={customer._id} customer={customer} onEdit={handleOpenModal} onDelete={handleDeleteClick} deletingId={deletingId} />
-              ))}
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Customer</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Email</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Phone</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Tax Status</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Place</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Currency</th>
-                    <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentCustomers.map((customer) => {
-                    const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
-                    return (
-                      <tr key={customer._id} style={{ borderBottom: '1px solid #f1f5f9' }} 
-                          onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'} 
-                          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-                        <td style={{ padding: '1rem' }}>
-                          <div style={{ fontWeight: '600', color: PRIMARY_COLOR }}>{customer.name}</div>
-                          {customer.companyName && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{customer.companyName}</div>}
-                        </td>
-                        <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.email}</td>
-                        <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.phone || '—'}</td>
-                        <td style={{ padding: '1rem' }}>
-                          <span style={{ padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.7rem', fontWeight: '600', 
-                                        background: isVatRegistered ? '#d1fae5' : '#f1f5f9', color: isVatRegistered ? '#065f46' : '#475569' }}>
-                            {isVatRegistered ? 'VAT' : 'Non-VAT'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.placeOfSupply || '—'}</td>
-                        <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.85rem' }}>{customer.defaultCurrency?.code || customer.defaultCurrency || 'AED'}</td>
-                        <td style={{ padding: '1rem' }}>
-                          <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button onClick={() => handleOpenModal(customer)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem' }}>
-                              <Edit2 size={12} /> 
-                            </button>
-                            <button onClick={() => handleDeleteClick(customer)} disabled={deletingId === customer._id} 
-                                    style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}>
-                              <Trash2 size={12} /> 
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
+          </div>
+          
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => handleExportCustomers('xlsx')}
+              style={{ 
+                background: 'linear-gradient(135deg, #10b981, #059669)', 
+                border: 'none', 
+                borderRadius: '14px', 
+                padding: '0.7rem 1.4rem', 
+                cursor: 'pointer', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.6rem', 
+                color: 'white', 
+                fontWeight: '600', 
+                fontSize: '0.85rem',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}
+            >
+              <Download size={16} />
+              <span>Export</span>
+            </motion.button>
+            
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => handleSync(true)}
+              disabled={isSyncing}
+              style={{ 
+                background: isSyncing ? '#9ca3af' : `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, 
+                border: 'none', 
+                borderRadius: '14px', 
+                padding: '0.7rem 1.4rem', 
+                cursor: isSyncing ? 'not-allowed' : 'pointer', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.6rem', 
+                color: 'white', 
+                fontWeight: '600', 
+                fontSize: '0.85rem',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+              }}
+            >
+              <RefreshCw size={16} style={{ animation: isSyncing ? 'spin 1s linear infinite' : 'none' }} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync from Zoho'}</span>
+            </motion.button>
+            
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={onBack}
+              style={{ 
+                background: 'white', 
+                border: '1px solid #e2e8f0', 
+                borderRadius: '14px', 
+                padding: '0.7rem 1.4rem', 
+                cursor: 'pointer', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.6rem', 
+                fontWeight: '600', 
+                fontSize: '0.85rem',
+                color: '#475569',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+              }}
+            >
+              <ArrowLeft size={16} />
+              <span>Back</span>
+            </motion.button>
+          </div>
+        </motion.div>
+        
+        {/* Stats Cards */}
+        {isMobile ? (
+          <MobileStatsCard stats={statsData} loading={currentLoading} />
+        ) : (
+          <motion.div
+            variants={staggerContainer}
+            initial="initial"
+            animate="animate"
+            style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(4, 1fr)', 
+              gap: '1rem', 
+              marginBottom: '2rem' 
+            }}
+          >
+            <StatCard label="Total Customers" value={statsData.totalCustomers} icon={Users} color="#6366f1" loading={currentLoading} />
+            <StatCard label="VAT Registered" value={statsData.vatRegistered} icon={Building2} color="#10b981" loading={currentLoading} />
+            <StatCard label="Non-VAT Registered" value={statsData.nonVatRegistered} icon={Tag} color="#f59e0b" loading={currentLoading} />
+            <StatCard label="Active Customers" value={statsData.activeCustomers} icon={User} color="#8b5cf6" loading={currentLoading} />
+          </motion.div>
+        )}
+        
+        {/* Main Content Card */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          style={{ 
+            background: 'white', 
+            borderRadius: '24px', 
+            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03)', 
+            overflow: 'hidden' 
+          }}
+        >
+          {/* Toolbar */}
+          <Toolbar
+            searchValue={searchInput}
+            onSearchChange={handleSearchChange}
+            filters={customerFilters}
+            onFilterChange={handleFilterChange}
+            onResetFilters={handleResetFilters}
+            currentPagination={currentPagination}
+            onLimitChange={handleLimitChange}
+            sortOption={sortOption}
+            onSortChange={handleSortChange}
+            viewMode={viewMode}
+            onViewChange={setViewMode}
+            onAddClick={() => handleOpenModal()}
+            isMobile={isMobile}
+          />
+          
+          {/* Content Area */}
+          <AnimatePresence mode="wait">
+            {(currentLoading || isRefreshing) && !currentCustomers.length ? (
+              <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ textAlign: 'center', padding: '4rem' }}>
+                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} style={{ display: 'inline-block' }}>
+                  <Loader size={48} color={PRIMARY_COLOR} />
+                </motion.div>
+                <p style={{ color: '#64748b', marginTop: '1rem' }}>Loading customers...</p>
+              </motion.div>
+            ) : !currentCustomers?.length ? (
+              <motion.div key="empty" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} style={{ textAlign: 'center', padding: '4rem' }}>
+                <Users size={64} style={{ color: '#cbd5e1', margin: '0 auto 1rem' }} />
+                <p style={{ color: '#64748b', fontWeight: '500', marginBottom: '1rem' }}>No customers found</p>
+                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => handleSync(false)} style={{ padding: '0.75rem 1.5rem', background: `linear-gradient(135deg, ${PRIMARY_COLOR}, #1e293b)`, color: 'white', border: 'none', borderRadius: '14px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: '600' }}>
+                    <RefreshCw size={16} /> Sync from Zoho
+                  </motion.button>
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => handleOpenModal()} style={{ padding: '0.75rem 1.5rem', background: 'white', color: PRIMARY_COLOR, border: `1px solid ${PRIMARY_COLOR}`, borderRadius: '14px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: '600' }}>
+                    <Plus size={16} /> Add Customer
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : viewMode === 'card' ? (
+              <motion.div key="card-view" variants={staggerContainer} initial="initial" animate="animate" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))', gap: '1.25rem', padding: '1.5rem', width: '100%' }}>
+                {currentCustomers.map((customer) => (
+                  <CustomerCard key={customer._id} customer={customer} onEdit={handleOpenModal} onDelete={handleDeleteClick} deletingId={deletingId} />
+                ))}
+              </motion.div>
+            ) : (
+              <motion.div key="table-view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '800px' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }}>Customer</th>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }}>Email</th>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }} className="hide-on-mobile">Phone</th>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }}>Tax Status</th>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }} className="hide-on-mobile">Place</th>
+                      <th style={{ padding: '1rem', textAlign: 'left', color: '#64748b', fontSize: '0.7rem', fontWeight: '600', textTransform: 'uppercase' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {currentCustomers.map((customer) => {
+                      const isVatRegistered = customer.taxTreatment === 'vat_registered' || customer.taxTreatment === 'gcc_vat_registered';
+                      return (
+                        <motion.tr key={customer._id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.2s' }} whileHover={{ background: '#f8fafc' }}>
+                          <td style={{ padding: '1rem' }}>
+                            <div style={{ fontWeight: '600', color: PRIMARY_COLOR }}>{customer.name}</div>
+                            {customer.companyName && <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{customer.companyName}</div>}
+                          </td>
+                          <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.8rem' }}>{customer.email || '—'}</td>
+                          <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.8rem' }} className="hide-on-mobile">{customer.phone || '—'}</td>
+                          <td style={{ padding: '1rem' }}>
+                            <span style={{ padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.7rem', fontWeight: '600', background: isVatRegistered ? '#d1fae5' : '#f1f5f9', color: isVatRegistered ? '#065f46' : '#475569' }}>
+                              {isVatRegistered ? 'VAT' : 'Non-VAT'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '1rem', color: '#64748b', fontSize: '0.8rem' }} className="hide-on-mobile">{customer.placeOfSupply || '—'}</td>
+                          <td style={{ padding: '1rem' }}>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => handleOpenModal(customer)} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <Edit2 size={12} /> Edit
+                              </motion.button>
+                              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => handleDeleteClick(customer)} disabled={deletingId === customer._id} style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fef2f2', color: '#dc2626', cursor: deletingId === customer._id ? 'not-allowed' : 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                {deletingId === customer._id ? <div style={{ width: '12px', height: '12px', border: '2px solid #dc2626', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} /> : <Trash2 size={12} />}
+                                Delete
+                              </motion.button>
+                            </div>
+                          </td>
+                        </motion.tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
           {/* Pagination */}
           {currentPagination && currentPagination.totalPages > 1 && (
-            <PaginationControls 
-              pagination={currentPagination} 
-              onPageChange={handlePageChange} 
-              loading={currentLoading} 
-            />
+            <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid #e2e8f0' }}>
+              <PaginationControls pagination={currentPagination} onPageChange={handlePageChange} loading={currentLoading} isMobile={isMobile} />
+            </div>
           )}
-        </div>
+        </motion.div>
       </div>
+      
+      {/* Modals */}
+      <SyncProgressModal
+        isOpen={showProgressModal}
+        progress={progressData}
+        onClose={() => { setShowProgressModal(false); setProgressData(null); }}
+        onCancel={async () => {
+          try {
+            await customerAPI.cancelSync(effectiveCompanyId);
+            showToast('Cancelling sync...', 'info');
+            setTimeout(() => { setShowProgressModal(false); setProgressData(null); }, 2000);
+          } catch (err) {
+            showToast('Failed to cancel sync', 'error');
+          }
+        }}
+      />
+      
       <ConfirmModal
-  open={deleteModal.open}
-  title="Delete Customer"
-  message={`Are you sure you want to delete "${deleteModal.customer?.name}"? This action cannot be undone.`}
-  confirmLabel="Delete"
-  cancelLabel="Cancel"
-  onConfirm={handleDeleteConfirm}
-  onCancel={handleDeleteCancel}
-  loading={deletingId === deleteModal.customer?._id}
-  danger={true}
-/>
+        open={deleteModal.open}
+        title="Delete Customer"
+        message={`Are you sure you want to delete "${deleteModal.customer?.name}"? This action cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+        loading={deletingId === deleteModal.customer?._id}
+        danger={true}
+      />
+      
       <CustomerModal isOpen={showModal} onClose={handleCloseModal} onSubmit={handleSubmit} initialData={editingCustomer} isSubmitting={isSubmitting} />
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-    </div>
+      
+      <AnimatePresence>
+        {showFilterDrawer && (
+          <FilterDrawer
+            isOpen={showFilterDrawer}
+            onClose={() => setShowFilterDrawer(false)}
+            filters={customerFilters}
+            onFilterChange={handleFilterChange}
+            onReset={handleResetFilters}
+            currentPagination={currentPagination}
+            onLimitChange={handleLimitChange}
+            sortOption={sortOption}
+            onSortChange={handleSortChange}
+            viewMode={viewMode}
+            onViewChange={setViewMode}
+          />
+        )}
+      </AnimatePresence>
+      
+      <AnimatePresence>
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      </AnimatePresence>
+    </motion.div>
   );
 }

@@ -1,14 +1,37 @@
 // middleware/companyContext.js
 const Company = require('../models/company');
 
+const ALL_COMPANIES_ID = 'all';
+
 const companyContext = async (req, res, next) => {
   try {
-    const companyId = req.headers['x-company-id'] || req.query.companyId || req.body.companyId;
+    let companyId = req.headers['x-company-id'] || req.query.companyId || req.body.companyId;
     
+    // Handle "All Companies" special case - skip validation
+    if (companyId === ALL_COMPANIES_ID) {
+      req.companyId = ALL_COMPANIES_ID;
+      req.isAllCompanies = true;
+      req.company = null;
+      return next();
+    }
+    
+    // Also handle if companyId is not provided (for all companies)
     if (!companyId) {
+      // For endpoints that don't require company filter (like all companies)
+      // You can either proceed without company filter or return error
+      // Let's proceed without company filter for now
+      req.companyId = null;
+      req.isAllCompanies = true;
+      req.company = null;
+      return next();
+    }
+    
+    // Validate ObjectId format for single company
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
       return res.status(400).json({
         success: false,
-        message: 'Company ID is required. Please select a company.'
+        message: 'Invalid company ID format'
       });
     }
     
@@ -30,6 +53,7 @@ const companyContext = async (req, res, next) => {
     
     req.company = company;
     req.companyId = company._id;
+    req.isAllCompanies = false;
     
     next();
   } catch (error) {
@@ -42,4 +66,4 @@ const companyContext = async (req, res, next) => {
   }
 };
 
-module.exports = { companyContext };
+module.exports = { companyContext, ALL_COMPANIES_ID };

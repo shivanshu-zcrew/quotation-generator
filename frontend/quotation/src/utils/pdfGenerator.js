@@ -10,10 +10,23 @@ import { ITEMS_PER_FIRST_PAGE, BASE_URL } from './constants';
  * Safely extract customer name from various data structures
  */
 const getCustomerName = (quotation) => {
+  if (quotation.customer) return quotation.customer;
   if (quotation.customerSnapshot?.name) return quotation.customerSnapshot.name;
   if (typeof quotation.customer === 'string' && quotation.customer) return quotation.customer;
   if (quotation.customer?.name) return quotation.customer.name;
   if (quotation.customerId?.name) return quotation.customerId.name;
+  return 'N/A';
+};
+
+/**
+ * Safely extract contact person name
+ */
+const getCustomerContactName = (quotation) => {
+  if (quotation.customerName) return quotation.customerName;
+  if (quotation.customerSnapshot?.contactPerson) return quotation.customerSnapshot.contactPerson;
+  if (quotation.contact) return quotation.contact;
+  if (quotation.customerSnapshot?.name) return quotation.customerSnapshot.name;
+  if (quotation.customer) return quotation.customer;
   return 'N/A';
 };
 
@@ -24,6 +37,8 @@ const getContact = (quotation) => {
   if (quotation.contact) return quotation.contact;
   if (quotation.customerSnapshot?.contact) return quotation.customerSnapshot.contact;
   if (quotation.customer?.contact) return quotation.customer.contact;
+  if (quotation.customerPhone) return quotation.customerPhone;
+  if (quotation.customerSnapshot?.phone) return quotation.customerSnapshot.phone;
   return 'N/A';
 };
 
@@ -31,9 +46,10 @@ const getContact = (quotation) => {
  * Safely extract customer email
  */
 const getCustomerEmail = (quotation) => {
-  if (quotation.customerSnapshot?.email) return quotation.customerSnapshot.email;
   if (quotation.customerEmail) return quotation.customerEmail;
+  if (quotation.customerSnapshot?.email) return quotation.customerSnapshot.email;
   if (quotation.customerId?.email) return quotation.customerId.email;
+  if (quotation.email) return quotation.email;
   return 'N/A';
 };
 
@@ -41,12 +57,117 @@ const getCustomerEmail = (quotation) => {
  * Safely extract customer phone
  */
 const getCustomerPhone = (quotation) => {
-  if (quotation.customerSnapshot?.phone) return quotation.customerSnapshot.phone;
   if (quotation.customerPhone) return quotation.customerPhone;
+  if (quotation.customerSnapshot?.phone) return quotation.customerSnapshot.phone;
   if (quotation.customerId?.phone) return quotation.customerId.phone;
+  if (quotation.phone) return quotation.phone;
   return 'N/A';
 };
 
+/**
+ * Safely extract customer designation
+ */
+const getCustomerDesignation = (quotation) => {
+  if (quotation.customerDesignation) return quotation.customerDesignation;
+  if (quotation.customerSnapshot?.designation) return quotation.customerSnapshot.designation;
+  if (quotation.designation) return quotation.designation;
+  return 'N/A';
+};
+
+/**
+ * Safely extract customer trade license number
+ */
+const getCustomerTradeLicense = (quotation) => {
+  if (quotation.customerTradeLicenseNumber) return quotation.customerTradeLicenseNumber;
+  if (quotation.customerSnapshot?.tradeLicenseNumber) return quotation.customerSnapshot.tradeLicenseNumber;
+  if (quotation.tradeLicenseNumber) return quotation.tradeLicenseNumber;
+  return 'N/A';
+};
+
+/**
+ * Safely extract customer tax registration number (TRN)
+ */
+const getCustomerTaxRegistration = (quotation) => {
+  if (quotation.customerTaxRegistrationNumber) return quotation.customerTaxRegistrationNumber;
+  if (quotation.customerSnapshot?.vatNumber) return quotation.customerSnapshot.vatNumber;
+  if (quotation.trn) return quotation.trn;
+  return 'N/A';
+};
+
+/**
+ * Safely extract focal point name
+ */
+const getFocalPointName = (quotation) => {
+  if (quotation.ourFocalPoint) return quotation.ourFocalPoint;
+  if (quotation.createdBySnapshot?.name) return quotation.createdBySnapshot.name;
+  if (quotation.createdBy?.name) return quotation.createdBy.name;
+  if (quotation.focalPointName) return quotation.focalPointName;
+  return 'N/A';
+};
+
+/**
+ * Safely extract focal point phone
+ */
+const getFocalPointPhone = (quotation) => {
+  if (quotation.ourContact) return quotation.ourContact;
+  if (quotation.companyPhone) return quotation.companyPhone;
+  if (quotation.createdBySnapshot?.phone) return quotation.createdBySnapshot.phone;
+  if (quotation.focalPointPhone) return quotation.focalPointPhone;
+  return 'N/A';
+};
+
+/**
+ * Safely extract focal point email
+ */
+const getFocalPointEmail = (quotation) => {
+  if (quotation.salesManagerEmail) return quotation.salesManagerEmail;
+  if (quotation.companyEmail) return quotation.companyEmail;
+  if (quotation.createdBySnapshot?.email) return quotation.createdBySnapshot.email;
+  if (quotation.focalPointEmail) return quotation.focalPointEmail;
+  return 'N/A';
+};
+
+/**
+ * Safely extract focal point designation
+ */
+const getFocalPointDesignation = (quotation) => {
+  if (quotation.ourFocalPointDesignation) return quotation.ourFocalPointDesignation;
+  if (quotation.companySnapshot?.focalPointDesignation) return quotation.companySnapshot.focalPointDesignation;
+  if (quotation.createdBySnapshot?.role) return quotation.createdBySnapshot.role;
+  if (quotation.focalPointDesignation) return quotation.focalPointDesignation;
+  return 'N/A';
+};
+
+/**
+ * Safely extract company trade license
+ */
+const getCompanyTradeLicense = (quotation) => {
+  if (quotation.companyTradeLicense) return quotation.companyTradeLicense;
+  if (quotation.companySnapshot?.crNumber) return quotation.companySnapshot.crNumber;
+  if (quotation.tradeLicense) return quotation.tradeLicense;
+  return 'N/A';
+};
+
+/**
+ * Safely extract company tax registration
+ */
+const getCompanyTaxRegistration = (quotation) => {
+  if (quotation.companyTaxRegistration) return quotation.companyTaxRegistration;
+  if (quotation.companySnapshot?.vatNumber) return quotation.companySnapshot.vatNumber;
+  if (quotation.taxRegistration) return quotation.taxRegistration;
+  return 'N/A';
+};
+
+/**
+ * Safely extract scope of work
+ */
+const getScopeOfWork = (quotation) => {
+  if (quotation.scopeOfWork) return quotation.scopeOfWork;
+  return '';
+};
+
+ 
+ 
 /**
  * Safely extract item name and description
  */
@@ -100,21 +221,16 @@ const buildTermsImagesHTML = (termsImages = []) => {
 const formatTermsText = (text) => {
   if (!text) return '';
   
-  // ONLY trim the very beginning and end if they are pure whitespace
-  // This removes backend-added newlines without affecting user's intentional spaces
   let cleaned = text;
   
-  // Remove only if the first character is a newline that wasn't intended
   if (cleaned.startsWith('\n')) {
     cleaned = cleaned.replace(/^\n+/, '');
   }
   
-  // Remove only if the last character is a newline that wasn't intended
   if (cleaned.endsWith('\n')) {
     cleaned = cleaned.replace(/\n+$/, '');
   }
   
-  // Preserve ALL other whitespace exactly as user entered
   return cleaned.replace(/\n/g, '<br>');
 };
 
@@ -122,23 +238,30 @@ const formatTermsText = (text) => {
  * Build HTML for PDF generation
  */
 export const buildPDFHTML = async (quotation, options = {}) => {
-  const { newImages = {} } = options;
-  console.log('🔍 PDF Generator received termsAndConditions:', {
-    raw: quotation.termsAndConditions,
-    length: quotation.termsAndConditions?.length,
-    hasLeadingSpace: quotation.termsAndConditions?.startsWith(' '),
-    firstChar: quotation.termsAndConditions?.charAt(0)
-  });
+  const { newImages = {}, exportType = 'with_total' } = options;
+  console.log('🔍 PDF Generator received exportType:', exportType);
+  
   // Extract basic fields with fallbacks
   const items = quotation.items || [];
   const taxPercent = quotation.taxPercent || quotation.tax || 0;
   const discountPercent = quotation.discountPercent || quotation.discount || 0;
   
-  // Customer details
+  // Customer details - LEFT SIDE
   const customerName = getCustomerName(quotation);
-  const contact = getContact(quotation);
+  const customerContactName = getCustomerContactName(quotation);
   const customerEmail = getCustomerEmail(quotation);
   const customerPhone = getCustomerPhone(quotation);
+  const customerDesignation = getCustomerDesignation(quotation);
+  const customerTradeLicense = getCustomerTradeLicense(quotation);
+  const customerTaxRegistration = getCustomerTaxRegistration(quotation);
+  
+  // Focal Point details - RIGHT SIDE
+  const focalPointName = getFocalPointName(quotation);
+  const focalPointPhone = getFocalPointPhone(quotation);
+  const focalPointEmail = getFocalPointEmail(quotation);
+  const focalPointDesignation = getFocalPointDesignation(quotation);
+  const companyTradeLicense = getCompanyTradeLicense(quotation);
+  const companyTaxRegistration = getCompanyTaxRegistration(quotation);
   
   // Dates
   const date = quotation.date || new Date().toISOString().split('T')[0];
@@ -146,12 +269,12 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   
   // Project and reference fields
   const projectName = quotation.projectName || '';
-  const tl = quotation.tl || '';
+  const scopeOfWork = getScopeOfWork(quotation);
+   const tl = quotation.tl || '';
   const trn = quotation.trn || '';
   const ourRef = quotation.ourRef || '';
   const ourContact = quotation.ourContact || '';
   const salesManagerEmail = quotation.salesManagerEmail || '';
-  const salesOffice = quotation.salesOffice || '';
   const paymentTerms = quotation.paymentTerms || '';
   const deliveryTerms = quotation.deliveryTerms || '';
   const notes = quotation.notes || '';
@@ -183,9 +306,9 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const createdByEmail = quotation.createdBy?.email || quotation.createdBySnapshot?.email || '';
   const createdByRole = quotation.createdBy?.role || quotation.createdBySnapshot?.role || 'user';
   
-  const opsReviewedByName = quotation.opsApprovedBy?.name || '—';
-  const opsReviewedByEmail = quotation.opsApprovedBy?.email || '';
-  const opsReviewedAt = quotation.opsApprovedAt ? fmtDate(quotation.opsApprovedAt) : '—';
+  const opsReviewedByName = quotation.opsApprovedBySnapshot?.name || '—';
+  const opsReviewedByEmail = quotation.opsApprovedBySnapshot?.email || '';
+  const opsReviewedAt = quotation.opsApprovedBySnapshot?.approvedAt ? fmtDate(quotation.opsApprovedBySnapshot.approvedAt) : '—';
   
   const approvedByName = quotation.approvedBy?.name || '—';
   const approvedByEmail = quotation.approvedBy?.email || '';
@@ -262,27 +385,30 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   };
 
   // Totals rows
-  const totalsRows = `
-    <tr style="background:#f8fafc;font-weight:600;">
-      <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-      <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
-      <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
-    </tr>
-    <tr style="background:#f8fafc;font-weight:600;">
-      <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-      <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
-      <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
-    </tr>
-    ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
-      <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-      <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
-      <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discAmt.toFixed(2)}</td>
-    </tr>` : ''}
-    <tr style="background:#000;color:white;font-weight:700;">
-      <td colspan="3" style="border:none;padding:8px;"></td>
-      <td style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
-      <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
-    </tr>`;
+  let totalsRows = '';
+  if (exportType === 'with_total') {
+    totalsRows = `
+      <tr style="background:#f8fafc;font-weight:600;">
+        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
+        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
+      </tr>
+      <tr style="background:#f8fafc;font-weight:600;">
+        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
+      </tr>
+      ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
+        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discAmt.toFixed(2)}</td>
+      </tr>` : ''}
+      <tr style="background:#000;color:white;font-weight:700;">
+        <td colspan="3" style="border:none;padding:8px;"></td>
+        <td style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
+        <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
+      </tr>`;
+  }
 
   // Table header
   const thead = `<thead><tr style="background:#000;">
@@ -291,7 +417,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:50px;">Qty</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:70px;">Unit Price</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #000;width:80px;">Amount</th>
-  <tr></thead>`;
+  </tr></thead>`;
 
   const termsImagesHTML = buildTermsImagesHTML(termsImages);
   const formattedTermsText = formatTermsText(termsAndConditions);
@@ -352,7 +478,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     </div>
   `;
 
-  // Build complete HTML with ALL fields
+  // Build complete HTML
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -386,27 +512,34 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </div>
     </div>
 
-    <!-- Details Grid - LEFT SIDE (Customer Info) -->
+    <!-- Details Grid - LEFT SIDE (Customer Info) & RIGHT SIDE (Company/Focal Point Info) -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
-      <!-- Left Column - Customer Details -->
-      <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
+      <!-- LEFT COLUMN - Customer Details -->
+      <div style="display:grid;grid-template-columns:140px 20px 1fr;row-gap:8px;font-size:11px;">
         <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Customer</span><span>:</span><span>${customerName}</span>
-        <span style="font-weight:600;color:#4b5563;">Customer Email</span><span>:</span><span>${customerEmail || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Customer Phone</span><span>:</span><span>${customerPhone || "N/A"}</span>
+        ${scopeOfWork ? `<span style="font-weight:600;color:#4b5563;">Scope of Work</span><span>:</span><span>${scopeOfWork}</span>` : ''}
+        <span style="font-weight:600;color:#4b5563;">Company Name</span><span>:</span><span>${customerName}</span>
+        <span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${customerContactName}</span>
+        <span style="font-weight:600;color:#4b5563;">Phone</span><span>:</span><span>${customerPhone || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Email</span><span>:</span><span>${customerEmail || "N/A"}</span>
+        ${customerDesignation ? `<span style="font-weight:600;color:#4b5563;">Designation</span><span>:</span><span>${customerDesignation}</span>` : ''}
+        ${customerTradeLicense ? `<span style="font-weight:600;color:#4b5563;">Trade License No.</span><span>:</span><span>${customerTradeLicense}</span>` : ''}
+        ${customerTaxRegistration ? `<span style="font-weight:600;color:#4b5563;">Tax Registration No.</span><span>:</span><span>${customerTaxRegistration}</span>` : ''}
+       </div>
+      
+      <!-- RIGHT COLUMN - Focal Point / Company Details -->
+      <div style="display:grid;grid-template-columns:140px 20px 1fr;row-gap:8px;font-size:11px;">
+        <span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${focalPointName}</span>
+        <span style="font-weight:600;color:#4b5563;">Phone</span><span>:</span><span>${focalPointPhone || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Email</span><span>:</span><span>${focalPointEmail || "N/A"}</span>
+        ${focalPointDesignation ? `<span style="font-weight:600;color:#4b5563;">Designation</span><span>:</span><span>${focalPointDesignation}</span>` : ''}
+        <span style="font-weight:600;color:#4b5563;">Trade License No.</span><span>:</span><span>${companyTradeLicense || "N/A"}</span>
+        <span style="font-weight:600;color:#4b5563;">Tax Registration No.</span><span>:</span><span>${companyTaxRegistration || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Date</span><span>:</span><span>${fmtDate(date)}</span>
         <span style="font-weight:600;color:#4b5563;">Expiry Date</span><span>:</span><span>${fmtDate(expiryDate)}</span>
-        <span style="font-weight:600;color:#4b5563;">TL</span><span>:</span><span>${tl || "N/A"}</span>
-      </div>
-      
-      <!-- Right Column - Sales & Reference Details -->
-      <div style="display:grid;grid-template-columns:120px 20px 1fr;row-gap:8px;font-size:11px;">
-        <span style="font-weight:600;color:#4b5563;">Sales Email</span><span>:</span><span>${salesManagerEmail || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Sales Contact</span><span>:</span><span>${ourContact || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Our Ref</span><span>:</span><span>${ourRef || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Payment</span><span>:</span><span>${paymentTerms || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">Delivery</span><span>:</span><span>${deliveryTerms || "N/A"}</span>
-        <span style="font-weight:600;color:#4b5563;">TRN</span><span>:</span><span>${trn || "N/A"}</span>
+        ${ourRef ? `<span style="font-weight:600;color:#4b5563;">Our Ref</span><span>:</span><span>${ourRef}</span>` : ''}
+        ${paymentTerms ? `<span style="font-weight:600;color:#4b5563;">Payment Terms</span><span>:</span><span>${paymentTerms}</span>` : ''}
+        ${deliveryTerms ? `<span style="font-weight:600;color:#4b5563;">Delivery Terms</span><span>:</span><span>${deliveryTerms}</span>` : ''}
       </div>
     </div>
 
@@ -437,9 +570,11 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     ` : ''}
 
     <!-- Amount in Words -->
-    <div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:16px;font-size:11px;font-weight:600;">
-      <strong>Amount in words:</strong> ${amountInWords}
-    </div>
+    ${exportType === 'with_total' ? `
+      <div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:16px;font-size:11px;font-weight:600;">
+        <strong>Amount in words:</strong> ${amountInWords}
+      </div>
+    ` : ''}
 
     <!-- Notes -->
     ${notes ? `
@@ -449,20 +584,18 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </div>
     ` : ''}
 
-    <!-- Terms & Conditions WITH IMAGES INSIDE -->
+    <!-- Terms & Conditions -->
     ${termsAndConditions ? `
-  <div style="margin-bottom:16px;">
-    <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
-    <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;">
-      ${termsAndConditions ? `
-        <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">
-          ${formattedTermsText}
+      <div style="margin-bottom:16px;">
+        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
+        <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;">
+          <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">
+            ${formattedTermsText}
+          </div>
+          ${termsImagesHTML}
         </div>
-      ` : ''}
-      ${termsImagesHTML}
-    </div>
-  </div>
-` : ''}
+      </div>
+    ` : ''}
 
     <!-- Footer -->
     ${companyFooter}

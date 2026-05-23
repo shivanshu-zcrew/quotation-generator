@@ -51,6 +51,18 @@ const customerSchema = new mongoose.Schema(
       trim: true, 
       maxlength: [500, 'Address cannot exceed 500 characters'] 
     },
+    city: { 
+      type: String, 
+      trim: true, 
+    },
+    state: { 
+      type: String, 
+      trim: true, 
+    },
+    zipcode: { 
+      type: String, 
+      trim: true, 
+    },
     companyName: { 
       type: String, 
       trim: true, 

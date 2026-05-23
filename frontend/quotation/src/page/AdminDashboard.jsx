@@ -1,4 +1,3 @@
-// screens/AdminDashboard.jsx (OPTIMIZED + RESPONSIVE)
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -121,7 +120,7 @@ const ExpiryBadge = React.memo(({ type }) => {
 });
 
 // Mobile Quotation Card for Admin
-const AdminQuotationCard = React.memo(({ quotation,onAward,isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
+const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'ops_approved';
@@ -225,46 +224,6 @@ const AdminQuotationCard = React.memo(({ quotation,onAward,isAwarding, selectedC
   );
 });
 AdminQuotationCard.displayName = 'AdminQuotationCard';
- 
-
-const useTableData = (quotations, activeTab, search, sort) => {
-  return useMemo(() => {
-    const { statusFilter } = TAB_KEYS[activeTab];
-    const tabFiltered = !statusFilter ? quotations :
-      Array.isArray(statusFilter) 
-        ? quotations.filter(q => statusFilter.includes(q.status))
-        : quotations.filter(q => q.status === statusFilter);
-
-    const searchFiltered = !search.trim() ? tabFiltered :
-      tabFiltered.filter(q => {
-        const t = search.toLowerCase();
-        return (q.quotationNumber || '').toLowerCase().includes(t) ||
-               (q.customerSnapshot?.name || q.customer || q.customerId?.name || '').toLowerCase().includes(t);
-      });
-
-    const sorted = [...searchFiltered].sort((a, b) => {
-      const { field, dir } = sort;
-      let av = a[field], bv = b[field];
-      
-      if (field === 'total') {
-        av = Number(av) || 0;
-        bv = Number(bv) || 0;
-      } else if (field === 'customer') {
-        av = (a.customerSnapshot?.name || a.customer || a.customerId?.name || '').toLowerCase();
-        bv = (b.customerSnapshot?.name || b.customer || b.customerId?.name || '').toLowerCase();
-      } else {
-        av = av ?? '';
-        bv = bv ?? '';
-      }
-      return dir === 'asc' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0);
-    });
-
-    return {
-      filtered: sorted,
-      total: sorted.length
-    };
-  }, [quotations, activeTab, search, sort]);
-};
 
 // ─────────────────────────────────────────────────────────────
 // Main Component
@@ -278,21 +237,32 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState('table');
   const [refreshProgress, setRefreshProgress] = useState(0);
-const [refreshMessage, setRefreshMessage] = useState('');
-const [pdfProgress, setPdfProgress] = useState(0);
-const [pdfMessage, setPdfMessage] = useState('');
-const [isExporting, setIsExporting] = useState(false);
-const [exportProgress, setExportProgress] = useState(0);
-const [exportMessage, setExportMessage] = useState('');
-const [exportFilters, setExportFilters] = useState({
-  showFilters: false,
-  fromDate: '',
-  toDate: '',
-  status: 'all',
-});
+  const [refreshMessage, setRefreshMessage] = useState('');
+  const [pdfProgress, setPdfProgress] = useState(0);
+  const [pdfMessage, setPdfMessage] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportMessage, setExportMessage] = useState('');
+  const [exportFilters, setExportFilters] = useState({
+    showFilters: false,
+    fromDate: '',
+    toDate: '',
+    status: 'all',
+  });
   
   // ── Store subscriptions ───────────────────────────────────
-  const { quotations: companyQuotations, refresh: refreshCompanyQuotations } = useCompanyQuotations();
+  const { 
+    quotations: companyQuotations, 
+    pagination: quotationsPagination,
+    refresh: refreshCompanyQuotations, 
+    quotationsLoading, 
+    quotationsInitialized,
+    goToPage,
+    changeLimit,
+    currentPage,
+    currentLimit
+  } = useCompanyQuotations();
+  
   const customers = useCustomersList();
   const approveQuotation = useAppStore((s) => s.approveQuotation);
   const rejectQuotation = useAppStore((s) => s.rejectQuotation);
@@ -336,12 +306,15 @@ const [exportFilters, setExportFilters] = useState({
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
 
-  // ── Table state ───────────────────────────────────────────
+  // ── Server-side filters state ───────────────────────────────────────────
+  const [serverFilters, setServerFilters] = useState({
+    status: 'all',
+    search: '',
+    fromDate: '',
+    toDate: ''
+  });
   const [activeTab, setActiveTab] = useState('all');
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(isMobile ? 10 : 20);
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
 
   // ── Action state ──────────────────────────────────────────
@@ -358,57 +331,91 @@ const [exportFilters, setExportFilters] = useState({
     awarded: null
   });
 
-   useEffect(() => {
-    setLimit(isMobile ? 10 : 20);
-  }, [isMobile]);
+  useEffect(() => {
+    changeLimit(isMobile ? 10 : 20);
+  }, [isMobile, changeLimit]);
 
-   useEffect(() => {
+  useEffect(() => {
     if (isMobile) {
       setViewMode('card');
     }
   }, [isMobile]);
 
   // ── Derived state ─────────────────────────────────────────
-  const hasFetched = !loading || storeQuotations.length > 0;
-  const isInitialLoading = loading && !hasFetched;
-  const isRefreshing = loading && hasFetched;
   const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
+  const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
+  const isInitialLoading = !quotationsInitialized || safeQuotationsLoading;
+  const isRefreshing = quotationsInitialized && safeQuotationsLoading && safeQ.length > 0;
+  const showEmptyState = quotationsInitialized && !safeQuotationsLoading && safeQ.length === 0;
+
+  // Auto-refresh if needed
+  useEffect(() => {
+    if (!quotationsInitialized && !quotationsLoading && safeQ.length === 0 && selectedCompany) {
+      refreshCompanyQuotations();
+    }
+  }, [quotationsInitialized, quotationsLoading, safeQ.length, selectedCompany, refreshCompanyQuotations]);
 
   // ── Effects ───────────────────────────────────────────────
   useEffect(() => {
     refreshStats();
   }, [selectedCompany, refreshStats]);
 
-  // ── Table data management ─────────────────────────────────
-  const { filtered: filteredQuotations, total: totalFiltered } = useTableData(safeQ, activeTab, search, sort);
+  // Refresh when filters change
+  // Replace the problematic useEffect with this:
+
+// Create a stable reference for refreshWithFilters
+const refreshWithFilters = useCallback(async () => {
+  if (!selectedCompany) return;
   
-  const paginated = useMemo(() => {
-    const start = (page - 1) * limit;
-    return filteredQuotations.slice(start, start + limit);
-  }, [filteredQuotations, page, limit]);
+  await refreshCompanyQuotations({
+    page: currentPage,
+    limit: currentLimit,
+    status: serverFilters.status !== 'all' ? serverFilters.status : undefined,
+    search: serverFilters.search || undefined,
+    fromDate: serverFilters.fromDate || undefined,
+    toDate: serverFilters.toDate || undefined,
+    sortBy: sort.field,
+    sortDir: sort.dir
+  });
+}, [refreshCompanyQuotations, currentPage, currentLimit, serverFilters, sort.field, sort.dir, selectedCompany]);
 
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
-  const safePage = Math.min(page, totalPages);
+// Use a ref to track initial load
+const initialLoadDone = useRef(false);
 
-  // ── Tab counts ────────────────────────────────────────────
+// Single useEffect for initial load
+useEffect(() => {
+  if (selectedCompany && !initialLoadDone.current && !quotationsInitialized) {
+    initialLoadDone.current = true;
+    refreshWithFilters();
+  }
+}, [selectedCompany, quotationsInitialized, refreshWithFilters]);
+
+// Separate useEffect for filter changes (but prevent infinite loops)
+const prevFiltersRef = useRef(serverFilters);
+const prevSortRef = useRef(sort);
+
+useEffect(() => {
+  // Only refresh if filters or sort actually changed
+  if (initialLoadDone.current && 
+      (JSON.stringify(prevFiltersRef.current) !== JSON.stringify(serverFilters) ||
+       JSON.stringify(prevSortRef.current) !== JSON.stringify(sort))) {
+    prevFiltersRef.current = serverFilters;
+    prevSortRef.current = sort;
+    refreshWithFilters();
+  }
+}, [serverFilters, sort, refreshWithFilters]);
+
+ 
+  // ── Tab counts from server pagination ────────────────────────────
   const tabCounts = useMemo(() => {
-    const counts = {
-      all: safeQ.length,
+    return {
+      all: quotationsPagination?.total || 0,
       ops_approved: 0,
       approved: 0,
       awarded: 0,
       rejected: 0,
     };
-    
-    safeQ.forEach(q => {
-      if (q.status === 'ops_approved') counts.ops_approved++;
-      else if (q.status === 'approved') counts.approved++;
-      else if (q.status === 'awarded') counts.awarded++;
-      else if (q.status === 'rejected') counts.rejected++;
-    });
-    
-    return counts;
-  }, [safeQ]);
+  }, [quotationsPagination]);
 
   // ── Loading helpers ───────────────────────────────────────
   const setActionLoading = useCallback((id, action, val) => {
@@ -422,31 +429,35 @@ const [exportFilters, setExportFilters] = useState({
     const val = e.target.value;
     setSearchInput(val);
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => { setSearch(val); setPage(1); }, DEBOUNCE_MS);
-  }, []);
+    searchTimer.current = setTimeout(() => {
+      setServerFilters(prev => ({ ...prev, search: val }));
+      goToPage(1);
+    }, DEBOUNCE_MS);
+  }, [goToPage]);
 
   const clearSearch = useCallback(() => { 
     setSearchInput(''); 
-    setSearch(''); 
-    setPage(1); 
-  }, []);
+    setServerFilters(prev => ({ ...prev, search: '' }));
+    goToPage(1);
+  }, [goToPage]);
 
   const handleTabChange = useCallback((key) => {
-    setActiveTab(key); 
-    setPage(1); 
-    setSearchInput(''); 
-    setSearch('');
+    setActiveTab(key);
+    setServerFilters(prev => ({ ...prev, status: key }));
+    setSearchInput('');
+    setServerFilters(prev => ({ ...prev, search: '' }));
     setSort({ field: 'createdAt', dir: 'desc' });
+    goToPage(1);
     setMobileMenuOpen(false);
-  }, []);
+  }, [goToPage]);
 
   const handleSort = useCallback((field) => {
     setSort(prev => ({ 
       field, 
       dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' 
     }));
-    setPage(1);
-  }, []);
+    goToPage(1);
+  }, [goToPage]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshProgress(10);
@@ -465,7 +476,7 @@ const [exportFilters, setExportFilters] = useState({
     try {
       await fetchAllData();
       refreshCompanyData?.();
-      refreshCompanyQuotations();
+      await refreshWithFilters();
       setRefreshProgress(100);
       setRefreshMessage('Complete!');
       addToast('Data refreshed', 'success');
@@ -481,7 +492,7 @@ const [exportFilters, setExportFilters] = useState({
     } finally {
       clearInterval(progressInterval);
     }
-  }, [fetchAllData, refreshCompanyData, refreshCompanyQuotations, addToast]);
+  }, [fetchAllData, refreshCompanyData, refreshWithFilters, addToast]);
 
   const handleDownload = useCallback(async (q) => {
     setExportingId(q._id);
@@ -530,7 +541,6 @@ const [exportFilters, setExportFilters] = useState({
     setExportFilters(prev => ({ ...prev, showFilters: !prev.showFilters }));
   };
 
-  
   const handleExportToExcel = useCallback(async () => {
     setIsExporting(true);
     setExportProgress(10);
@@ -550,19 +560,16 @@ const [exportFilters, setExportFilters] = useState({
       setExportProgress(30);
       setExportMessage('Fetching data...');
       
-      // Build params with current filters
       const params = {
         companyId: selectedCompany,
       };
       
-      // Add status filter if selected
       if (exportFilters.status && exportFilters.status !== 'all') {
         params.status = exportFilters.status;
       } else if (activeTab !== 'all') {
         params.status = activeTab;
       }
       
-      // Add date range if provided
       if (exportFilters.fromDate) {
         params.fromDate = exportFilters.fromDate;
       }
@@ -570,12 +577,9 @@ const [exportFilters, setExportFilters] = useState({
         params.toDate = exportFilters.toDate;
       }
       
-      // Add search if exists
-      if (search && search.trim()) {
-        params.search = search;
+      if (serverFilters.search && serverFilters.search.trim()) {
+        params.search = serverFilters.search;
       }
-      
-      console.log('📊 Export params:', params);
       
       setExportProgress(60);
       setExportMessage('Generating Excel file...');
@@ -609,19 +613,19 @@ const [exportFilters, setExportFilters] = useState({
       clearInterval(progressInterval);
       setIsExporting(false);
     }
-  }, [selectedCompany, activeTab, search, exportFilters, addToast]);
+  }, [selectedCompany, activeTab, serverFilters.search, exportFilters, addToast]);
 
   const handleApprove = useCallback(async (id) => {
     setActionLoading(id, 'approve', true);
     const result = await approveQuotation(id);
     if (result?.success) {
       addToast('Quotation approved successfully', 'success');
-      refreshCompanyQuotations();
+      refreshWithFilters();
     } else {
       addToast(result?.error || 'Failed to approve quotation', 'error');
     }
     setActionLoading(id, 'approve', false);
-  }, [approveQuotation, addToast, refreshCompanyQuotations, setActionLoading]);
+  }, [approveQuotation, addToast, refreshWithFilters, setActionLoading]);
 
   const handleReject = {
     open: useCallback((id) => setRejectModal({ open: true, id, reason: '' }), []),
@@ -637,12 +641,12 @@ const [exportFilters, setExportFilters] = useState({
       if (result?.success) {
         addToast('Quotation rejected', 'success');
         handleReject.close();
-        refreshCompanyQuotations();
+        refreshWithFilters();
       } else {
         addToast(result?.error || 'Failed to reject quotation', 'error');
       }
       setActionLoading(rejectModal.id, 'reject', false);
-    }, [rejectModal, rejectQuotation, addToast, refreshCompanyQuotations, setActionLoading])
+    }, [rejectModal, rejectQuotation, addToast, refreshWithFilters, setActionLoading])
   };
 
   const handleDelete = {
@@ -654,12 +658,12 @@ const [exportFilters, setExportFilters] = useState({
       if (result?.success) {
         addToast('Quotation deleted', 'success');
         handleDelete.close();
-        refreshCompanyQuotations();
+        refreshWithFilters();
       } else {
         addToast(result?.error || 'Failed to delete quotation', 'error');
       }
       setActionLoading(deleteModal.id, 'delete', false);
-    }, [deleteModal, deleteQuotation, addToast, refreshCompanyQuotations, setActionLoading])
+    }, [deleteModal, deleteQuotation, addToast, refreshWithFilters, setActionLoading])
   };
 
   const handleView = useCallback((id) => {
@@ -669,6 +673,77 @@ const [exportFilters, setExportFilters] = useState({
       navigate(`/quotation/${id}`);
     }
   }, [onViewQuotation, navigate]);
+
+  const handleAward = {
+    open: useCallback((quotation) => {
+      setAwardModal({ open: true, quotation, busy: false, awardNote: '', awarded: null });
+    }, []),
+  
+    close: useCallback(() => {
+      setAwardModal({ open: false, quotation: null, busy: false, awardNote: '', awarded: null });
+    }, []),
+  
+    confirm: useCallback(async (awarded, awardNote) => {
+      if (!awardModal.quotation) return;
+      
+      setAwardModal(prev => ({ ...prev, busy: true }));
+      setActionLoading(awardModal.quotation._id, 'award', true);
+      
+      try {
+        const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
+        
+        if (result?.success) {
+          addToast(
+            awarded 
+              ? `🏆 Quotation ${awardModal.quotation.quotationNumber} marked as Awarded!` 
+              : `Quotation ${awardModal.quotation.quotationNumber} marked as Not Awarded.`,
+            "success"
+          );
+          refreshWithFilters();
+          refreshStats();
+          handleAward.close();
+        } else {
+          addToast(result?.error || "Failed to update award status", "error");
+          setAwardModal(prev => ({ ...prev, busy: false }));
+        }
+      } catch (error) {
+        addToast(error.message || "Failed to update award status", "error");
+        setAwardModal(prev => ({ ...prev, busy: false }));
+      } finally {
+        setActionLoading(awardModal.quotation?._id, 'award', false);
+      }
+    }, [awardModal.quotation, awardQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
+  };
+
+  const handleGoToCustomers = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('customers');
+    }
+  }, [onNavigate]);
+  
+  const handleGoToItems = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('items');
+    }
+  }, [onNavigate]);
+
+  const handleCreateQuotation = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('addQuotation');
+    }
+  }, [onNavigate]);
+
+  const handleUserStats = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('userStats');
+    }
+  }, [onNavigate]);
+
+  const handleUsers = useCallback(() => {
+    if (onNavigate) {
+      onNavigate('users');
+    }
+  }, [onNavigate]);
 
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
@@ -691,25 +766,10 @@ const [exportFilters, setExportFilters] = useState({
     })),
   [tabCounts]);
 
-  const NavBtn = React.memo(({ onClick, label, primary }) => (
-    <button onClick={onClick} className="adm-nav-btn" style={{
-      backgroundColor: primary ? 'white' : 'rgba(255,255,255,0.08)',
-      color: primary ? '#0f172a' : '#94a3b8',
-      border: primary ? 'none' : '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      transition: 'all 0.15s',
-      whiteSpace: 'nowrap'
-    }}>
-      {label}
-    </button>
-  ));
-
   // ── Render helpers ────────────────────────────────────────
   const renderStatCards = () => {
+    const safeCustomersLength = Array.isArray(customers) ? customers.length : 0;
+    
     if (isMobile) {
       const statusCounts = {
         pending: actionRequired,
@@ -722,7 +782,7 @@ const [exportFilters, setExportFilters] = useState({
         <CompactStatsCard 
           totalRevenue={totalAwardedValue}
           quotationsCount={totalQuotations}
-          customersCount={customers.length}
+          customersCount={safeCustomersLength}
           selectedCurrency={selectedCurrency}
           statusCounts={statusCounts}
           loading={statsLoading}
@@ -745,86 +805,28 @@ const [exportFilters, setExportFilters] = useState({
 
         <div style={styles.statsRow2}>
           <StatCard label="Conversion Rate" value={`${conversionDetails}%`} accent="#f59e0b" 
-            iconBg="#fef3c7" iconColor="#f59e0b" Icon={TrendingUp} loading={statsLoading} 
-            // sub={`${awarded} of ${awarded + notAwarded} awarded`} 
-            />
+            iconBg="#fef3c7" iconColor="#f59e0b" Icon={TrendingUp} loading={statsLoading} />
           <StatCard label="Rejected by Admin" value={rejected} accent="#ec4899" 
             iconBg="#fce7f3" iconColor="#ec4899" Icon={Ban} loading={statsLoading} sub="Rejected quotations" />
-          <StatCard label="Total Customers" value={customers.length} accent="#8b5cf6" 
+          <StatCard label="Total Customers" value={safeCustomersLength} accent="#8b5cf6" 
             iconBg="#ede9fe" iconColor="#8b5cf6" Icon={Users} loading={false} sub="Active customers" />
         </div>
       </>
     );
   };
 
-  const renderTableHeader = () => (
-    <div style={styles.tableHeader}>
-      <div style={{ ...styles.tabContainer, overflowX: isMobile ? 'auto' : 'visible', width: isMobile ? '100%' : 'auto' }}>
-        {TABS.map(({ key, label, Icon: I, count }) => {
-          const active = activeTab === key;
-          const isActionTab = key === 'ops_approved';
-          const hasAlert = count > 0;
-          const alertColor = isActionTab ? '#3b82f6' : '#0f172a';
-          
-          return (
-            <button key={key} className="adm-tab" onClick={() => handleTabChange(key)} style={{
-              ...styles.tabButton,
-              backgroundColor: active ? '#fff' : 'transparent',
-              color: active ? '#0f172a' : '#64748b',
-              boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-              padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
-              fontSize: isMobile ? '0.7rem' : '0.8rem'
-            }}>
-              <I size={isMobile ? 11 : 13}/>
-              {!isMobile && label}
-              <span style={{
-                backgroundColor: active ? alertColor : (hasAlert ? alertColor : '#e2e8f0'),
-                color: (active || hasAlert) ? '#fff' : '#64748b',
-                ...styles.tabCount,
-                padding: isMobile ? '1px 5px' : '1px 7px',
-                fontSize: isMobile ? '0.6rem' : '0.68rem'
-              }}>
-                {isInitialLoading ? '…' : count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={styles.headerActions}>
-        <button onClick={handleRefresh} disabled={loading} style={styles.refreshBtn}>
-          <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={loading ? styles.spin : {}}/>
-        </button>
-        <div style={{ ...styles.searchBox, flex: isMobile ? 1 : 'auto' }}>
-          <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
-          <input
-            ref={searchRef}
-            style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
-            placeholder="Search… (press /)"
-            value={searchInput}
-            onChange={handleSearchChange}
-            disabled={isInitialLoading}
-          />
-          {searchInput && (
-            <button onClick={clearSearch} style={styles.clearSearchBtn}>
-              <X size={13}/>
-            </button>
-          )}
-        </div>
-        {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
-      </div>
-    </div>
-  );
-
   const renderTableRow = (q) => {
+    if (!q) return null;
+    
     const isExp = exportingId === q._id;
-    const canAct = q.status === 'ops_approved' || q.status == 'pending_admin';
-    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin');
+    const canAct = q.status === 'ops_approved' || q.status === 'pending_admin';
+    const canAward = q.status === 'approved' && (q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin');
     const canDelete = DELETABLE.has(q.status);
     const expired = isExpired(q.expiryDate);
     const expiring = !expired && isExpiringSoon(q.expiryDate);
     const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
-    // const createdByAdmin = q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin';
+    const createdByName = q.createdBy?.name || q.createdBySnapshot?.name || '—';
+    
     return (
       <tr key={q._id} className="adm-row">
         <td style={styles.cell}>
@@ -845,7 +847,6 @@ const [exportFilters, setExportFilters] = useState({
         <td style={styles.cell}>
           <div style={styles.projectCell}>
             <div style={styles.projectName}>{q.projectName || '—'}</div>
-            {/* {q.trn && <div style={styles.trnText}>TRN: {q.trn}</div>} */}
           </div>
         </td>
         <td style={{ ...styles.cell, textAlign: 'center' }}>
@@ -865,7 +866,7 @@ const [exportFilters, setExportFilters] = useState({
           <RejectionNote quotation={q}/>
         </td>
         <td style={styles.cell}>
-           {q.createdBy.name}
+          {createdByName}
         </td>
         <td style={styles.totalCell}>
           {fmtCurrency(q.total, selectedCurrency)}
@@ -890,17 +891,17 @@ const [exportFilters, setExportFilters] = useState({
               onClick={() => !isExp && handleDownload(q)} disabled={isExp}
               icon={isExp ? RefreshCw : Download} label={isExp ? '…' : 'PDF'} title="Download PDF" size="small"/>
             {canAward && (
-            <ActionBtn 
-              bg="#e9d5ff" 
-              color="#6b21a8" 
-              onClick={() => handleAward.open(q)} 
-              icon={Award} 
-              label="Award" 
-              title="Mark as Awarded / Not Awarded"
-              size="small"
-              disabled={isActionLoading(q._id, 'award')}
-            />
-          )}
+              <ActionBtn 
+                bg="#e9d5ff" 
+                color="#6b21a8" 
+                onClick={() => handleAward.open(q)} 
+                icon={Award} 
+                label="Award" 
+                title="Mark as Awarded / Not Awarded"
+                size="small"
+                disabled={isActionLoading(q._id, 'award')}
+              />
+            )}
             {canDelete && (
               <ActionBtn bg="#fff1f2" color="#e11d48" onClick={() => handleDelete.open(q._id)} 
                 icon={Trash2} label="Del" title="Delete quotation" size="small"
@@ -911,113 +912,6 @@ const [exportFilters, setExportFilters] = useState({
       </tr>
     );
   };
-
-  const handleAward = {
-    open: useCallback((quotation) => {
-      setAwardModal({ open: true, quotation });
-    }, []),
-
-    close: useCallback(() => {
-      setAwardModal({ open: false, quotation: null });
-    }, []),
-
-    confirm: useCallback(async (awarded, awardNote) => {
-      if (!awardModal.quotation) return;
-
-      try {
-        const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
-
-        if (result?.success) {
-          addToast(
-            awarded 
-              ? `🏆 Quotation ${awardModal.quotation.quotationNumber} marked as Awarded!` 
-              : `Quotation ${awardModal.quotation.quotationNumber} marked as Not Awarded.`,
-            "success"
-          );
-          refreshCompanyQuotations();
-          refreshStats();
-        } else {
-          addToast(result?.error || "Failed to update award status", "error");
-        }
-      } catch (error) {
-        addToast(error.message || "Failed to update award status", "error");
-      } finally {
-        handleAward.close();
-      }
-    }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats])
-  };
-    
-    confirm: useCallback(async (awarded, awardNote) => {
-      if (!awardModal.quotation) return;
-      
-      setAwardModal(prev => ({ ...prev, busy: true }));
-      
-      try {
-        const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
-        
-        if (result?.success) {
-          addToast(
-            awarded 
-              ? `🏆 "${awardModal.quotation.quotationNumber}" marked as Awarded!` 
-              : `"${awardModal.quotation.quotationNumber}" marked as Not Awarded.`,
-            "success"
-          );
-          
-          // Refresh the quotations list
-          refreshCompanyQuotations();
-          refreshStats();
-          handleAward.close();
-        } else {
-          addToast(result?.error || "Failed to update award status", "error");
-          setAwardModal(prev => ({ ...prev, busy: false }));
-        }
-      } catch (error) {
-        addToast(error.message || "Failed to update award status", "error");
-        setAwardModal(prev => ({ ...prev, busy: false }));
-      } finally {
-        setAwardModal(prev => ({ ...prev, busy: false }));
-      }
-    }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats])
-  
-
-  const handleGoToCustomers = useCallback(() => {
-    if (onNavigate) {
-      onNavigate('customers');
-    } else {
-      console.error('onNavigate prop is missing!');
-    }
-  }, [onNavigate]);
-  const handleGoToItems = useCallback(() => {
-    if (onNavigate) {
-      onNavigate('items');
-    } else {
-      console.error('onNavigate prop is missing!');
-    }
-  }, [onNavigate]);
-
-  const handleCreateQuotation = useCallback(() => {
-    if (onNavigate) {
-      onNavigate('addQuotation');
-    } else {
-      console.error('onNavigate prop is missing!');
-    }
-  }, [onNavigate]);
-
-  const handleUserStats = useCallback(() => {
-    if (onNavigate) {
-      onNavigate('userStats');
-    } else {
-      console.error('onNavigate prop is missing!');
-    }
-  }, [onNavigate]);
-
-  const handleUsers = useCallback(() => {
-    if (onNavigate) {
-      onNavigate('users');
-    } else {
-      console.error('onNavigate prop is missing!');
-    }
-  }, [onNavigate]);
 
   // ─────────────────────────────────────────────────────────
   // Main Render
@@ -1056,180 +950,152 @@ const [exportFilters, setExportFilters] = useState({
           justifyContent: isMobile ? 'center' : 'flex-end'
         }}>
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
-          <button 
-    onClick={handleGoToCustomers}
-    className="adm-nav-btn" 
-    style={{
-      backgroundColor: '#e0e7ff',
-      color: '#4f46e5',
-      border: 'none',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.4rem'
-    }}
-  >
-    <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
-  </button>
-  <button 
-    onClick={handleGoToItems}
-    className="adm-nav-btn" 
-    style={{
-      backgroundColor: '#e0e7ff',
-      color: '#4f46e5',
-      border: 'none',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.4rem'
-    }}
-  >
-    <ShoppingCartIcon size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
-  </button>
+          
+          <button onClick={handleGoToCustomers} className="adm-nav-btn" style={{
+            backgroundColor: '#e0e7ff',
+            color: '#4f46e5',
+            border: 'none',
+            borderRadius: 8,
+            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+            fontSize: isMobile ? '0.7rem' : '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}>
+            <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+          </button>
+          
+          <button onClick={handleGoToItems} className="adm-nav-btn" style={{
+            backgroundColor: '#e0e7ff',
+            color: '#4f46e5',
+            border: 'none',
+            borderRadius: 8,
+            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+            fontSize: isMobile ? '0.7rem' : '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}>
+            <ShoppingCartIcon size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
+          </button>
 
-  <div style={styles.headerActions}>
-  {/* Export Button with Filter Options */}
-  <div style={{ position: 'relative' }}>
-    <button 
-      onClick={toggleExportFilters}
-      disabled={isExporting}
-      style={styles.exportBtn}
-    >
-      <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
-    </button>
-    
-    {exportFilters.showFilters && (
-      <div style={styles.exportFilterDropdown}>
-        <div style={styles.filterGroup}>
-          <label style={styles.filterLabel}>Date Range</label>
-          <div style={styles.dateRangeRow}>
-            <input
-              type="date"
-              value={exportFilters.fromDate}
-              onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
-              style={styles.filterInput}
-              placeholder="From Date"
-            />
-            <span>to</span>
-            <input
-              type="date"
-              value={exportFilters.toDate}
-              onChange={(e) => handleExportDateChange('toDate', e.target.value)}
-              style={styles.filterInput}
-              placeholder="To Date"
-            />
+          <div style={{ position: 'relative' }}>
+            <button onClick={toggleExportFilters} disabled={isExporting} style={styles.exportBtn}>
+              <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
+            </button>
+            
+            {exportFilters.showFilters && (
+              <div style={styles.exportFilterDropdown}>
+                <div style={styles.filterGroup}>
+                  <label style={styles.filterLabel}>Date Range</label>
+                  <div style={styles.dateRangeRow}>
+                    <input
+                      type="date"
+                      value={exportFilters.fromDate}
+                      onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
+                      style={styles.filterInput}
+                    />
+                    <span>to</span>
+                    <input
+                      type="date"
+                      value={exportFilters.toDate}
+                      onChange={(e) => handleExportDateChange('toDate', e.target.value)}
+                      style={styles.filterInput}
+                    />
+                  </div>
+                </div>
+                
+                <div style={styles.filterGroup}>
+                  <label style={styles.filterLabel}>Status</label>
+                  <select
+                    value={exportFilters.status}
+                    onChange={(e) => handleExportDateChange('status', e.target.value)}
+                    style={styles.filterSelect}
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="ops_approved">Awaiting Admin</option>
+                    <option value="ops_rejected">Returned by Ops</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="awarded">Awarded</option>
+                  </select>
+                </div>
+                
+                <div style={styles.filterActions}>
+                  <button
+                    onClick={() => {
+                      setExportFilters({
+                        showFilters: false,
+                        fromDate: '',
+                        toDate: '',
+                        status: 'all',
+                      });
+                    }}
+                    style={styles.filterResetBtn}
+                  >
+                    Reset
+                  </button>
+                  <button onClick={handleExportToExcel} style={styles.filterApplyBtn}>
+                    Export Now
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-        
-        <div style={styles.filterGroup}>
-          <label style={styles.filterLabel}>Status</label>
-          <select
-            value={exportFilters.status}
-            onChange={(e) => handleExportDateChange('status', e.target.value)}
-            style={styles.filterSelect}
-          >
-            <option value="all">All Statuses</option>
-            <option value="pending">Pending</option>
-            <option value="ops_approved">Awaiting Admin</option>
-            <option value="ops_rejected">Returned by Ops</option>
-            <option value="approved">Approved</option>
-            <option value="rejected">Rejected</option>
-            <option value="awarded">Awarded</option>
-          </select>
-        </div>
-        
-        <div style={styles.filterActions}>
-          <button
-            onClick={() => {
-              setExportFilters({
-                showFilters: false,
-                fromDate: '',
-                toDate: '',
-                status: 'all',
-              });
-            }}
-            style={styles.filterResetBtn}
-          >
-            Reset
+
+          <button onClick={handleCreateQuotation} className="adm-nav-btn" style={{
+            backgroundColor: '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: 8,
+            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+            fontSize: isMobile ? '0.7rem' : '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}>
+            <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
           </button>
-          <button
-            onClick={handleExportToExcel}
-            style={styles.filterApplyBtn}
-          >
-            Export Now
+          
+          <button onClick={handleUserStats} style={{
+            backgroundColor: '#e0e7ff',
+            color: '#4f46e5',
+            border: 'none',
+            borderRadius: '8px',
+            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+            fontSize: isMobile ? '0.7rem' : '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}>
+            <Users size={isMobile ? 12 : 14} /> User Stats
           </button>
-        </div>
-      </div>
-    )}
-  </div>
-</div>
 
-  <button 
-    onClick={handleCreateQuotation}
-    className="adm-nav-btn" 
-    style={{
-      backgroundColor: '#10b981',
-      color: 'white',
-      border: 'none',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.4rem'
-    }}
-  >
-    <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
-  </button>
-          <button 
- onClick={handleUserStats}
-  style={{
-    backgroundColor: '#e0e7ff',
-    color: '#4f46e5',
-    border: 'none',
-    borderRadius: '8px',
-    padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-    fontSize: isMobile ? '0.7rem' : '0.8rem',
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.4rem'
-  }}
->
-  <Users size={isMobile ? 12 : 14} /> User Stats
-</button>
+          <button onClick={handleUsers} style={{
+            backgroundColor: '#e0e7ff',
+            color: '#4f46e5',
+            border: 'none',
+            borderRadius: '8px',
+            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
+            fontSize: isMobile ? '0.7rem' : '0.8rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem'
+          }}>
+            <Users size={isMobile ? 12 : 14} /> Users
+          </button>
 
-<button 
- onClick={handleUsers}
-  style={{
-    backgroundColor: '#e0e7ff',
-    color: '#4f46e5',
-    border: 'none',
-    borderRadius: '8px',
-    padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-    fontSize: isMobile ? '0.7rem' : '0.8rem',
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.4rem'
-  }}
->
-  <Users size={isMobile ? 12 : 14} /> Users
-</button>
-
-          {/* <NavBtn onClick={handleUsers}  label="Users" /> */}
           <button onClick={handleLogout} className="adm-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
@@ -1260,10 +1126,65 @@ const [exportFilters, setExportFilters] = useState({
         {/* Table Card */}
         <div style={styles.tableCard}>
           {/* Header */}
-          {renderTableHeader()}
+          <div style={styles.tableHeader}>
+            <div style={{ ...styles.tabContainer, overflowX: isMobile ? 'auto' : 'visible', width: isMobile ? '100%' : 'auto' }}>
+              {TABS.map(({ key, label, Icon: I, count }) => {
+                const active = activeTab === key;
+                const isActionTab = key === 'ops_approved';
+                const hasAlert = count > 0;
+                const alertColor = isActionTab ? '#3b82f6' : '#0f172a';
+                
+                return (
+                  <button key={key} className="adm-tab" onClick={() => handleTabChange(key)} style={{
+                    ...styles.tabButton,
+                    backgroundColor: active ? '#fff' : 'transparent',
+                    color: active ? '#0f172a' : '#64748b',
+                    boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
+                    fontSize: isMobile ? '0.7rem' : '0.8rem'
+                  }}>
+                    <I size={isMobile ? 11 : 13}/>
+                    {!isMobile && label}
+                    <span style={{
+                      backgroundColor: active ? alertColor : (hasAlert ? alertColor : '#e2e8f0'),
+                      color: (active || hasAlert) ? '#fff' : '#64748b',
+                      ...styles.tabCount,
+                      padding: isMobile ? '1px 5px' : '1px 7px',
+                      fontSize: isMobile ? '0.6rem' : '0.68rem'
+                    }}>
+                      {isInitialLoading ? '…' : count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
-          {/* Refresh overlay */}
-          {isRefreshing && paginated.length > 0 && (
+            <div style={styles.headerActions}>
+              <button onClick={handleRefresh} disabled={loading} style={styles.refreshBtn}>
+                <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={loading ? styles.spin : {}}/>
+              </button>
+              <div style={{ ...styles.searchBox, flex: isMobile ? 1 : 'auto' }}>
+                <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
+                <input
+                  ref={searchRef}
+                  style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
+                  placeholder="Search… (press /)"
+                  value={searchInput}
+                  onChange={handleSearchChange}
+                  disabled={isInitialLoading}
+                />
+                {searchInput && (
+                  <button onClick={clearSearch} style={styles.clearSearchBtn}>
+                    <X size={13}/>
+                  </button>
+                )}
+              </div>
+              {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
+            </div>
+          </div>
+
+          {/* Refresh overlay - only show when refreshing existing data */}
+          {isRefreshing && safeQ.length > 0 && (
             <div style={styles.refreshOverlay}>
               <div style={styles.refreshCard}>
                 <RefreshCw size={isMobile ? 20 : 24} color="#6366f1" style={styles.spin}/>
@@ -1272,30 +1193,52 @@ const [exportFilters, setExportFilters] = useState({
             </div>
           )}
 
-          {/* Content */}
+          {/* Content - Show skeleton during initial load */}
           {isInitialLoading ? (
-            <LoadingSkeleton isMobile={isMobile} />
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#fafafa' }}>
+                    {['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Total','Actions'].map(h => (
+                      <th key={h} style={styles.skeletonHeader}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[1,2,3,4,5,6].map(i => <SkeletonRow key={i}/>)}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <>
-              {safeQ.length === 0 ? (
-                <EmptyState search={search} clearSearch={clearSearch} isMobile={isMobile} />
+              {showEmptyState ? (
+                <div style={{ ...styles.emptyState, padding: isMobile ? '3rem 1rem' : '4rem 2rem' }}>
+                  <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
+                  <p style={styles.emptyStateTitle}>
+                    {serverFilters.search ? `No results for "${serverFilters.search}"` : 'No quotations found'}
+                  </p>
+                  {serverFilters.search && (
+                    <button onClick={clearSearch} style={styles.emptyStateClear}>
+                      Clear search
+                    </button>
+                  )}
+                </div>
               ) : (
                 <>
                   {(isMobile || viewMode === 'card') ? (
-                    // Card View - 2 columns on desktop, 1 on mobile
                     <div style={{ 
                       padding: isMobile ? '1rem' : '1.5rem',
                       display: 'grid',
                       gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
                       gap: isMobile ? '0.75rem' : '1rem'
                     }}>
-                      {paginated.length === 0 ? (
+                      {safeQ.length === 0 ? (
                         <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
-                          No results for "<strong>{search}</strong>"
+                          No results for "<strong>{serverFilters.search}</strong>"
                           <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
                         </div>
                       ) : (
-                        paginated.map((q) => (
+                        safeQ.map((q) => (
                           <AdminQuotationCard
                             key={q._id}
                             quotation={q}
@@ -1305,16 +1248,16 @@ const [exportFilters, setExportFilters] = useState({
                             onReject={handleReject.open}
                             onDownload={handleDownload}
                             onDelete={handleDelete.open}
+                            onAward={handleAward.open}
                             isExporting={exportingId === q._id}
                             isApproving={isActionLoading(q._id, 'approve')}
                             isRejecting={isActionLoading(q._id, 'reject')}
-                            isAwarding={isActionLoading(q._id, 'award')} 
+                            isAwarding={isActionLoading(q._id, 'award')}
                           />
                         ))
                       )}
                     </div>
                   ) : (
-                    // Desktop Table View
                     <div style={styles.tableWrapper}>
                       <table style={styles.table}>
                         <thead>
@@ -1332,51 +1275,53 @@ const [exportFilters, setExportFilters] = useState({
                           </tr>
                         </thead>
                         <tbody>
-                          {paginated.length === 0 ? (
+                          {safeQ.length === 0 ? (
                             <tr>
                               <td colSpan={10} style={styles.noResults}>
-                                No results for "<strong>{search}</strong>"
+                                No results for "<strong>{serverFilters.search}</strong>"
                                 <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
                               </td>
                             </tr>
-                          ) : paginated.map(renderTableRow)}
+                          ) : (
+                            safeQ.map(renderTableRow)
+                          )}
                         </tbody>
                       </table>
                     </div>
                   )}
                   
-                  {/* Pagination */}
-                  {!isMobile && (
+                  {/* Server-side Pagination */}
+                  {!isMobile && quotationsPagination && quotationsPagination.totalPages > 1 && (
                     <PaginationBar
-                      total={totalFiltered}
-                      page={safePage}
-                      limit={limit}
-                      onPage={setPage}
-                      onLimit={(l) => { setLimit(l); setPage(1); }}
+                      total={quotationsPagination.total || 0}
+                      page={quotationsPagination.page || 1}
+                      limit={currentLimit}
+                      onPage={(newPage) => goToPage(newPage)}
+                      onLimit={(newLimit) => changeLimit(newLimit)}
                     />
                   )}
                   
                   {/* Mobile Pagination */}
-                  {isMobile && totalFiltered > 0 && (
+                  {isMobile && quotationsPagination && quotationsPagination.totalPages > 1 && (
                     <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
                       <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                        {((safePage - 1) * limit) + 1}–{Math.min(safePage * limit, totalFiltered)} of {totalFiltered}
+                        {((quotationsPagination.page - 1) * currentLimit) + 1}–{Math.min(quotationsPagination.page * currentLimit, quotationsPagination.total)} of {quotationsPagination.total}
                       </div>
                       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button 
-                          onClick={() => setPage(p => Math.max(1, p - 1))} 
-                          disabled={safePage === 1}
-                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
+                          onClick={() => goToPage(quotationsPagination.page - 1)} 
+                          disabled={quotationsPagination.page === 1}
+                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: quotationsPagination.page === 1 ? 'not-allowed' : 'pointer', opacity: quotationsPagination.page === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
                         >
                           Previous
                         </button>
                         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>
-                          {safePage} / {totalPages}
+                          {quotationsPagination.page} / {quotationsPagination.totalPages}
                         </span>
                         <button 
-                          onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
-                          disabled={safePage === totalPages}
-                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
+                          onClick={() => goToPage(quotationsPagination.page + 1)} 
+                          disabled={quotationsPagination.page === quotationsPagination.totalPages}
+                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: quotationsPagination.page === quotationsPagination.totalPages ? 'not-allowed' : 'pointer', opacity: quotationsPagination.page === quotationsPagination.totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
                         >
                           Next
                         </button>
@@ -1391,106 +1336,63 @@ const [exportFilters, setExportFilters] = useState({
       </div>
 
       {/* Modals */}
-      <RejectModal 
+      <ConfirmModal
         open={rejectModal.open}
-        reason={rejectModal.reason}
-        onReasonChange={(val) => setRejectModal(prev => ({ ...prev, reason: val }))}
+        title="Reject Quotation"
+        message="This quotation has been reviewed by Ops. Provide a reason for rejecting it at the admin level."
+        confirmLabel="Reject"
+        danger
         onConfirm={handleReject.confirm}
         onCancel={handleReject.close}
-      />
+        loading={false}
+      >
+        <textarea
+          value={rejectModal.reason}
+          onChange={(e) => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
+          rows={4}
+          placeholder="Enter rejection reason…"
+          autoFocus
+          style={styles.rejectTextarea}
+        />
+      </ConfirmModal>
 
       <ConfirmModal
         open={deleteModal.open}
         title="Delete Quotation"
         message="This action cannot be undone. The quotation and all associated images will be permanently removed."
-        confirmLabel="Delete" danger
+        confirmLabel="Delete"
+        danger
         onConfirm={handleDelete.confirm}
         onCancel={handleDelete.close}
         loading={isActionLoading(deleteModal.id, 'delete')}
       />
 
-{refreshProgress > 0 && (
-  <SimpleLoadingOverlay 
-    type="processing"
-    message={refreshMessage}
-  />
-)}
-
-{pdfProgress > 0 && (
-  <SimpleLoadingOverlay 
-    type="pdf"
-    message={pdfMessage}
-  />
-)}
- 
- <AwardModal
-          open={awardModal.open}
-          quotation={awardModal.quotation}
-          onConfirm={handleAward.confirm}
-          onCancel={handleAward.close}
-          loading={false}   
+      {refreshProgress > 0 && (
+        <SimpleLoadingOverlay 
+          type="processing"
+          message={refreshMessage}
         />
+      )}
 
+      {pdfProgress > 0 && (
+        <SimpleLoadingOverlay 
+          type="pdf"
+          message={pdfMessage}
+        />
+      )}
+ 
+      <AwardModal
+        open={awardModal.open}
+        quotation={awardModal.quotation}
+        onConfirm={handleAward.confirm}
+        onCancel={handleAward.close}
+        loading={awardModal.busy || isActionLoading(awardModal.quotation?._id, 'award')}
+      />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Sub-components (extracted for clarity)
-// ─────────────────────────────────────────────────────────────
-
-const LoadingSkeleton = React.memo(({ isMobile }) => (
-  <div style={{ overflowX: 'auto' }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead>
-        <tr style={{ backgroundColor: '#fafafa' }}>
-          {['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Total','Actions'].map(h => (
-            <th key={h} style={styles.skeletonHeader}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {[1,2,3,4,5,6].map(i => <SkeletonRow key={i}/>)}
-      </tbody>
-    </table>
-  </div>
-));
-
-const EmptyState = React.memo(({ search, clearSearch, isMobile }) => (
-  <div style={{ ...styles.emptyState, padding: isMobile ? '3rem 1rem' : '4rem 2rem' }}>
-    <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
-    <p style={styles.emptyStateTitle}>
-      {search ? `No results for "${search}"` : 'No quotations found'}
-    </p>
-    {search && (
-      <button onClick={clearSearch} style={styles.emptyStateClear}>
-        Clear search
-      </button>
-    )}
-  </div>
-));
-
-const RejectModal = React.memo(({ open, reason, onReasonChange, onConfirm, onCancel }) => (
-  <ConfirmModal
-    open={open}
-    title="Reject Quotation"
-    message="This quotation has been reviewed by Ops. Provide a reason for rejecting it at the admin level."
-    confirmLabel="Reject" danger
-    onConfirm={onConfirm}
-    onCancel={onCancel}
-    loading={false}
-  >
-    <textarea
-      value={reason}
-      onChange={e => onReasonChange(e.target.value)}
-      rows={4} placeholder="Enter rejection reason…" autoFocus
-      style={styles.rejectTextarea}
-    />
-  </ConfirmModal>
-));
-
-
-
+  
 // ─────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText } from "lucide-react";
+import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText, Plus, Trash2 } from "lucide-react";
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import { useAppStore } from '../services/store';
@@ -16,6 +16,7 @@ import { validateQuantity, validatePrice, validatePercentage } from '../utils/qt
 import { DEFAULT_COMPANY_NAME, SNACK_HIDE, VALIDATION_MESSAGES } from '../utils/constants';
 import useItemStore from '../services/itemStore';
 import LoadingOverlay from "../components/LoadingOverlay";
+import ItemModal from "../components/AddItemModal";
 
 // ============================================================
 // LOADING COMPONENTS
@@ -91,19 +92,32 @@ const getCompanyName = (selectedCompany, companies) => {
   return company?.name || DEFAULT_COMPANY_NAME;
 };
 
-const generateQuotationNumber = (companyCode) => {
-  const prefix = companyCode || 'QT';
-  const timestamp = Date.now();
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `${prefix}-${timestamp}-${random}`;
+const getCompanyDetails = (selectedCompany, companies) => {
+  if (!selectedCompany) return { phone: '', email: '', tradeLicense: '', taxRegistration: '' };
+  if (typeof selectedCompany === 'object' && selectedCompany?.name) {
+    return {
+      phone: selectedCompany.phone || '',
+      email: selectedCompany.email || '',
+      tradeLicense: selectedCompany.crNumber || '',
+      taxRegistration: selectedCompany.vatNumber || ''
+    };
+  }
+  const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+  return {
+    phone: company?.phone || '',
+    email: company?.email || '',
+    tradeLicense: company?.crNumber || '',
+    taxRegistration: company?.vatNumber || ''
+  };
 };
 
+ 
 
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
 
-export default function QuotationTemplate({ customer, selectedItems, selectedCompany, selectedCurrency,quotationData, onBack }) {
+export default function QuotationTemplate({ customer, selectedItems, selectedCompany, selectedCurrency, quotationData, onBack }) {
   if (!customer || !selectedItems) {
     return (
       <div style={styles.loadingContainer}>
@@ -118,8 +132,10 @@ export default function QuotationTemplate({ customer, selectedItems, selectedCom
 function QuotationTemplateInner({ customer, selectedItems, selectedCompany, selectedCurrency, quotationData: initialQuotationData, onBack }) {
   const navigate = useNavigate();
   const { companies, user } = useAppStore();
-  const { items, isLoading: isItemsLoading, loadAllItems } = useItemStore();
   const { addQuotation } = useQuotations();
+  
+  // Get company details for header display
+  const companyDetails = useMemo(() => getCompanyDetails(selectedCompany, companies), [selectedCompany, companies]);
   
   // State
   const [quotationNumber] = useState(() => {
@@ -133,15 +149,30 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   });
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [quotationItems, setQuotationItems] = useState([]);
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
   const [quotationData, setQuotationData] = useState({
     date: initialQuotationData?.date || getTodayDate(),
     expiryDate: initialQuotationData?.expiryDate || getDefaultExpiryDate(),
-    customer: initialQuotationData?.customer || customer?.name || "",
-    contact: initialQuotationData?.contact || customer?.phone || "",
     projectName: initialQuotationData?.projectName || "",
+    scopeOfWork: initialQuotationData?.scopeOfWork || "",
+    
+    // Customer/Left side fields
+    customer: initialQuotationData?.customer || customer?.name || "",
+    customerName: initialQuotationData?.customerName || customer?.contactPerson || customer?.name || "",
+    customerPhone: initialQuotationData?.customerPhone || customer?.phone || "",
+    customerEmail: initialQuotationData?.customerEmail || customer?.email || "",
+    customerDesignation: initialQuotationData?.customerDesignation || customer?.designation || "",
+    customerTradeLicenseNumber: initialQuotationData?.customerTradeLicenseNumber || customer?.tradeLicenseNumber || "",
+    customerTaxRegistrationNumber: initialQuotationData?.customerTaxRegistrationNumber || customer?.vatNumber || "",
+    remark: initialQuotationData?.remark || "",
+    // Company/Right side fields - Use user data directly
+    ourFocalPoint: user?.name || "",
+    ourFocalPointDesignation: user?.role || "",
+    ourContact: user?.phone || "",
+    salesManagerEmail: user?.email || "",
+    
     ourRef: initialQuotationData?.ourRef || "",
-    ourContact: initialQuotationData?.ourContact || "",
-    salesManagerEmail: initialQuotationData?.salesManagerEmail || "",
     paymentTerms: initialQuotationData?.paymentTerms || "",
     deliveryTerms: initialQuotationData?.deliveryTerms || "",
     tl: initialQuotationData?.tl || "",
@@ -153,7 +184,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     termsImage: initialQuotationData?.termsImage || null,
     currency: initialQuotationData?.currency || getCurrencyObject(selectedCurrency),
     queryDate: initialQuotationData?.queryDate || ""   
-
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [headerErrors, setHeaderErrors] = useState({});
@@ -185,29 +215,18 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     setTermsImages(prev => prev.filter(img => img.id !== imageId));
   }, []);
   
-  // Load items on mount
-  useEffect(() => {
-    if (!items.length) loadAllItems();
-  }, [items.length, loadAllItems]);
-  
   // Initialize quotation items from selected items
   useEffect(() => {
     if (!selectedItems?.length || quotationItems.length) return;
     
     const itemsMap = new Map();
     selectedItems.forEach((item, index) => {
-      const source = item.fullItemData || item;
-      itemsMap.set(source._id, {
+      itemsMap.set(item.id || `qt-item-${Date.now()}-${index}`, {
         id: item.id || `qt-item-${Date.now()}-${index}`,
-        itemId: source._id,
-        zohoId: source.zohoId,
-        name: source.name,
-        description: source.description || '',
+        name: item.name,
+        description: item.description || '',
         quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unitPrice || source.price) || 0,
-        sku: source.sku || '',
-        unit: source.unit || '',
-        fullItemData: source,
+        unitPrice: Number(item.unitPrice) || 0,
         imagePaths: item.imagePaths || [],
         newImages: []
       });
@@ -215,49 +234,78 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     setQuotationItems(Array.from(itemsMap.values()));
   }, [selectedItems, quotationItems.length]);
   
+  // Add this useEffect to auto-populate customer TRN when customer changes
+  useEffect(() => {
+    if (customer) {
+      setQuotationData(prev => ({
+        ...prev,
+        trn: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
+        customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
+        customer: customer.name || "",
+        customerName: customer.contactPerson || customer.name || "",
+        customerPhone: customer.phone || "",
+        customerEmail: customer.email || "",
+        customerDesignation: customer.designation || "",
+        customerTradeLicenseNumber: customer.tradeLicenseNumber || "",
+      }));
+    }
+  }, [customer]);
+
+  // Add this useEffect to auto-populate creator (user) details on the right side
+  useEffect(() => {
+    if (user && !quotationData.ourFocalPoint) {
+      setQuotationData(prev => ({
+        ...prev,
+        ourFocalPoint: user.name || "",
+        ourFocalPointDesignation: user.role || "",
+        ourContact: user.phone || "",
+        salesManagerEmail: user.email || "",
+      }));
+    }
+  }, [user]);
+
   // Update currency when changed
   useEffect(() => {
     setQuotationData(prev => ({ ...prev, currency: getCurrencyObject(selectedCurrency) }));
   }, [selectedCurrency]);
-  
 
-const subtotal = useMemo(() => 
-  quotationItems.reduce((s, i) => s + (i.quantity || 0) * (i.unitPrice || 0), 0), 
-  [quotationItems]
-);
+  const subtotal = useMemo(() => 
+    quotationItems.reduce((s, i) => s + (i.quantity || 0) * (i.unitPrice || 0), 0), 
+    [quotationItems]
+  );
 
-const discountAmount = useMemo(() => 
-  subtotal * (quotationData.discount || 0) / 100, 
-  [subtotal, quotationData.discount]
-);
+  const discountAmount = useMemo(() => 
+    subtotal * (quotationData.discount || 0) / 100, 
+    [subtotal, quotationData.discount]
+  );
 
-const subtotalAfterDiscount = useMemo(() => 
-  subtotal - discountAmount, 
-  [subtotal, discountAmount]
-);
+  const subtotalAfterDiscount = useMemo(() => 
+    subtotal - discountAmount, 
+    [subtotal, discountAmount]
+  );
 
-const taxAmount = useMemo(() => 
-  subtotalAfterDiscount * (quotationData.tax || 0) / 100, 
-  [subtotalAfterDiscount, quotationData.tax]
-);
+  const taxAmount = useMemo(() => 
+    subtotalAfterDiscount * (quotationData.tax || 0) / 100, 
+    [subtotalAfterDiscount, quotationData.tax]
+  );
 
-const grandTotal = useMemo(() => 
-  subtotalAfterDiscount + taxAmount, 
-  [subtotalAfterDiscount, taxAmount]
-);
+  const grandTotal = useMemo(() => 
+    subtotalAfterDiscount + taxAmount, 
+    [subtotalAfterDiscount, taxAmount]
+  );
 
-const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
-const companyName = useMemo(() => getCompanyName(selectedCompany, companies), [selectedCompany, companies]);
-const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldErrors).some(e => e && Object.keys(e).length > 0);
+  const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
+  const companyName = useMemo(() => getCompanyName(selectedCompany, companies), [selectedCompany, companies]);
+  const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldErrors).some(e => e && Object.keys(e).length > 0);
 
-// Calculate total image count for progress
-const totalImageCount = useMemo(() => {
-  let count = 0;
-  quotationItems.forEach(item => {
-    count += (item.imagePaths?.length || 0) + (item.newImages?.length || 0);
-  });
-  return count;
-}, [quotationItems]);
+  // Calculate total image count for progress
+  const totalImageCount = useMemo(() => {
+    let count = 0;
+    quotationItems.forEach(item => {
+      count += (item.imagePaths?.length || 0) + (item.newImages?.length || 0);
+    });
+    return count;
+  }, [quotationItems]);
 
   // Handlers
   const handleDataChange = useCallback((field, value) => {
@@ -276,36 +324,55 @@ const totalImageCount = useMemo(() => {
       errors.expiryDate = VALIDATION_MESSAGES.EXPIRY_BEFORE_DATE;
     }
     
-    if (!quotationItems.length) {
-      showSnack(VALIDATION_MESSAGES.REQUIRED_ITEM);
-      return false;
+    // Validate required left side fields
+    if (!quotationData.projectName?.trim()) {
+      errors.projectName = "Project Name is required";
     }
-    
-    for (const item of quotationItems) {
-      if (!item.itemId) {
-        showSnack(VALIDATION_MESSAGES.REQUIRED_ITEM_SELECT);
-        return false;
-      }
-      const qr = validateQuantity(item.quantity);
-      if (!qr.isValid) { showSnack(`"${item.name || 'Item'}" — ${qr.error}`); return false; }
-      const pr = validatePrice(item.unitPrice);
-      if (!pr.isValid) { showSnack(`"${item.name || 'Item'}" — ${pr.error}`); return false; }
+    if (!quotationData.customer?.trim()) {
+      errors.customer = "Company Name is required";
+    }
+    if (!quotationData.customerName?.trim()) {
+      errors.customerName = "Contact Name is required";
+    }
+    if (!quotationData.customerPhone?.trim()) {
+      errors.customerPhone = "Phone number is required";
+    }
+    if (!quotationData.customerEmail?.trim()) {
+      errors.customerEmail = "Email is required";
     }
     
     if (Object.keys(errors).length) {
       setHeaderErrors(errors);
-      showSnack("Please fix the highlighted errors.");
+      const firstErrorKey = Object.keys(errors)[0];
+      const firstErrorMessage = errors[firstErrorKey];
+      showSnack(firstErrorMessage, "error");
       return false;
     }
+    
+    if (!quotationItems.length) {
+      showSnack(VALIDATION_MESSAGES.REQUIRED_ITEM, "error");
+      return false;
+    }
+    
+    for (const item of quotationItems) {
+      const qr = validateQuantity(item.quantity);
+      if (!qr.isValid) { 
+        showSnack(`"${item.name || 'Item'}" — ${qr.error}`, "error"); 
+        return false; 
+      }
+      const pr = validatePrice(item.unitPrice);
+      if (!pr.isValid) { 
+        showSnack(`"${item.name || 'Item'}" — ${pr.error}`, "error"); 
+        return false; 
+      }
+    }
+    
     return true;
   }, [quotationData, quotationItems, showSnack]);
   
   const addMoreItem = useCallback(() => {
-    setQuotationItems(prev => [...prev, { 
-      id: `${Date.now()}-${Math.random()}`,
-      itemId: null, quantity: 1, unitPrice: 0, name: "", description: "",
-      imagePaths: [], newImages: []
-    }]);
+    setEditingItem(null);
+    setIsAddItemModalOpen(true);
   }, []);
   
   const removeItem = useCallback((id) => {
@@ -314,57 +381,29 @@ const totalImageCount = useMemo(() => {
     setFieldErrors(prev => { const { [id]: _, ...rest } = prev; return rest; });
   }, []);
   
+  const handleAddManualItem = useCallback((newItem) => {
+    setQuotationItems(prev => [...prev, newItem]);
+    showSnack("Item added successfully", "success");
+  }, [showSnack]);
+  
+  const handleEditItem = useCallback((updatedItem) => {
+    setQuotationItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+    showSnack("Item updated successfully", "success");
+    setEditingItem(null);
+  }, [showSnack]);
+  
+  const handleOpenEditModal = useCallback((item) => {
+    setEditingItem(item);
+    setIsAddItemModalOpen(true);
+  }, []);
+  
   const updateItem = useCallback((id, field, value) => {
-    if (field === "quantity") {
-      if (!value && value !== 0) {
-        setFieldErrors(prev => ({ ...prev, [id]: { ...prev[id], quantity: "Quantity is required." } }));
-        return;
-      }
-      const r = validateQuantity(value);
-      if (!r.isValid) {
-        setFieldErrors(prev => ({ ...prev, [id]: { ...prev[id], quantity: r.error } }));
-        return;
-      }
-      setFieldErrors(prev => {
-        const { [id]: errors, ...rest } = prev;
-        if (errors) delete errors.quantity;
-        return Object.keys(errors || {}).length ? { ...rest, [id]: errors } : rest;
-      });
-      value = parseInt(value, 10);
-    }
-    
-    if (field === "unitPrice") {
-      if (value === "") {
-        setQuotationItems(prev => prev.map(item => item.id === id ? { ...item, unitPrice: 0 } : item));
-        return;
-      }
-      const r = validatePrice(value);
-      if (!r.isValid) {
-        setFieldErrors(prev => ({ ...prev, [id]: { ...prev[id], unitPrice: r.error } }));
-        return;
-      }
-      setFieldErrors(prev => {
-        const { [id]: errors, ...rest } = prev;
-        if (errors) delete errors.unitPrice;
-        return Object.keys(errors || {}).length ? { ...rest, [id]: errors } : rest;
-      });
-      value = parseFloat(value) || 0;
-    }
-    
-    if (field === "itemId" && value) {
-      const found = items?.find(i => i._id === value);
-      setQuotationItems(prev => prev.map(item => item.id === id ? {
-        ...item,
-        itemId: value,
-        name: found?.name || "",
-        description: found?.description || "",
-        unitPrice: found?.price != null ? Number(found.price) : item.unitPrice
-      } : item));
-      return;
-    }
-    
-    setQuotationItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
-  }, [items]);
+    setQuotationItems(prev => prev.map(item => 
+      item.id === id ? { ...item, [field]: value } : item
+    ));
+  }, []);
   
   const handleImageUpload = useCallback((e, itemId) => {
     const files = Array.from(e.target.files || []);
@@ -376,7 +415,7 @@ const totalImageCount = useMemo(() => {
       showSnack(`Max ${MAX_IMAGES_PER_ITEM} images per item.`);
       return;
     }
-     const toProcess = files.slice(0, slots);
+    const toProcess = files.slice(0, slots);
     if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
     
     let processed = 0;
@@ -428,7 +467,6 @@ const totalImageCount = useMemo(() => {
     setSaveStep("Preparing data...");
   
     try {
-      // === BUILD RAW TERMS & CONDITIONS ===
       let finalTermsAndConditions = "";
   
       if (tcSections && tcSections.length > 0) {
@@ -443,11 +481,8 @@ const totalImageCount = useMemo(() => {
           .join("\n\n");
       }
   
-      // === EXTRACT TERMS IMAGES FOR SAVING ===
-      // Extract only images that are NOT base64 (already uploaded to Cloudinary)
-      // For new images, we need to upload them first or send base64 to backend
       const termsImagesForSave = termsImages
-        .filter(img => img.url && !img.url.startsWith('data:')) // Only keep Cloudinary URLs
+        .filter(img => img.url && !img.url.startsWith('data:'))
         .map(img => ({
           url: img.url,
           publicId: img.publicId,
@@ -455,20 +490,15 @@ const totalImageCount = useMemo(() => {
           uploadedAt: img.uploadedAt || new Date().toISOString()
         }));
   
-      // Process new base64 images for upload
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
       
-      // Format items with images
       const formattedItems = quotationItems.map(item => ({
-        itemId: item.itemId || item.zohoId,
-        name: item.name,
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
         imagePaths: [...(item.imagePaths || []), ...(item.newImages || [])]
       }));
   
-      // Build quotation images object
       const quotationImages = {};
       quotationItems.forEach((item, index) => {
         const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
@@ -482,12 +512,30 @@ const totalImageCount = useMemo(() => {
         companyId: typeof selectedCompany === 'object' ? selectedCompany._id : selectedCompany,
         currencyCode: selectedCurrency,
         customerId: customer._id,
-        customer: quotationData.customer?.trim(),
-        contact: quotationData.contact?.trim() || "",
+        
         projectName: quotationData.projectName?.trim(),
+        scopeOfWork: quotationData.scopeOfWork?.trim() || "",
+        
+        customer: quotationData.customer?.trim(),
+        customerName: quotationData.customerName?.trim() || "",
+        customerPhone: quotationData.customerPhone?.trim() || "",
+        customerEmail: quotationData.customerEmail?.trim() || "",
+        customerDesignation: quotationData.customerDesignation?.trim() || "",
+        customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber?.trim() || "",
+        customerTaxRegistrationNumber: quotationData.customerTaxRegistrationNumber?.trim() || "",
+        
+        contact: quotationData.customerPhone?.trim() || "",
+        
+        ourFocalPoint: quotationData.ourFocalPoint?.trim() || user?.name || "",
+        ourFocalPointDesignation: quotationData.ourFocalPointDesignation?.trim() || "",
+        ourContact: quotationData.ourContact?.trim() || user?.phone || "",
+        salesManagerEmail: quotationData.salesManagerEmail?.trim() || user?.email || "",
+        
+        date: quotationData.date || getTodayDate(),
+        expiryDate: quotationData?.expiryDate,
+        queryDate: quotationData.queryDate || null,
+        remark: quotationData.remark?.trim() || "",
         ourRef: quotationData.ourRef?.trim() || "",
-        ourContact: quotationData.ourContact?.trim() || "",
-        salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",
         paymentTerms: quotationData.paymentTerms?.trim() || "",
         deliveryTerms: quotationData.deliveryTerms?.trim() || "",
         tl: quotationData.tl?.trim() || "",
@@ -495,30 +543,18 @@ const totalImageCount = useMemo(() => {
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes?.trim() || "",
-        
-        // ✅ RAW TEXT - No HTML
         termsAndConditions: finalTermsAndConditions,
-        
-        // ✅ Send both existing and new images
-        termsImages: newBase64Images, // Send base64 images to backend for Cloudinary upload
-        existingTermsImages: termsImagesForSave, // Send existing Cloudinary URLs
-        
+        termsImages: newBase64Images,
+        existingTermsImages: termsImagesForSave,
         items: formattedItems,
         quotationImages: quotationImages,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
-        queryDate: quotationData.queryDate
       };
-  
-      console.log("📤 Final termsAndConditions (raw):", JSON.stringify(finalTermsAndConditions).substring(0, 300) + "...");
-      console.log("📸 Terms images count:", termsImages.length);
-      console.log("📸 New base64 images:", newBase64Images.length);
-      console.log("📸 Existing cloudinary images:", termsImagesForSave.length);
   
       const result = await addQuotation(quotation);
   
       if (result?.success) {
-        // Clear terms images after successful save
         setTermsImages([]);
         showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
         setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1200);
@@ -534,6 +570,7 @@ const totalImageCount = useMemo(() => {
       setSaveStep("");
     }
   }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency]);
+
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
     setIsExporting(true);
@@ -576,26 +613,20 @@ const totalImageCount = useMemo(() => {
         ? selectedCompany 
         : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
       
-      // Process items with images
       const processedItems = await Promise.all(quotationItems.map(async (item) => {
         const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
         const base64Images = await Promise.all(allImages.map(imageToBase64));
         return {
           ...item,
           imagePaths: base64Images.filter(Boolean),
-          itemId: item.itemId ? { 
-            _id: item.itemId, 
-            name: item.name, 
-            price: item.unitPrice, 
-            description: item.description 
-          } : null
+          name: item.name,
+          description: item.description
         };
       }));
       
       setExportProgress(40);
       setExportStep("Processing terms images...");
       
-      // Extract ALL images from tcSections
       let allTermsImages = [];
       
       if (tcSections && tcSections.length > 0) {
@@ -614,9 +645,6 @@ const totalImageCount = useMemo(() => {
         });
       }
       
-      console.log('📸 Extracted terms images from sections:', allTermsImages.length);
-      
-      // Process terms images to base64
       let processedTermsImages = [];
       if (allTermsImages.length > 0) {
         processedTermsImages = await Promise.all(allTermsImages.map(async (img) => {
@@ -632,7 +660,6 @@ const totalImageCount = useMemo(() => {
       setExportProgress(60);
       setExportStep("Building HTML content...");
       
-      // Process sections for HTML content
       const sectionsWithBase64Images = await Promise.all(tcSections.map(async (section) => {
         if (section.images && section.images.length > 0) {
           const imagesWithBase64 = await Promise.all(
@@ -656,14 +683,18 @@ const totalImageCount = useMemo(() => {
       setExportProgress(80);
       setExportStep("Generating PDF...");
       
-      // Prepare quotation object for PDF generator
       const pdfQuotation = {
         quotationNumber: quotationNumber,
         date: quotationData.date,
         expiryDate: quotationData.expiryDate,
         projectName: quotationData.projectName || '',
+        scopeOfWork: quotationData.scopeOfWork || '',
         customer: quotationData.customer || customer?.name || '',
         contact: quotationData.contact || customer?.phone || '',
+        customerDesignation: quotationData.customerDesignation || '',
+        customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber || '',
+        ourFocalPointDesignation: quotationData.ourFocalPointDesignation || '',
+        remark: quotationData.remark?.trim() || "",
         ourRef: quotationData.ourRef || '',
         ourContact: quotationData.ourContact || '',
         salesManagerEmail: quotationData.salesManagerEmail || '',
@@ -682,11 +713,21 @@ const totalImageCount = useMemo(() => {
           name: customer?.name || quotationData.customer, 
           email: customer?.email, 
           phone: customer?.phone, 
-          address: customer?.address 
+          address: customer?.address,
+          designation: quotationData.customerDesignation || customer?.designation,
+          tradeLicenseNumber: quotationData.customerTradeLicenseNumber || customer?.tradeLicenseNumber
         },
-        companySnapshot: companySnapshot ? { name: companyName, ...companySnapshot } : { name: companyName },
+        companySnapshot: companySnapshot ? { 
+          name: companyName, 
+          ...companySnapshot,
+          focalPointDesignation: quotationData.ourFocalPointDesignation
+        } : { name: companyName },
         termsAndConditions: termsHTML,
-        termsImages: processedTermsImages
+        termsImages: processedTermsImages,
+        companyPhone: companyDetails.phone,
+        companyEmail: companyDetails.email,
+        companyTradeLicense: companyDetails.tradeLicense,
+        companyTaxRegistration: companyDetails.taxRegistration
       };
       
       setExportProgress(90);
@@ -705,7 +746,7 @@ const totalImageCount = useMemo(() => {
       setExportProgress(0);
       setExportStep("");
     }
-  }, [validateAll, quotationData, quotationItems, quotationNumber, selectedCurrency, selectedCompany, companies, customer, companyName, tcSections, showSnack, totalImageCount]);
+  }, [validateAll, quotationData, quotationItems, quotationNumber, selectedCurrency, selectedCompany, companies, customer, companyName, tcSections, showSnack, totalImageCount, companyDetails]);
   
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
     try {
@@ -769,7 +810,6 @@ const totalImageCount = useMemo(() => {
     <div style={styles.container}>
       <style>{styles.globalStyles}</style>
       
-      {/* Reusable Loading Overlays */}
       {isSaving && (
         <LoadingOverlay 
           type="saving"
@@ -792,61 +832,58 @@ const totalImageCount = useMemo(() => {
         <div className="no-print" style={styles.header}>
           <h1 style={styles.title}>📄 Create Quotation</h1>
           <div style={styles.headerActions}>
-            <ActionButton onClick={() => setIsEditing(!isEditing)} disabled={isItemsLoading} 
+            <ActionButton onClick={() => setIsEditing(!isEditing)} disabled={false} 
               bgColor={isEditing ? "#ef4444" : "#f59e0b"} icon={isEditing ? <Save size={18} /> : <Edit2 size={18} />} label={isEditing ? "Done" : "Edit"} />
-            <ActionButton onClick={handleExportPDF} disabled={isExporting || isItemsLoading || hasAnyError} 
+            <ActionButton onClick={handleExportPDF} disabled={isExporting || hasAnyError} 
               bgColor="#0369a1" icon={isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={18} />} 
               label={isExporting ? "Generating…" : "Download PDF"} loading={isExporting} />
             <ActionButton onClick={onBack} bgColor="#6b7280" icon={<ArrowLeft size={18} />} label="Back" />
           </div>
         </div>
         
-        {isItemsLoading && <LoadingState />}
-        {!isItemsLoading && items.length === 0 && <ErrorState message="No items found" />}
-        
-        {isItemsLoading ? (
-          <ContentSkeleton />
-        ) : (
-          <QuotationLayout
-            isEditing={isEditing}
-            quotationNumber={quotationNumber}
-            quotationData={quotationData}
-            onDataChange={handleDataChange}
-            headerErrors={headerErrors}
-            quotationItems={quotationItems}
-            availableItems={items}
-            onUpdateItem={updateItem}
-            onAddItem={addMoreItem}
-            onRemoveItem={removeItem}
-            onAddImages={handleImageUpload}
-            onRemoveExistingImage={handleRemoveImage}
-            onRemoveNewImage={handleRemoveImage}
-            editingImgId={editingImageId}
-            onToggleImgEdit={(id) => setEditingImageId(editingImageId === id ? null : id)}
-            newImages={itemImages}
-            subtotal={subtotal}
-            taxAmount={taxAmount}
-            discountAmount={discountAmount}
-            grandTotal={grandTotal}
-            amountInWords={amountInWords}
-            tcSections={tcSections}
-            onTcChange={setTcSections}
-            fieldErrors={fieldErrors}
-            documents={uploadedDocuments}
-            onDocumentUpload={handleDocumentUpload}
-            onDocumentDelete={handleDocumentDelete}
-            onDocumentDownload={handleDocumentDownload}
-            formatFileSize={formatFileSize}
-            getFileIcon={getFileIcon}
-            setHeaderErrors={setHeaderErrors}
-            companyName={companyName}
-            customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
-            customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
-            termsImages={termsImages}
-            onTermsImagesUpload={handleTermsImagesUpload}
-            onRemoveTermsImage={handleRemoveTermsImage}
-          />
-        )}
+        <QuotationLayout
+          isEditing={isEditing}
+          quotationNumber={quotationNumber}
+          quotationData={quotationData}
+          onDataChange={handleDataChange}
+          headerErrors={headerErrors}
+          quotationItems={quotationItems}
+          availableItems={[]}
+          onUpdateItem={updateItem}
+          onAddItem={addMoreItem}
+          onRemoveItem={removeItem}
+          onAddImages={handleImageUpload}
+          onRemoveExistingImage={handleRemoveImage}
+          onRemoveNewImage={handleRemoveImage}
+          editingImgId={editingImageId}
+          onToggleImgEdit={(id) => setEditingImageId(editingImageId === id ? null : id)}
+          newImages={itemImages}
+          subtotal={subtotal}
+          taxAmount={taxAmount}
+          discountAmount={discountAmount}
+          grandTotal={grandTotal}
+          amountInWords={amountInWords}
+          tcSections={tcSections}
+          onTcChange={setTcSections}
+          fieldErrors={fieldErrors}
+          documents={uploadedDocuments}
+          onDocumentUpload={handleDocumentUpload}
+          onDocumentDelete={handleDocumentDelete}
+          onDocumentDownload={handleDocumentDownload}
+          formatFileSize={formatFileSize}
+          getFileIcon={getFileIcon}
+          setHeaderErrors={setHeaderErrors}
+          companyName={companyName}
+          companyPhone={user?.phone || companyDetails.phone}
+          companyEmail={user?.email || companyDetails.email}
+          companyTradeLicense={companyDetails.tradeLicense}
+          companyTaxRegistration={companyDetails.taxRegistration}
+          customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
+          customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
+          termsImages={termsImages}
+          onTermsImagesUpload={handleTermsImagesUpload}
+          onRemoveTermsImage={handleRemoveTermsImage}
+        />
         
         {!isEditing && (
           <SaveButton 
@@ -857,6 +894,19 @@ const totalImageCount = useMemo(() => {
           />
         )}
       </div>
+      
+      {/* Item Modal for Add/Edit */}
+      <ItemModal
+        isOpen={isAddItemModalOpen}
+        onClose={() => {
+          setIsAddItemModalOpen(false);
+          setEditingItem(null);
+        }}
+        onAddItem={handleAddManualItem}
+        onEditItem={handleEditItem}
+        editingItem={editingItem}
+        selectedCurrency={selectedCurrency}
+      />
       
       {snackbar.show && <Snackbar message={snackbar.message} type={snackbar.type} onClose={hideSnack} />}
     </div>
@@ -879,7 +929,6 @@ const styles = {
   loadingState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#1e40af" },
   errorState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#991b1b" },
   
-  // Enhanced Save Button
   saveButtonContainer: { display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem", marginTop: "2rem" },
   saveButton: { backgroundColor: "#10b981", color: "white", padding: "1rem 2rem", borderRadius: "0.5rem", fontWeight: "bold", border: "none", cursor: "pointer", fontSize: "1rem", display: "flex", alignItems: "center", gap: "0.75rem", transition: "all 0.2s" },
   saveError: { display: "flex", alignItems: "center", gap: "0.375rem", color: "#dc2626", fontSize: "0.8125rem", fontWeight: "500" },
@@ -887,7 +936,6 @@ const styles = {
   spinningIcon: { animation: "spin 1s linear infinite", marginBottom: "1rem" },
   spinningIconSmall: { animation: "spin 1s linear infinite" },
   
-  // Skeleton Styles
   skeletonContainer: { background: "white", borderRadius: "1rem", padding: "2rem", boxShadow: "0 1px 3px rgba(0,0,0,.06)" },
   skeletonHeader: { display: "flex", justifyContent: "space-between", marginBottom: "2rem" },
   skeletonLine: { width: "160px", height: "20px", borderRadius: "6px", background: "linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)", backgroundSize: "200% 100%", animation: "skeleton 1.4s ease infinite" },

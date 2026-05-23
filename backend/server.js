@@ -2,21 +2,24 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cloudinary = require('cloudinary').v2;
+const helmet = require('helmet');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 
 const connectDB = require('./config/db');
 const redisService = require('./config/redisService');
 const ItemSyncService = require('./utils/itemsSync');
+
 const app = express();
 
 // ── CORS Configuration ───────────────────────────────────────────────────
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://13.234.239.26',
-];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : [];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // allow requests with no origin (like Postman, curl)
+    
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {
@@ -35,22 +38,23 @@ const corsOptions = {
   exposedHeaders: ['x-company-id'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 };
+app.use(helmet());
+app.use(compression());
 app.use(cors(corsOptions));
 app.options('*', (req, res) => {
   res.sendStatus(200);
 });
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200
+});
+
+app.use(limiter);
 // ── Body parsing middleware ──────────────────────────────────────────────
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
-// TEMPORARY DEBUG — remove after fixing
-console.log('CLOUDINARY CHECK:', {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-    ? `${process.env.CLOUDINARY_API_SECRET.slice(0, 4)}...${process.env.CLOUDINARY_API_SECRET.slice(-4)} (len:${process.env.CLOUDINARY_API_SECRET.length})`
-    : 'MISSING',
-});
+ 
 
 // ── Cloudinary config ─────────────────────────────────────────────────────
 cloudinary.config({
@@ -58,10 +62,13 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-app.use((req, res, next) => {
-  console.log('➡️', req.method, req.url);
-  next();
-});
+
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    console.log('➡️', req.method, req.url);
+    next();
+  });
+}
 
 // ── Routes ────────────────────────────────────────────────────────────────
 const customerRoutes = require('./routes/customerRoutes');
@@ -71,6 +78,7 @@ const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const exchangeRateRoutes = require('./routes/exchangeRates');
 const companyRoutes = require('./routes/companyRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 app.use('/api/customers', customerRoutes);
 app.use('/api/items', itemRoutes);
@@ -79,42 +87,14 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/exchange-rates', exchangeRateRoutes);
 app.use('/api/companies', companyRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // ── Root ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ message: 'Quotation System API Running' });
 });
 
-// ── Redis Health Check Endpoint ───────────────────────────────────────────
-app.get('/api/health/redis', async (req, res) => {
-  try {
-    // Check connection status
-    const status = redisService.getStatus();
-    
-    if (!status.isConnected) {
-      // Try to reconnect
-      await redisService.connect();
-    }
-    
-    // Test Redis connection by setting and getting a test key
-    await redisService.set('health_check', { status: 'ok', timestamp: Date.now() }, 10);
-    const result = await redisService.get('health_check');
-    
-    res.json({
-      success: true,
-      status: redisService.getStatus(),
-      test: result?.status === 'ok' ? 'passed' : 'failed',
-      message: redisService.isConnected ? 'Redis is connected' : 'Redis is not connected'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      connected: false,
-      status: redisService.getStatus(),
-      error: error.message
-    });
-  }
-});
+ 
 
 // ── Global error handler ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
@@ -218,9 +198,8 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
     console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   });
 } else {
-  // Serverless environment (Vercel, AWS Lambda)
-  module.exports = app;
+   module.exports = app;
   
-  // Still initialize for serverless (but don't start server)
-  initializeApp();
+   initializeApp();
 }
+ 

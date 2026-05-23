@@ -1,4 +1,3 @@
-// screens/OpsDashboard.jsx (OPTIMIZED + RESPONSIVE - FIXED)
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -60,6 +59,89 @@ const useMediaQuery = (query) => {
   return matches;
 };
 
+// Shimmer Components
+const ShimmerStatCard = () => (
+  <div style={{
+    background: 'white',
+    borderRadius: '20px',
+    padding: '1.25rem',
+    border: '1px solid #f1f5f9',
+  }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div>
+        <ShimmerLine width="80px" height="12px" />
+        <ShimmerLine width="60px" height="28px" style={{ marginTop: '8px' }} />
+        <ShimmerLine width="100px" height="10px" style={{ marginTop: '8px' }} />
+      </div>
+      <ShimmerCircle size={40} />
+    </div>
+  </div>
+);
+
+const ShimmerLine = ({ width, height, style = {} }) => (
+  <div
+    style={{
+      width,
+      height,
+      borderRadius: '8px',
+      background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+      backgroundSize: '200% 100%',
+      animation: 'shimmer 1.5s ease infinite',
+      ...style,
+    }}
+  />
+);
+
+const ShimmerCircle = ({ size }) => (
+  <div
+    style={{
+      width: size,
+      height: size,
+      borderRadius: '50%',
+      background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+      backgroundSize: '200% 100%',
+      animation: 'shimmer 1.5s ease infinite',
+    }}
+  />
+);
+
+const ShimmerTableRow = () => (
+  <tr>
+    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
+      <td key={i} style={{ padding: '12px 16px' }}>
+        <ShimmerLine width={i === 1 ? '80px' : i === 8 ? '70px' : '120px'} height="16px" />
+      </td>
+    ))}
+  </tr>
+);
+
+const ShimmerCard = () => (
+  <div style={{
+    background: 'white',
+    borderRadius: '12px',
+    padding: '1rem',
+    marginBottom: '0.75rem',
+    border: '1px solid #f1f5f9',
+  }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+      <ShimmerLine width="100px" height="20px" />
+      <ShimmerLine width="80px" height="20px" />
+    </div>
+    <ShimmerLine width="150px" height="18px" style={{ marginBottom: '0.5rem' }} />
+    <ShimmerLine width="200px" height="14px" style={{ marginBottom: '0.5rem' }} />
+    <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
+      <ShimmerLine width="80px" height="12px" />
+      <ShimmerLine width="80px" height="12px" />
+      <ShimmerLine width="60px" height="12px" />
+    </div>
+    <div style={{ display: 'flex', gap: '0.5rem', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
+      <ShimmerLine width="60px" height="32px" />
+      <ShimmerLine width="60px" height="32px" />
+      <ShimmerLine width="70px" height="32px" />
+    </div>
+  </div>
+);
+
 // ─────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────
@@ -108,7 +190,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'pending';
-  // const canAward = quotation.status === 'approved'; 
   const canAward = quotation.status === 'approved' && ( quotation.createdBy?.role === 'ops_manager' || quotation.createdBySnapshot?.role === 'ops_manager');
 
   return (
@@ -217,21 +298,27 @@ OpsQuotationCard.displayName = 'OpsQuotationCard';
 // ─────────────────────────────────────────────────────────────
 const useTableData = (quotations, activeTab, search, sort) => {
   return useMemo(() => {
-    const { statusFilter } = TAB_KEYS[activeTab];
+    // Add safety check
+    if (!quotations || !Array.isArray(quotations) || quotations.length === 0) {
+      return { filtered: [], total: 0 };
+    }
     
-    // If statusFilter is null or 'all', show all quotations
+    const { statusFilter } = TAB_KEYS[activeTab] || TAB_KEYS.all;
+    
     const tabFiltered = !statusFilter || statusFilter === 'all' 
       ? quotations 
-      : quotations.filter(q => q.status === statusFilter);
+      : quotations.filter(q => q && q.status === statusFilter);
 
     const searchFiltered = !search.trim() ? tabFiltered :
       tabFiltered.filter(q => {
+        if (!q) return false;
         const t = search.toLowerCase();
         return (q.quotationNumber || '').toLowerCase().includes(t) ||
                (q.customerSnapshot?.name || q.customer || q.customerId?.name || '').toLowerCase().includes(t);
       });
 
     const sorted = [...searchFiltered].sort((a, b) => {
+      if (!a || !b) return 0;
       const { field, dir } = sort;
       let av = a[field], bv = b[field];
       
@@ -241,6 +328,9 @@ const useTableData = (quotations, activeTab, search, sort) => {
       } else if (field === 'customer') {
         av = (a.customerSnapshot?.name || a.customer || a.customerId?.name || '').toLowerCase();
         bv = (b.customerSnapshot?.name || b.customer || b.customerId?.name || '').toLowerCase();
+      } else if (field === 'createdBy') {
+        av = (a.createdBy?.name || a.createdBySnapshot?.name || '').toLowerCase();
+        bv = (b.createdBy?.name || b.createdBySnapshot?.name || '').toLowerCase();
       } else {
         av = av ?? '';
         bv = bv ?? '';
@@ -254,7 +344,6 @@ const useTableData = (quotations, activeTab, search, sort) => {
     };
   }, [quotations, activeTab, search, sort]);
 };
-
 
 // ─────────────────────────────────────────────────────────────
 // Main Dashboard
@@ -307,6 +396,8 @@ export default function OpsDashboard({ onViewQuotation }) {
   const { toasts, addToast, dismissToast } = useToast();
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
+  const isMountedRef = useRef(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   // ── Table state ───────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('all');
@@ -332,18 +423,59 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [isMobile]);
 
-  // Load initial data
+  // Mark component as mounted
   useEffect(() => {
-    if (selectedCompany) {
-      refreshCompanyQuotations();
-      refreshStats();
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Load initial data - Only once
+  useEffect(() => {
+    if (!selectedCompany || hasLoadedOnce) return;
+    
+    const loadInitialData = async () => {
+      try {
+        await Promise.all([
+          refreshCompanyQuotations(),
+          refreshStats()
+        ]);
+        if (isMountedRef.current) {
+          setHasLoadedOnce(true);
+        }
+      } catch (error) {
+        console.error('Initial load error:', error);
+        if (isMountedRef.current) {
+          setHasLoadedOnce(true);
+        }
+      }
+    };
+    
+    loadInitialData();
+  }, [selectedCompany, refreshCompanyQuotations, refreshStats, hasLoadedOnce]);
+
+  // Auto-refresh if data is not initialized
+  useEffect(() => {
+    if (!hasLoadedOnce && !quotationsLoading && !statsLoading && selectedCompany) {
+      const timer = setTimeout(() => {
+        Promise.all([
+          refreshCompanyQuotations(),
+          refreshStats()
+        ]);
+      }, 500);
+      return () => clearTimeout(timer);
     }
-  }, [selectedCompany, refreshCompanyQuotations, refreshStats]);
+  }, [hasLoadedOnce, quotationsLoading, statsLoading, selectedCompany, refreshCompanyQuotations, refreshStats]);
 
   // ── Derived state ─────────────────────────────────────────
-  const hasFetched = !quotationsLoading && companyQuotations.length > 0;
-  const isInitialLoading = quotationsLoading && !hasFetched;
-  const isRefreshing = quotationsLoading && hasFetched;
+  // Fix: Treat undefined loading as true initially
+  const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
+
+  const isLoading = (!hasLoadedOnce && (safeQuotationsLoading || statsLoading)) || 
+                    (hasLoadedOnce && safeQuotationsLoading && (!companyQuotations || companyQuotations.length === 0));
+
+  const isRefreshing = hasLoadedOnce && safeQuotationsLoading && companyQuotations?.length > 0;
 
   // ── Safe quotation array (filtered by selected company) ──
   const safeQ = useMemo(() => {
@@ -351,6 +483,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     if (!selectedCompany) return companyQuotations;
     
     return companyQuotations.filter(q => {
+      if (!q) return false;
       const match = q.companyId === selectedCompany || 
                     q.companyId?._id === selectedCompany ||
                     q.companyId?.toString() === selectedCompany?.toString();
@@ -370,15 +503,29 @@ export default function OpsDashboard({ onViewQuotation }) {
   const safePage = Math.min(page, totalPages);
 
   // ── Tab counts ────────────────────────────────────────────
-  const tabCounts = useMemo(() => ({
-    all: safeQ.length,
-    pending: safeQ.filter(q => q.status === 'pending').length,
-    ops_approved: safeQ.filter(q => q.status === 'ops_approved').length,
-    ops_rejected: safeQ.filter(q => q.status === 'ops_rejected').length,
-    rejected: safeQ.filter(q => q.status === 'rejected').length,
-    approved: safeQ.filter(q => q.status === 'approved').length,
-    awarded: safeQ.filter(q => q.status === 'awarded').length,
-  }), [safeQ]);
+  const tabCounts = useMemo(() => {
+    if (!Array.isArray(safeQ) || safeQ.length === 0) {
+      return {
+        all: 0,
+        pending: 0,
+        ops_approved: 0,
+        ops_rejected: 0,
+        rejected: 0,
+        approved: 0,
+        awarded: 0,
+      };
+    }
+    
+    return {
+      all: safeQ.length,
+      pending: safeQ.filter(q => q && q.status === 'pending').length,
+      ops_approved: safeQ.filter(q => q && q.status === 'ops_approved').length,
+      ops_rejected: safeQ.filter(q => q && q.status === 'ops_rejected').length,
+      rejected: safeQ.filter(q => q && q.status === 'rejected').length,
+      approved: safeQ.filter(q => q && q.status === 'approved').length,
+      awarded: safeQ.filter(q => q && q.status === 'awarded').length,
+    };
+  }, [safeQ]);
 
   // ── Loading helpers ───────────────────────────────────────
   const setOp = useCallback((id, action, val) => {
@@ -423,8 +570,10 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   const handleRefresh = useCallback(async () => {
     try {
-      await refreshCompanyQuotations();
-      await refreshStats();
+      await Promise.all([
+        refreshCompanyQuotations(),
+        refreshStats()
+      ]);
       addToast('Data refreshed', 'success');
     } catch (err) {
       addToast(err.message || 'Refresh failed', 'error');
@@ -437,8 +586,10 @@ export default function OpsDashboard({ onViewQuotation }) {
       const result = await opsApproveQuotation(id);
       if (result?.success) {
         addToast('Quotation approved and forwarded to admin', 'success');
-        await refreshCompanyQuotations();
-        await refreshStats();
+        await Promise.all([
+          refreshCompanyQuotations(),
+          refreshStats()
+        ]);
       } else {
         addToast(result?.error || 'Failed to approve quotation', 'error');
       }
@@ -464,8 +615,10 @@ export default function OpsDashboard({ onViewQuotation }) {
         if (result?.success) {
           addToast('Quotation rejected', 'success');
           handleReject.close();
-          await refreshCompanyQuotations();
-          await refreshStats();
+          await Promise.all([
+            refreshCompanyQuotations(),
+            refreshStats()
+          ]);
         } else {
           addToast(result?.error || 'Failed to reject quotation', 'error');
         }
@@ -498,7 +651,6 @@ export default function OpsDashboard({ onViewQuotation }) {
   }, [onViewQuotation, navigate]);
 
   const handleAwardOpen = useCallback((quotation) => {
-    console.log('🎯 Opening award modal for:', quotation.quotationNumber);
     setAwardModal({
       open: true,
       quotation,
@@ -507,7 +659,6 @@ export default function OpsDashboard({ onViewQuotation }) {
   }, []);
   
   const handleAwardClose = useCallback(() => {
-    console.log('🔴 Closing award modal');
     setAwardModal({
       open: false,
       quotation: null,
@@ -516,18 +667,12 @@ export default function OpsDashboard({ onViewQuotation }) {
   }, []);
   
   const handleAwardConfirm = useCallback(async (awarded, awardNote) => {
-    console.log('📝 Confirming award:', { awarded, awardNote, quotation: awardModal.quotation });
-    
-    if (!awardModal.quotation) {
-      console.error('No quotation in award modal');
-      return;
-    }
+    if (!awardModal.quotation) return;
     
     setAwardModal(prev => ({ ...prev, loading: true }));
     
     try {
       const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
-      console.log('Award result:', result);
       
       if (result?.success) {
         addToast(
@@ -536,8 +681,10 @@ export default function OpsDashboard({ onViewQuotation }) {
             : `"${awardModal.quotation.quotationNumber}" marked as Not Awarded.`,
           "success"
         );
-        await refreshCompanyQuotations();
-        await refreshStats();
+        await Promise.all([
+          refreshCompanyQuotations(),
+          refreshStats()
+        ]);
         handleAwardClose();
       } else {
         addToast(result?.error || "Failed to update award status", "error");
@@ -549,6 +696,7 @@ export default function OpsDashboard({ onViewQuotation }) {
       setAwardModal(prev => ({ ...prev, loading: false }));
     }
   }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose]);
+
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
@@ -574,25 +722,16 @@ export default function OpsDashboard({ onViewQuotation }) {
     { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCounts.awarded },
   ], [tabCounts]);
 
-  const NavBtn = React.memo(({ onClick, label, primary }) => (
-    <button onClick={onClick} className="ops-nav-btn" style={{
-      backgroundColor: primary ? 'white' : 'rgba(255,255,255,0.08)',
-      color: primary ? '#0f172a' : '#94a3b8',
-      border: primary ? 'none' : '1px solid rgba(255,255,255,0.12)',
-      borderRadius: 8,
-      padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-      fontSize: isMobile ? '0.7rem' : '0.8rem',
-      fontWeight: 600,
-      cursor: 'pointer',
-      transition: 'all 0.15s',
-      whiteSpace: 'nowrap'
-    }}>
-      {label}
-    </button>
-  ));
-
-  // ── Render helpers ────────────────────────────────────────
+  // ── Render helpers with Shimmer ──────────────────────────
   const renderStatCards = () => {
+    if (isLoading) {
+      return (
+        <div style={styles.statsGrid}>
+          {[1, 2, 3, 4].map(i => <ShimmerStatCard key={i} />)}
+        </div>
+      );
+    }
+
     if (isMobile) {
       const statusCounts = {
         pending: pendingReview,
@@ -608,7 +747,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           customersCount={0}
           selectedCurrency={selectedCurrency}
           statusCounts={statusCounts}
-          loading={statsLoading}
+          loading={false}
         />
       );
     }
@@ -622,7 +761,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           iconBg="#eff1ff" 
           iconColor="#6366f1" 
           Icon={FileText} 
-          loading={statsLoading} 
+          loading={false} 
           sub="All quotations in system"
         />
         <StatCard 
@@ -632,7 +771,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           iconBg="#fef3c7" 
           iconColor="#f59e0b" 
           Icon={Clock} 
-          loading={statsLoading} 
+          loading={false} 
           sub="Awaiting your review"
         />
         <StatCard 
@@ -642,7 +781,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           iconBg="#dbeafe" 
           iconColor="#3b82f6" 
           Icon={Shield} 
-          loading={statsLoading} 
+          loading={false} 
           sub="Forwarded to admin"
         />
         <StatCard 
@@ -652,206 +791,277 @@ export default function OpsDashboard({ onViewQuotation }) {
           iconBg="#fee2e2" 
           iconColor="#ef4444" 
           Icon={Ban} 
-          loading={statsLoading} 
+          loading={false} 
           sub="Rejected quotations"
         />
       </div>
     );
   };
 
-  const renderTableHeader = () => (
-    <div style={styles.tableHeader}>
-      <div style={styles.tabContainer}>
-        {TABS.map(({ key, label, Icon: I, count }) => {
-          const active = activeTab === key;
-          const alertColor = key === 'pending' ? '#f59e0b' : key === 'ops_approved' ? '#3b82f6' : '#ef4444';
-          const hasAlert = count > 0;
-          
-          return (
-            <button key={key} className="ops-tab" onClick={() => handleTabChange(key)} style={{
-              ...styles.tabButton,
-              backgroundColor: active ? '#fff' : 'transparent',
-              color: active ? '#0f172a' : '#64748b',
-              boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-              padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
-              fontSize: isMobile ? '0.7rem' : '0.8rem'
-            }}>
-              <I size={isMobile ? 11 : 13}/>
-              {!isMobile && label}
-              <span style={{
-                backgroundColor: active ? (hasAlert ? alertColor : '#0f172a') : (hasAlert ? alertColor : '#e2e8f0'),
-                color: (active || hasAlert) ? '#fff' : '#64748b',
-                ...styles.tabCount,
-                padding: isMobile ? '1px 5px' : '1px 7px',
-                fontSize: isMobile ? '0.6rem' : '0.68rem'
-              }}>
-                {isInitialLoading ? '…' : count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+  const renderContent = () => {
+    if (isLoading) {
+      return (
+        <>
+          {isMobile ? (
+            <div style={{ padding: '1rem' }}>
+              {[1, 2, 3, 4, 5].map(i => <ShimmerCard key={i} />)}
+            </div>
+          ) : (
+            <div style={styles.tableWrapper}>
+              <table style={styles.table}>
+                <thead>
+                  <tr style={{ backgroundColor: '#fafafa' }}>
+                    {['Quote #','Customer','Date','Expiry','Status','Created By','Items','Total','Actions'].map(h => (
+                      <th key={h} style={styles.skeletonHeader}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[1, 2, 3, 4, 5, 6].map(i => <ShimmerTableRow key={i} />)}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      );
+    }
 
-      <div style={styles.headerActions}>
-        <button onClick={handleRefresh} disabled={quotationsLoading} style={styles.refreshBtn}>
-          <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={quotationsLoading ? styles.spin : {}}/>
-        </button>
-        <div style={styles.searchBox}>
-          <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
-          <input
-            ref={searchRef}
-            style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
-            placeholder="Search… (press /)"
-            value={searchInput}
-            onChange={handleSearchChange}
-          />
-          {searchInput && (
-            <button onClick={clearSearch} style={styles.clearSearchBtn}>
-              <X size={13}/>
+    if (!isLoading && safeQ.length === 0) {
+      return (
+        <div style={styles.emptyState}>
+          <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
+          <p style={styles.emptyStateTitle}>
+            {search ? `No results for "${search}"` : 'No quotations found'}
+          </p>
+          {search && (
+            <button onClick={clearSearch} style={styles.emptyStateClear}>
+              Clear search
             </button>
           )}
         </div>
-        {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
-      </div>
-    </div>
-  );
+      );
+    }
 
-  const renderTableRow = (q) => {
-    const isDownloading = downloadLoadingId === q._id;
-    const canAct = q.status === 'pending';  
-    // const canAward = q.status === 'approved';
-    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
-
-    const isAdminRejected = q.status === 'rejected';
-    const expired = isExpired(q.expiryDate);
-    const expiring = !expired && isExpiringSoon(q.expiryDate);
-  
     return (
-      <tr key={q._id} className="ops-row" style={{
-        backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
-      }}>
-        <td style={styles.cell}>
-          <div style={styles.quoteCell}>
-            <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
-            {expired && <ExpiryBadge type="expired" />}
-            {expiring && <ExpiryBadge type="expiring" />}
-          </div>
-        </td>
-        <td style={styles.cell}>
-          <div style={styles.customerCell}>
-            <div style={styles.customerName}>
-              {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
-            </div>
-            {q.contact && <div style={styles.contactText}>{q.contact}</div>}
-          </div>
-        </td>
-        <td style={styles.dateCell}>{fmtDate(q.date)}</td>
-        <td style={styles.dateCell}>
-          <span style={{ 
-            color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
-            fontWeight: expired || expiring ? 600 : 400
+      <>
+        {(isMobile || viewMode === 'card') ? (
+          <div style={{ 
+            padding: isMobile ? '1rem' : '1.5rem',
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
+            gap: isMobile ? '0.75rem' : '1rem'
           }}>
-            {fmtDate(q.expiryDate)}
-          </span>
-        </td>
-        <td style={styles.cell}>
-          <StatusBadge status={q.status}/>
-          <RejectionNote quotation={q}/>
-        </td>
-        <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
-        <td style={{ ...styles.cell, textAlign: 'center' }}>
-          <ItemsBadge count={q.items?.length ?? 0} />
-        </td>
-        <td style={styles.totalCell}>
-          {fmtCurrency(q.total, selectedCurrency)}
-        </td>
-        <td style={styles.actionsCell}>
-          <div style={styles.actionsContainer}>
-            <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
-              icon={Eye} label="View" title="View quotation" size="small"/>
-            
-            <ActionBtn
-              bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
-              color={isDownloading ? '#94a3b8' : '#166534'}
-              onClick={() => !isDownloading && handleDownload(q)} 
-              disabled={isDownloading}
-              icon={isDownloading ? RefreshCw : Download} 
-              label={isDownloading ? '…' : 'PDF'} 
-              title="Download PDF"
-              size="small"
-            />
-            
-            {canAct && (
-              <>
-                <ActionBtn 
-                  bg="#dcfce7" 
-                  color="#166534" 
-                  onClick={() => handleApprove(q._id)} 
-                  icon={Check} 
-                  label="Approve" 
-                  title="Approve quotation"
-                  disabled={isOp(q._id, 'approve')}
-                  size="small"
+            {paginated.length === 0 ? (
+              <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
+                No results for "<strong>{search}</strong>"
+                <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
+              </div>
+            ) : (
+              paginated.map((q) => (
+                <OpsQuotationCard
+                  key={q._id}
+                  quotation={q}
+                  selectedCurrency={selectedCurrency}
+                  onView={handleView}
+                  onApprove={handleApprove}
+                  onReject={handleReject.open}
+                  onDownload={handleDownload}
+                  onAward={handleAwardOpen}
+                  isDownloading={downloadLoadingId === q._id}
+                  isApproving={isOp(q._id, 'approve')}
+                  isRejecting={isOp(q._id, 'reject')}
+                  isAwarding={isOp(q._id, 'award')} 
                 />
-                <ActionBtn 
-                  bg="#fee2e2" 
-                  color="#991b1b" 
-                  onClick={() => handleReject.open(q)} 
-                  icon={X} 
-                  label="Reject" 
-                  title="Reject quotation"
-                  disabled={isOp(q._id, 'reject')}
-                  size="small"
-                />
-              </>
-            )}
-            {canAward && (
-              <ActionBtn 
-                bg="#e9d5ff" 
-                color="#6b21a8" 
-                onClick={() => handleAwardOpen(q)} 
-                icon={Award} 
-                label="Award" 
-                title="Mark as Awarded / Not Awarded"
-                size="small"
-                disabled={isOp(q._id, 'award')}
-              />
+              ))
             )}
           </div>
-        </td>
-      </tr>
+        ) : (
+          <div style={styles.tableWrapper}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
+                  <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
+                  <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
+                  <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
+                  <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
+                  <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
+                  <th style={styles.itemsHeaderCell}>Items</th>
+                  <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
+                  <th style={styles.actionsHeaderCell}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginated.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={styles.noResults}>
+                      No results for "<strong>{search}</strong>"
+                      <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
+                    </td>
+                  </tr>
+                ) : paginated.map((q) => {
+                  const isDownloading = downloadLoadingId === q._id;
+                  const canAct = q.status === 'pending';  
+                  const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
+                  const isAdminRejected = q.status === 'rejected';
+                  const expired = isExpired(q.expiryDate);
+                  const expiring = !expired && isExpiringSoon(q.expiryDate);
+                
+                  return (
+                    <tr key={q._id} className="ops-row" style={{
+                      backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
+                    }}>
+                      <td style={styles.cell}>
+                        <div style={styles.quoteCell}>
+                          <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
+                          {expired && <ExpiryBadge type="expired" />}
+                          {expiring && <ExpiryBadge type="expiring" />}
+                        </div>
+                      </td>
+                      <td style={styles.cell}>
+                        <div style={styles.customerCell}>
+                          <div style={styles.customerName}>
+                            {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
+                          </div>
+                          {q.contact && <div style={styles.contactText}>{q.contact}</div>}
+                        </div>
+                      </td>
+                      <td style={styles.dateCell}>{fmtDate(q.date)}</td>
+                      <td style={styles.dateCell}>
+                        <span style={{ 
+                          color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
+                          fontWeight: expired || expiring ? 600 : 400
+                        }}>
+                          {fmtDate(q.expiryDate)}
+                        </span>
+                      </td>
+                      <td style={styles.cell}>
+                        <StatusBadge status={q.status}/>
+                        <RejectionNote quotation={q}/>
+                      </td>
+                      <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
+                      <td style={{ ...styles.cell, textAlign: 'center' }}>
+                        <ItemsBadge count={q.items?.length ?? 0} />
+                      </td>
+                      <td style={styles.totalCell}>
+                        {fmtCurrency(q.total, selectedCurrency)}
+                      </td>
+                      <td style={styles.actionsCell}>
+                        <div style={styles.actionsContainer}>
+                          <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
+                            icon={Eye} label="View" title="View quotation" size="small"/>
+                          
+                          <ActionBtn
+                            bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
+                            color={isDownloading ? '#94a3b8' : '#166534'}
+                            onClick={() => !isDownloading && handleDownload(q)} 
+                            disabled={isDownloading}
+                            icon={isDownloading ? RefreshCw : Download} 
+                            label={isDownloading ? '…' : 'PDF'} 
+                            title="Download PDF"
+                            size="small"
+                          />
+                          
+                          {canAct && (
+                            <>
+                              <ActionBtn 
+                                bg="#dcfce7" 
+                                color="#166534" 
+                                onClick={() => handleApprove(q._id)} 
+                                icon={Check} 
+                                label="Approve" 
+                                title="Approve quotation"
+                                disabled={isOp(q._id, 'approve')}
+                                size="small"
+                              />
+                              <ActionBtn 
+                                bg="#fee2e2" 
+                                color="#991b1b" 
+                                onClick={() => handleReject.open(q)} 
+                                icon={X} 
+                                label="Reject" 
+                                title="Reject quotation"
+                                disabled={isOp(q._id, 'reject')}
+                                size="small"
+                              />
+                            </>
+                          )}
+                          {canAward && (
+                            <ActionBtn 
+                              bg="#e9d5ff" 
+                              color="#6b21a8" 
+                              onClick={() => handleAwardOpen(q)} 
+                              icon={Award} 
+                              label="Award" 
+                              title="Mark as Awarded / Not Awarded"
+                              size="small"
+                              disabled={isOp(q._id, 'award')}
+                            />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        
+        {/* Pagination */}
+        {!isMobile && totalFiltered > 0 && (
+          <PaginationBar
+            total={totalFiltered}
+            page={safePage}
+            limit={limit}
+            onPage={setPage}
+            onLimit={(l) => { setLimit(l); setPage(1); }}
+          />
+        )}
+        
+        {/* Mobile Pagination */}
+        {isMobile && totalFiltered > 0 && (
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+              {((safePage - 1) * limit) + 1}–{Math.min(safePage * limit, totalFiltered)} of {totalFiltered}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button 
+                onClick={() => setPage(p => Math.max(1, p - 1))} 
+                disabled={safePage === 1}
+                style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
+              >
+                Previous
+              </button>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>
+                {safePage} / {totalPages}
+              </span>
+              <button 
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
+                disabled={safePage === totalPages}
+                style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </>
     );
   };
-
-  const renderEmptyState = () => (
-    <div style={styles.emptyState}>
-      <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
-      <p style={styles.emptyStateTitle}>
-        {search ? `No results for "${search}"` : 'No quotations found'}
-      </p>
-      {search && (
-        <button onClick={clearSearch} style={styles.emptyStateClear}>
-          Clear search
-        </button>
-      )}
-    </div>
-  );
-
-  const renderRefreshOverlay = () => (
-    <div style={styles.refreshOverlay}>
-      <div style={styles.refreshCard}>
-        <RefreshCw size={isMobile ? 20 : 24} color="#6366f1" style={styles.spin}/>
-        <span style={styles.refreshText}>Refreshing…</span>
-      </div>
-    </div>
-  );
 
   // ─────────────────────────────────────────────────────────
   // Main Render
   // ─────────────────────────────────────────────────────────
   return (
     <div style={styles.container}>
-      <style>{styles.animations}</style>
+      <style>{`
+        @keyframes shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+        ${styles.animations}
+      `}</style>
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
@@ -883,10 +1093,8 @@ export default function OpsDashboard({ onViewQuotation }) {
           justifyContent: isMobile ? 'center' : 'flex-end'
         }}>
           <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
-          {/* <NavBtn onClick={() => navigate('/home')} label="Home" /> */}
           <button 
             onClick={() => navigate('/customers')}
-            className="adm-nav-btn" 
             style={{
               backgroundColor: '#e0e7ff',
               color: '#4f46e5',
@@ -905,7 +1113,6 @@ export default function OpsDashboard({ onViewQuotation }) {
           </button>
           <button 
             onClick={() => navigate('/items')}
-            className="adm-nav-btn" 
             style={{
               backgroundColor: '#e0e7ff',
               color: '#4f46e5',
@@ -925,7 +1132,6 @@ export default function OpsDashboard({ onViewQuotation }) {
 
           <button 
             onClick={() => navigate('/quotation/new')}
-            className="adm-nav-btn" 
             style={{
               backgroundColor: '#10b981',
               color: 'white',
@@ -942,7 +1148,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           >
             <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
           </button>
-          <button onClick={handleLogout} className="ops-nav-btn" style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
+          <button onClick={handleLogout} style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
             <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
           </button>
         </div>
@@ -972,126 +1178,63 @@ export default function OpsDashboard({ onViewQuotation }) {
         {/* Table Card */}
         <div style={styles.tableCard}>
           {/* Header */}
-          {renderTableHeader()}
-
-          {/* Skeleton Loading */}
-          {isInitialLoading && <LoadingSkeleton isMobile={isMobile} />}
-
-          {/* Refresh Overlay */}
-          {isRefreshing && paginated.length > 0 && renderRefreshOverlay()}
-
-          {/* Data Table/Cards */}
-          {hasFetched && !isInitialLoading && (
-            <>
-              {safeQ.length === 0 ? (
-                renderEmptyState()
-              ) : (
-                <>
-                  {(isMobile || viewMode === 'card') ? (
-                    // Card View
-                    <div style={{ 
-                      padding: isMobile ? '1rem' : '1.5rem',
-                      display: 'grid',
-                      gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
-                      gap: isMobile ? '0.75rem' : '1rem'
+          <div style={styles.tableHeader}>
+            <div style={styles.tabContainer}>
+              {TABS.map(({ key, label, Icon: I, count }) => {
+                const active = activeTab === key;
+                const alertColor = key === 'pending' ? '#f59e0b' : key === 'ops_approved' ? '#3b82f6' : '#ef4444';
+                const hasAlert = count > 0;
+                
+                return (
+                  <button key={key} className="ops-tab" onClick={() => handleTabChange(key)} style={{
+                    ...styles.tabButton,
+                    backgroundColor: active ? '#fff' : 'transparent',
+                    color: active ? '#0f172a' : '#64748b',
+                    boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
+                    fontSize: isMobile ? '0.7rem' : '0.8rem'
+                  }}>
+                    <I size={isMobile ? 11 : 13}/>
+                    {!isMobile && label}
+                    <span style={{
+                      backgroundColor: active ? (hasAlert ? alertColor : '#0f172a') : (hasAlert ? alertColor : '#e2e8f0'),
+                      color: (active || hasAlert) ? '#fff' : '#64748b',
+                      ...styles.tabCount,
+                      padding: isMobile ? '1px 5px' : '1px 7px',
+                      fontSize: isMobile ? '0.6rem' : '0.68rem'
                     }}>
-                      {paginated.length === 0 ? (
-                        <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
-                          No results for "<strong>{search}</strong>"
-                          <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
-                        </div>
-                      ) : (
-                        paginated.map((q) => (
-                          <OpsQuotationCard
-                            key={q._id}
-                            quotation={q}
-                            selectedCurrency={selectedCurrency}
-                            onView={handleView}
-                            onApprove={handleApprove}
-                            onReject={handleReject.open}
-                            onDownload={handleDownload}
-                            onAward={handleAwardOpen}
-                            isDownloading={downloadLoadingId === q._id}
-                            isApproving={isOp(q._id, 'approve')}
-                            isRejecting={isOp(q._id, 'reject')}
-                            isAwarding={isOp(q._id, 'award')} 
-                          />
-                        ))
-                      )}
-                    </div>
-                  ) : (
-                    // Desktop Table View
-                    <div style={styles.tableWrapper}>
-                      <table style={styles.table}>
-                        <thead>
-                          <tr>
-                            <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
-                            <th style={styles.itemsHeaderCell}>Items</th>
-                            <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
-                            <th style={styles.actionsHeaderCell}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {paginated.length === 0 ? (
-                            <tr>
-                              <td colSpan={9} style={styles.noResults}>
-                                No results for "<strong>{search}</strong>"
-                                <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
-                              </td>
-                            </tr>
-                          ) : paginated.map(renderTableRow)}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  
-                  {/* Pagination */}
-                  {!isMobile && (
-                    <PaginationBar
-                      total={totalFiltered}
-                      page={safePage}
-                      limit={limit}
-                      onPage={setPage}
-                      onLimit={(l) => { setLimit(l); setPage(1); }}
-                    />
-                  )}
-                  
-                  {/* Mobile Pagination */}
-                  {isMobile && totalFiltered > 0 && (
-                    <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
-                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                        {((safePage - 1) * limit) + 1}–{Math.min(safePage * limit, totalFiltered)} of {totalFiltered}
-                      </div>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <button 
-                          onClick={() => setPage(p => Math.max(1, p - 1))} 
-                          disabled={safePage === 1}
-                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
-                        >
-                          Previous
-                        </button>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>
-                          {safePage} / {totalPages}
-                        </span>
-                        <button 
-                          onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
-                          disabled={safePage === totalPages}
-                          style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
-                        >
-                          Next
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
+                      {isLoading ? '…' : count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={styles.headerActions}>
+              <button onClick={handleRefresh} disabled={isLoading} style={styles.refreshBtn}>
+                <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={isLoading ? styles.spin : {}}/>
+              </button>
+              <div style={styles.searchBox}>
+                <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
+                <input
+                  ref={searchRef}
+                  style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
+                  placeholder="Search… (press /)"
+                  value={searchInput}
+                  onChange={handleSearchChange}
+                />
+                {searchInput && (
+                  <button onClick={clearSearch} style={styles.clearSearchBtn}>
+                    <X size={13}/>
+                  </button>
+                )}
+              </div>
+              {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
+            </div>
+          </div>
+
+          {/* Content with Shimmer */}
+          {renderContent()}
         </div>
       </div>
 
@@ -1131,28 +1274,6 @@ export default function OpsDashboard({ onViewQuotation }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Sub-components (extracted)
-// ─────────────────────────────────────────────────────────────
-const LoadingSkeleton = React.memo(({ isMobile }) => (
-  <div style={{ overflowX: 'auto' }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead>
-        <tr style={{ backgroundColor: '#fafafa' }}>
-          {['Quote #','Customer','Date','Expiry','Status','Created By','Items','Total','Actions'].map(h => (
-            <th key={h} style={styles.skeletonHeader}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {[1,2,3,4,5,6].map(i => <SkeletonRow key={i}/>)}
-      </tbody>
-    </table>
-  </div>
-));
-
-// Note: styles object is assumed to be defined elsewhere (in your styles file)
-// Make sure to import or define the styles object
 // ─────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
 const imageCompressor = require('../utils/imageCompressor');
 const ExcelJS = require('exceljs');
+const NotificationService = require("../utils/notificationService");
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
 // ─────────────────────────────────────────────────────────────
@@ -59,28 +60,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  _browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-  });
-
   // _browser = await puppeteer.launch({
   //   headless: true,
+  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
+  //     '--no-zygote',
+  //     '--single-process',
   //   ],
   // });
+
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -370,8 +371,7 @@ const SORT_FIELDS = new Set([
 const fullPopulate = (q) =>
   q
     .populate('customerId', 'name email phone address')
-    .populate('items.itemId', 'name price description imagePath')
-    .populate('createdBy', 'name email')
+     .populate('createdBy', 'name email')
     .populate('opsApprovedBy', 'name email')
     .populate('approvedBy', 'name email')
     .populate('awardedBy', 'name email');
@@ -621,11 +621,14 @@ exports.getAllQuotations = async (req, res) => {
 exports.getMyQuotations = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
-
-    const filter = { createdBy: req.user.id };
+    const { companyId = null } = req.query;
+    const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
+ 
+    // ✅ UPDATED: Build filter for single or all companies
+    let filter = { createdBy: req.user.id };
     
-    if (req.query.companyId) {
-      filter.companyId = req.query.companyId;
+    if (!isAllCompanies) {
+      filter.companyId = companyId;
     }
     
     if (req.query.status) filter.status = req.query.status;
@@ -637,10 +640,10 @@ exports.getMyQuotations = async (req, res) => {
         { 'customerSnapshot.name': re }
       ];
     }
-
+ 
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
-
+ 
     const [data, total] = await Promise.all([
       fullPopulate(
         Quotation.find(filter)
@@ -650,13 +653,33 @@ exports.getMyQuotations = async (req, res) => {
       ).lean(),
       Quotation.countDocuments(filter),
     ]);
-
-    return paginated(res, data, total, page, limit);
+ 
+    const totalPages = Math.ceil(total / limit);
+    
+    res.status(200).json({
+      success: true,
+      data,
+      pagination: {
+        page: parseInt(req.query.page) || 1,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: parseInt(req.query.page) < totalPages,
+        hasPreviousPage: parseInt(req.query.page) > 1
+      },
+      isAllCompanies,  // ✅ Include flag
+      companyId: isAllCompanies ? 'ALL' : companyId
+    });
   } catch (err) {
-     
-    res.status(500).json({ message: 'Error fetching your quotations', error: err.message });
+    console.error('Get My Quotations Error:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching your quotations', 
+      error: err.message 
+    });
   }
 };
+ 
 
 // ─────────────────────────────────────────────────────────────
 // GET SINGLE QUOTATION
@@ -696,17 +719,23 @@ exports.getQuotation = async (req, res) => {
 exports.createQuotation = async (req, res) => {
   const {
     projectName,
+    scopeOfWork,
     companyId,
     currencyCode,
     customerId, customer, contact, customerCountry,
+    customerDesignation,
+    customerTradeLicenseNumber,
     date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
-    items, taxPercent, discountPercent, notes,
+    ourFocalPointDesignation,
+    focalPointDesignation,
+    items, taxPercent, discountPercent, notes, remark,  // Added remark field
     quotationImages, termsAndConditions, termsImages,
     internalDocuments,
     internalDocDescriptions
   } = req.body;
 
+  // Validation
   if (!projectName) {
     return res.status(400).json({ message: 'Project Name is required' });
   }
@@ -724,36 +753,60 @@ exports.createQuotation = async (req, res) => {
     return res.status(404).json({ message: 'Customer not found for this company' });
   }
   
+  if (!expiryDate) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Expiry date is required' 
+    });
+  }
+  
+  const expiryDateObj = new Date(expiryDate);
+  if (isNaN(expiryDateObj.getTime())) {
+    return res.status(400).json({ 
+      success: false, 
+      message: `Invalid expiry date format: "${expiryDate}"` 
+    });
+  }
+  
+  // Validate date (optional, with default)
+  let dateObj = new Date();
+  if (date) {
+    dateObj = new Date(date);
+    if (isNaN(dateObj.getTime())) {
+      dateObj = new Date();
+      console.warn(`Invalid date received: "${date}", using current date`);
+    }
+  }
 
+  // Validate items (now manual items without catalog lookup)
   const validatedItems = [];
   for (const item of items) {
-    let itemDoc = null;
-    
-    if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-      itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc && item.zohoId) {
-      itemDoc = await Item.findOne({ zohoId: item.zohoId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc && item.itemId) {
-      itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
-    }
-    
-    if (!itemDoc) {
-      return res.status(404).json({ 
-        message: `Item not found: ${item.name || item.itemId || item.zohoId}`
+    // Manual items don't need to be validated against catalog
+    if (!item.description && !item.name) {
+      return res.status(400).json({ 
+        message: `Item ${validatedItems.length + 1} requires a name or description`
       });
     }
     
-    validatedItems.push({ ...item, itemDoc });
+    if (!item.quantity || item.quantity < 1) {
+      return res.status(400).json({ 
+        message: `Item ${validatedItems.length + 1} requires a valid quantity`
+      });
+    }
+    
+    if (!item.unitPrice || item.unitPrice < 0) {
+      return res.status(400).json({ 
+        message: `Item ${validatedItems.length + 1} requires a valid unit price`
+      });
+    }
+    
+    validatedItems.push(item);
   }
     
   // Compress quotation images (item images)
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-     compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
+    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
       maxWidth: 800,
       quality: 70,
       maxSizeKB: 300
@@ -763,7 +816,7 @@ exports.createQuotation = async (req, res) => {
   // Compress terms images
   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-     compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
+    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
       maxWidth: 600,
       quality: 65,
       maxSizeKB: 200
@@ -773,14 +826,14 @@ exports.createQuotation = async (req, res) => {
   // Compress internal documents that are images
   let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-     compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
+    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
       maxWidth: 1000,
       quality: 75,
       maxSizeKB: 400
     });
   }
 
-
+  // Exchange rate calculation
   let exchangeRate = 1;
   const targetCurrency = currencyCode || company.baseCurrency;
   
@@ -791,32 +844,31 @@ exports.createQuotation = async (req, res) => {
     console.error('Error getting exchange rates:', rateError.message);
   }
 
+  // Process items with images (manual items)
   const processedItems = [];
   
   for (let i = 0; i < validatedItems.length; i++) {
     const item = validatedItems[i];
-    const itemDoc = item.itemDoc;
     
     let imageUrls = [];
     
     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
-       
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
         
         if (imageData && typeof imageData === 'string') {
-           if (imageData.startsWith('data:image')) {
+          if (imageData.startsWith('data:image')) {
             try {
               console.log(`📤 Uploading compressed image ${imgIdx + 1} for item ${i + 1}...`);
               const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
               if (uploaded && uploaded.url) {
                 imageUrls.push(uploaded.url);
-               }
+              }
             } catch (err) {
               console.error(`❌ Upload failed:`, err.message);
             }
           }
-           else if (imageData.includes('cloudinary.com')) {
+          else if (imageData.includes('cloudinary.com')) {
             imageUrls.push(imageData);
             console.log(`📎 Keeping existing Cloudinary URL`);
           }
@@ -850,9 +902,7 @@ exports.createQuotation = async (req, res) => {
     const totalPriceInBaseCurrency = totalPrice * exchangeRate;
     
     processedItems.push({
-      itemId: itemDoc._id,
-      zohoItemId: itemDoc.zohoId,
-      name: itemDoc.name,
+      name: item.name || item.description?.substring(0, 50) || `Item ${i + 1}`,
       description: item.description || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice,
@@ -864,10 +914,12 @@ exports.createQuotation = async (req, res) => {
     });
   }
   
+  // Calculate totals
   const tax = parseFloat(taxPercent) || 0;
   const discount = parseFloat(discountPercent) || 0;
   const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
+  // Process terms images
   let processedTermsImages = [];
   if (compressedTermsImages && compressedTermsImages.length > 0) {
     console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
@@ -882,9 +934,9 @@ exports.createQuotation = async (req, res) => {
         fileName = imageData.fileName || `terms_image_${i + 1}`;
       }
       
-       if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
+      if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
         try {
-           const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
+          const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
           if (uploaded && uploaded.url) {
             processedTermsImages.push({
               url: uploaded.url,
@@ -892,15 +944,15 @@ exports.createQuotation = async (req, res) => {
               fileName: fileName,
               uploadedAt: new Date()
             });
-           }
+          }
         } catch (uploadError) {
           console.error('Failed to upload terms image:', uploadError.message);
         }
       }
-       else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+      else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
         processedTermsImages.push(imageData);
       }
-       else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+      else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
         processedTermsImages.push({
           url: imageData,
           publicId: imageData.split('/').pop().split('.')[0],
@@ -913,6 +965,7 @@ exports.createQuotation = async (req, res) => {
 
   const quotationNumber = generateQuotationNumber(company.code);
 
+  // Process internal documents
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
     console.log(`📸 Processing ${compressedInternalDocuments.length} compressed internal documents`);
@@ -924,19 +977,17 @@ exports.createQuotation = async (req, res) => {
     );
   }
 
-  // ============================================================
-  // ✅ STEP: DETERMINE STATUS BASED ON USER ROLE
-  // ============================================================
-  // If created by Admin, status = 'ops_approved' (skip Ops Manager approval)
-  // If created by regular user, status = 'pending' (needs Ops Manager approval)
+  // Determine status based on user role
   const userRole = req.user?.role;
   const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
   
   console.log(`📝 Creating quotation with status: ${initialStatus} (User role: ${userRole})`);
 
+  // Create quotation with all fields including remark
   const quotation = new Quotation({
     quotationNumber,
     projectName: projectName?.trim() || '',
+    scopeOfWork: scopeOfWork?.trim() || '',
     companyId: company._id,
     companySnapshot: {
       code: company.code,
@@ -950,6 +1001,7 @@ exports.createQuotation = async (req, res) => {
       crNumber: company.crNumber,
       logo: company.logo,
       zohoOrganizationId: company.zohoOrganizationId,
+      focalPointDesignation: focalPointDesignation || company.focalPointDesignation || '',
       bankDetails: company.bankDetails
     },
     currency: {
@@ -965,12 +1017,14 @@ exports.createQuotation = async (req, res) => {
     },
     customerId,
     customerSnapshot: {
-      name: customer.trim(),
+      name: customer?.trim() || customerDoc.name,
       email: customerDoc.email,
       phone: customerDoc.phone,
       address: customerDoc.address,
       country: customerCountry || 'UAE',
       vatNumber: customerDoc.vatNumber,
+      designation: customerDesignation?.trim() || '',
+      tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
       taxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
       placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
     },
@@ -982,6 +1036,7 @@ exports.createQuotation = async (req, res) => {
     queryDate: queryDate ? new Date(queryDate) : null,
     ourRef: ourRef?.trim() || '',
     ourContact: ourContact?.trim() || '',
+    ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '',
     salesManagerEmail: salesManagerEmail?.trim() || '',
     paymentTerms: paymentTerms?.trim() || '',
     deliveryTerms: deliveryTerms?.trim() || '',
@@ -992,6 +1047,7 @@ exports.createQuotation = async (req, res) => {
     discountPercent: discount,
     ...totals,
     notes: notes?.trim() || '',
+    remark: remark?.trim() || '',  // NEW - Remark field
     termsAndConditions: termsAndConditions || '',
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
@@ -1001,7 +1057,7 @@ exports.createQuotation = async (req, res) => {
       email: req.user.email,
       role: req.user.role
     },
-    status: initialStatus,  
+    status: initialStatus,
   });
 
   await quotation.save();
@@ -1043,12 +1099,17 @@ exports.updateQuotation = async (req, res) => {
   const companyId = req.companyId || req.headers['x-company-id'];
   const {
     projectName,
+    scopeOfWork,
     currencyCode,
     customerId, customer, contact, customerCountry,
+    customerDesignation,
+    customerTradeLicenseNumber,
     date, expiryDate, queryDate,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
     tl, trn,
-    items, taxPercent, discountPercent, notes,
+    ourFocalPointDesignation,
+    focalPointDesignation,
+    items, taxPercent, discountPercent, notes, remark,  // Added remark field
     quotationImages,
     termsAndConditions, termsImages,
     internalDocuments,
@@ -1206,6 +1267,10 @@ exports.updateQuotation = async (req, res) => {
     let customerSnapshotTaxTreatment = existing.customerSnapshot?.taxTreatment || 'non_vat_registered';
     let customerSnapshotPlaceOfSupply = existing.customerSnapshot?.placeOfSupply || 'Dubai';
     
+    // Preserve existing customer snapshot fields
+    let customerSnapshotDesignation = existing.customerSnapshot?.designation || '';
+    let customerSnapshotTradeLicense = existing.customerSnapshot?.tradeLicenseNumber || '';
+    
     if (customerId && customerId !== existing.customerId?.toString()) {
       const customerDoc = await Customer.findById(customerId).lean();
       if (customerDoc) {
@@ -1213,30 +1278,25 @@ exports.updateQuotation = async (req, res) => {
         customerPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
         customerSnapshotTaxTreatment = customerDoc.taxTreatment || 'non_vat_registered';
         customerSnapshotPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
+        if (!customerDesignation) customerSnapshotDesignation = customerDoc.designation || '';
+        if (!customerTradeLicenseNumber) customerSnapshotTradeLicense = customerDoc.tradeLicenseNumber || '';
       }
     }
+    
+    // Override with explicit values from request
+    if (customerDesignation !== undefined) {
+      customerSnapshotDesignation = customerDesignation?.trim() || '';
+    }
+    if (customerTradeLicenseNumber !== undefined) {
+      customerSnapshotTradeLicense = customerTradeLicenseNumber?.trim() || '';
+    }
 
-    // Process items
+    // Process items (manual items - no catalog lookup)
     const processedItems = [];
     
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
       if (!item) continue;
-      
-      let itemDoc = null;
-      
-      if (item.itemId) {
-        if (mongoose.Types.ObjectId.isValid(item.itemId)) {
-          itemDoc = await Item.findOne({ _id: item.itemId, companyId: company._id }).lean();
-        }
-        if (!itemDoc) {
-          itemDoc = await Item.findOne({ zohoId: item.itemId, companyId: company._id }).lean();
-        }
-      }
-      
-      if (!itemDoc && existing.items && existing.items[idx]) {
-        itemDoc = existing.items[idx].itemId;
-      }
       
       const quantity = Number(item.quantity) || 1;
       const unitPrice = Number(item.unitPrice) || 0;
@@ -1279,10 +1339,8 @@ exports.updateQuotation = async (req, res) => {
       imagePaths = [...new Set(imagePaths)];
       
       processedItems.push({
-        itemId: itemDoc?._id || item.itemId,
-        zohoItemId: itemDoc?.zohoId || item.zohoId || null,
-        name: itemDoc?.name || item.name || '',
-        description: item.description || itemDoc?.description || '',
+        name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
+        description: item.description || '',
         quantity: quantity,
         unitPrice: unitPrice,
         unitPriceInBaseCurrency: unitPriceInBaseCurrency,
@@ -1315,17 +1373,14 @@ exports.updateQuotation = async (req, res) => {
     // ============================================================
     let processedTermsImages = [];
 
-    // Process compressed terms images from request
     if (compressedTermsImages && compressedTermsImages.length > 0) {
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
         
-        // Case 1: Object with base64 property (new image after compression)
         if (imageData && typeof imageData === 'object') {
           let base64ToUpload = null;
           let fileName = imageData.fileName || `terms_image_${i + 1}`;
           
-          // Check for base64 in different properties
           if (imageData.base64 && imageData.base64.startsWith('data:')) {
             base64ToUpload = imageData.base64;
           } else if (imageData.url && imageData.url.startsWith('data:')) {
@@ -1350,7 +1405,6 @@ exports.updateQuotation = async (req, res) => {
               console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
             }
           }
-          // Case: Existing Cloudinary URL (not base64)
           else if (imageData.url && imageData.url.includes('cloudinary.com')) {
             processedTermsImages.push({
               url: imageData.url,
@@ -1361,7 +1415,6 @@ exports.updateQuotation = async (req, res) => {
             console.log(`✅ Keeping existing terms image: ${imageData.url}`);
           }
         }
-        // Case 2: Direct base64 string
         else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
           try {
             const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
@@ -1378,7 +1431,6 @@ exports.updateQuotation = async (req, res) => {
             console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
           }
         }
-        // Case 3: Direct Cloudinary URL string
         else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
           processedTermsImages.push({
             url: imageData,
@@ -1390,7 +1442,6 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // If no compressed terms images were processed, try to preserve existing ones
     if (processedTermsImages.length === 0 && existing.termsImages && existing.termsImages.length > 0) {
       processedTermsImages = existing.termsImages;
     }
@@ -1411,13 +1462,28 @@ exports.updateQuotation = async (req, res) => {
       }
     }
 
-    // Clear rejection reasons if status changed
+    const existingCompanySnapshot = existing.companySnapshot || {};
+    
+    // Build update data
     const updateData = {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
+      ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
       ...(customer && { 
         'customerSnapshot.name': customer.trim(),
         customer: customer.trim() 
+      }),
+      ...(customerDesignation !== undefined && { 
+        'customerSnapshot.designation': customerDesignation?.trim() || '' 
+      }),
+      ...(customerTradeLicenseNumber !== undefined && { 
+        'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' 
+      }),
+      ...(ourFocalPointDesignation !== undefined && { 
+        ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' 
+      }),
+      ...(focalPointDesignation !== undefined && { 
+        'companySnapshot.focalPointDesignation': focalPointDesignation?.trim() || existingCompanySnapshot.focalPointDesignation || '' 
       }),
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
       ...(customerCountry && { 'customerSnapshot.country': customerCountry }),
@@ -1437,6 +1503,7 @@ exports.updateQuotation = async (req, res) => {
       ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
       ...(tl !== undefined && { tl: tl?.trim() || '' }),
       ...(trn !== undefined && { trn: trn?.trim() || '' }),
+      ...(remark !== undefined && { remark: remark?.trim() || '' }),  // NEW - Remark field
       items: processedItems,
       taxPercent: tax,
       discountPercent: discount,
@@ -1480,12 +1547,12 @@ exports.updateQuotation = async (req, res) => {
     }
 
     const populated = await Quotation.findById(updated._id)
-      .populate('customerId', 'name email phone address taxTreatment placeOfSupply')
+      .populate('customerId', 'name email phone address taxTreatment placeOfSupply designation tradeLicenseNumber')
       .populate('createdBy', 'name email')
       .populate('opsApprovedBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('awardedBy', 'name email')
-      .populate('companyId', 'name code baseCurrency logo')
+      .populate('companyId', 'name code baseCurrency logo focalPointDesignation')
       .lean();
     
     const originalSize = JSON.stringify(req.body).length;
@@ -1609,7 +1676,18 @@ exports.awardQuotation = async (req, res) => {
       });
     }
     
-     const customer = await Customer.findOne({ 
+    // ✅ STEP 1.5: Save existing snapshots BEFORE any modifications
+    const existingOpsApprovedBySnapshot = quotation.opsApprovedBySnapshot;
+    const existingApprovedBySnapshot = quotation.approvedBySnapshot;
+    const existingCreatedBySnapshot = quotation.createdBySnapshot;
+    
+    console.log('📸 Preserved snapshots:', {
+      opsApprovedBySnapshot: existingOpsApprovedBySnapshot,
+      approvedBySnapshot: existingApprovedBySnapshot,
+      createdBySnapshot: existingCreatedBySnapshot
+    });
+    
+    const customer = await Customer.findOne({ 
       _id: quotation.customerId, 
       companyId 
     }).lean();
@@ -1622,7 +1700,7 @@ exports.awardQuotation = async (req, res) => {
       });
     }
 
-     if (quotation.createdBy._id.toString() !== req.user.id) {
+    if (quotation.createdBy._id.toString() !== req.user.id) {
       return res.status(403).json({ 
         success: false,
         message: 'Only the creator can mark this quotation as awarded' 
@@ -1636,11 +1714,11 @@ exports.awardQuotation = async (req, res) => {
       });
     }
 
-     if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
+    if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
       zohoBooksService.setCompany(quotation.companyId._id, quotation.companyId.zohoOrganizationId);
     }
 
-     const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
+    const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
     const customerPlaceOfSupply = customer?.placeOfSupply || 'Dubai';
     
     const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
@@ -1680,7 +1758,7 @@ exports.awardQuotation = async (req, res) => {
     console.log(`🏢 Company Zoho ID: ${companyZohoId}`);
     console.log(`💰 Tax IDs for this company:`, TAX_IDS);
     
-     let taxRate = 0;
+    let taxRate = 0;
     let taxId = TAX_IDS['0%'];
     let taxTreatment = 'vat_not_registered';
     let placeOfSupplyCode = 'AE';
@@ -1841,30 +1919,23 @@ exports.awardQuotation = async (req, res) => {
         }
         
         // ========== DISCOUNT CONVERSION FOR VAT REGISTERED COMPANIES ==========
-        // Check if we need to convert entity discount to line item discounts
         const isVatRegistered = taxRate > 0 || taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered';
         const originalDiscountPercent = quotation.discountPercent || 0;
         let effectiveDiscountPercent = 0;
         let lineItemsWithDiscount = [];
         
-        // 5.3: Calculate totals
         const subtotal = quotation.subtotal || 0;
         
-        // Process line items with discount conversion if needed
         for (let i = 0; i < quotation.items.length; i++) {
           const item = quotation.items[i];
           const originalRate = item.unitPrice;
           let finalRate = originalRate;
           let itemDiscountPercent = 0;
           
-          // Apply discount conversion for VAT registered customers
           if (isVatRegistered && originalDiscountPercent > 0) {
-            // Convert entity discount to line item discount
             finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
-            itemDiscountPercent = 0; // No separate discount field in Zoho
-            console.log(`🔄 Converted discount for item ${i + 1}: ${originalRate} → ${finalRate} (${originalDiscountPercent}% off)`);
+            itemDiscountPercent = 0;  
           } else if (!isVatRegistered && originalDiscountPercent > 0) {
-            // Keep entity-level discount for non-VAT registered
             effectiveDiscountPercent = originalDiscountPercent;
           }
           
@@ -1899,18 +1970,6 @@ exports.awardQuotation = async (req, res) => {
         const recalculatedDiscountAmount = isVatRegistered ? 0 : (subtotal * originalDiscountPercent / 100);
         const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
         
-        console.log('📊 Discount Conversion Summary:', {
-          originalDiscountPercent,
-          isVatRegistered,
-          discountAppliedToLineItems: isVatRegistered && originalDiscountPercent > 0,
-          effectiveDiscountPercent: isVatRegistered ? 0 : originalDiscountPercent,
-          originalSubtotal: subtotal,
-          recalculatedSubtotal,
-          taxAmount: recalculatedTaxAmount,
-          discountAmount: recalculatedDiscountAmount,
-          grandTotal: recalculatedGrandTotal
-        });
-        
         // 5.4: Prepare estimate data
         const estimateData = {
           customer_id: customerZohoId,
@@ -1918,13 +1977,13 @@ exports.awardQuotation = async (req, res) => {
           date: new Date(quotation.date).toISOString().split('T')[0],
           expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
           exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
-          discount: effectiveDiscountPercent, // Will be 0 for VAT registered
+          discount: effectiveDiscountPercent,  
           is_discount_before_tax: false,
           discount_type: 'entity_level',
           is_inclusive_tax: false,
           custom_body: quotation.notes || '',
           custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
-          salesperson_name: quotation.ourContact || '',
+          salesperson_name: quotation?.createdBy?.name || '',
           notes: awardNote || '',
           terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
           line_items: lineItemsWithDiscount,
@@ -1982,13 +2041,43 @@ exports.awardQuotation = async (req, res) => {
       }
     }
     
-    // STEP 6: Update quotation status
+    // ✅ STEP 6: Update quotation status - BUT PRESERVE SNAPSHOTS
     quotation.status = awarded ? 'awarded' : 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
     quotation.awardNote = awardNote?.trim() || '';
     
+    // ✅ STEP 7: RESTORE snapshots (in case anything modified them)
+    quotation.opsApprovedBySnapshot = existingOpsApprovedBySnapshot;
+    quotation.approvedBySnapshot = existingApprovedBySnapshot;
+    quotation.createdBySnapshot = existingCreatedBySnapshot;
+    
+    // ✅ STEP 8: Add awarded by snapshot (don't overwrite existing)
+    quotation.awardedBySnapshot = {
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role,
+      awardedAt: new Date(),
+      awarded: awarded,
+      awardNote: awardNote?.trim() || ''
+    };
+    
     await quotation.save();
+    
+    console.log('✅ After award - snapshots preserved:', {
+      opsApprovedBySnapshot: quotation.opsApprovedBySnapshot,
+      approvedBySnapshot: quotation.approvedBySnapshot,
+      awardedBySnapshot: quotation.awardedBySnapshot
+    });
+    
+    // Optional: Send notification (if you still want it)
+    if (awarded) {
+      // NotificationService.quotationAwarded(
+      //   req.user._id, 
+      //   companyId, 
+      //   quotation
+      // );
+    }
     
     const updated = await Quotation.findOne({ _id: quotationId, companyId })
       .populate('customerId')
@@ -2641,8 +2730,6 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
   }
 };
 
-
- 
 exports.exportQuotationsToExcel = async (req, res) => {
   try {
     const {
@@ -2656,16 +2743,24 @@ exports.exportQuotationsToExcel = async (req, res) => {
     } = req.query;
 
     // =========================================================
-    // BUILD QUERY
+    // BUILD QUERY - Handle "All Companies"
     // =========================================================
     const query = {};
 
-    // Company filter
-    if (companyId) {
+    // ✅ Handle companyId - skip if 'all'
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      // Validate ObjectId format
+      const mongoose = require('mongoose');
+      if (!mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid company ID format'
+        });
+      }
       query.companyId = companyId;
     }
+    // If companyId is 'all' or not provided, don't add company filter
 
-    // Status filter
     if (status) {
       if (status.includes(",")) {
         query.status = { $in: status.split(",") };
@@ -2674,7 +2769,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }
     }
 
-    // Date filter
     const from = fromDate || startDate;
     const to = toDate || endDate;
 
@@ -2690,10 +2784,8 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }
     }
 
-    // Search
     if (search?.trim()) {
       const regex = new RegExp(search.trim(), "i");
-
       query.$or = [
         { quotationNumber: regex },
         { "customerSnapshot.name": regex },
@@ -2701,8 +2793,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
         { "customerId.name": regex },
       ];
     }
-
-    console.log("📊 Export query:", query);
 
     // =========================================================
     // FETCH DATA
@@ -2722,73 +2812,36 @@ exports.exportQuotationsToExcel = async (req, res) => {
     }
 
     // =========================================================
-    // CREATE WORKBOOK
+    // SUMMARY
+    // =========================================================
+    const totalRevenue = quotations.reduce(
+      (sum, q) => sum + (q.totalInBaseCurrency || 0),
+      0
+    );
+
+    const approvedCount = quotations.filter((q) =>
+      ["approved", "ops_approved", "awarded"].includes(q.status)
+    ).length;
+
+    const pendingCount = quotations.filter((q) =>
+      ["pending", "pending_admin"].includes(q.status)
+    ).length;
+
+    const rejectedCount = quotations.filter((q) =>
+      ["rejected", "not_awarded"].includes(q.status)
+    ).length;
+
+    // =========================================================
+    // WORKBOOK
     // =========================================================
     const workbook = new ExcelJS.Workbook();
 
     workbook.creator = "Quotation Management System";
     workbook.created = new Date();
 
-    // =========================================================
-    // SUMMARY SHEET
-    // =========================================================
-    const summarySheet = workbook.addWorksheet("Export Summary");
-
-    summarySheet.columns = [
-      { header: "Filter", key: "filter", width: 25 },
-      { header: "Value", key: "value", width: 45 },
-    ];
-
-    summarySheet.addRows([
-      {
-        filter: "Export Date",
-        value: new Date().toLocaleString(),
-      },
-      {
-        filter: "Company",
-        value: companyId || "All Companies",
-      },
-      {
-        filter: "Status",
-        value: status || "All Statuses",
-      },
-      {
-        filter: "From Date",
-        value: from || "-",
-      },
-      {
-        filter: "To Date",
-        value: to || "-",
-      },
-      {
-        filter: "Search",
-        value: search || "-",
-      },
-      {
-        filter: "Total Quotations",
-        value: quotations.length,
-      },
-    ]);
-
-    // Summary header styling
-    const summaryHeader = summarySheet.getRow(1);
-
-    summaryHeader.font = {
-      bold: true,
-      color: { argb: "FFFFFFFF" },
-    };
-
-    summaryHeader.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF10B981" },
-    };
-
-    // =========================================================
-    // MAIN SHEET
-    // =========================================================
     const worksheet = workbook.addWorksheet("Quotations", {
       pageSetup: {
+        orientation: "landscape",
         fitToPage: true,
         fitToWidth: 1,
         fitToHeight: 0,
@@ -2796,99 +2849,183 @@ exports.exportQuotationsToExcel = async (req, res) => {
     });
 
     // =========================================================
-    // COLUMNS
+    // TITLE
     // =========================================================
-    worksheet.columns = [
-      { header: "SL No", key: "slNo", width: 10 },
+    worksheet.mergeCells("A1:X1");
 
-      { header: "Quotation Number", key: "quotationNumber", width: 25 },
+    const titleCell = worksheet.getCell("A1");
 
-      { header: "Company", key: "company", width: 35 },
+    titleCell.value = "QUOTATIONS REPORT";
 
-      { header: "Customer Name", key: "customerName", width: 35 },
-
-      { header: "Customer Email", key: "customerEmail", width: 35 },
-
-      { header: "Customer Phone", key: "customerPhone", width: 18 },
-
-      { header: "Contact Person", key: "contact", width: 25 },
-
-      { header: "Project Name", key: "projectName", width: 40 },
-
-      { header: "Date", key: "date", width: 15 },
-
-      { header: "Expiry Date", key: "expiryDate", width: 15 },
-
-      { header: "Query Date", key: "queryDate", width: 15 },
-
-      {
-        header: "Total Amount",
-        key: "total",
-        width: 18,
-        style: {
-          numFmt: "#,##0.00",
-        },
-      },
-
-      { header: "Currency", key: "currency", width: 12 },
-
-      {
-        header: "Total in AED",
-        key: "totalInAED",
-        width: 18,
-        style: {
-          numFmt: "#,##0.00",
-        },
-      },
-
-      { header: "Tax %", key: "taxPercent", width: 10 },
-
-      { header: "Discount %", key: "discountPercent", width: 12 },
-
-      { header: "Status", key: "status", width: 18 },
-
-      { header: "Created By", key: "createdBy", width: 25 },
-
-      { header: "Created At", key: "createdAt", width: 22 },
-
-      { header: "Items Count", key: "itemsCount", width: 15 },
-
-      { header: "Payment Terms", key: "paymentTerms", width: 30 },
-
-      { header: "Delivery Terms", key: "deliveryTerms", width: 30 },
-
-      { header: "TL", key: "tl", width: 15 },
-
-      { header: "TRN", key: "trn", width: 20 },
-    ];
-
-    // =========================================================
-    // HEADER STYLE
-    // =========================================================
-    const headerRow = worksheet.getRow(1);
-
-    headerRow.height = 28;
-
-    headerRow.font = {
+    titleCell.font = {
+      size: 20,
       bold: true,
-      size: 11,
       color: { argb: "FFFFFFFF" },
     };
 
-    headerRow.alignment = {
+    titleCell.alignment = {
       horizontal: "center",
       vertical: "middle",
-      wrapText: true,
     };
 
-    headerRow.fill = {
+    titleCell.fill = {
       type: "pattern",
       pattern: "solid",
-      fgColor: { argb: "FF4F46E5" },
+      fgColor: { argb: "FF111827" },
     };
 
+    worksheet.getRow(1).height = 30;
+
     // =========================================================
-    // ADD ROWS
+    // REPORT INFO
+    // =========================================================
+    worksheet.mergeCells("A2:D2");
+    worksheet.getCell("A2").value =
+      `Generated: ${new Date().toLocaleString()}`;
+
+    worksheet.mergeCells("E2:H2");
+    worksheet.getCell("E2").value =
+      `Total Quotations: ${quotations.length}`;
+
+    worksheet.mergeCells("I2:L2");
+    worksheet.getCell("I2").value =
+      `Approved: ${approvedCount}`;
+
+    worksheet.mergeCells("M2:P2");
+    worksheet.getCell("M2").value =
+      `Pending: ${pendingCount}`;
+
+    worksheet.mergeCells("Q2:T2");
+    worksheet.getCell("Q2").value =
+      `Rejected: ${rejectedCount}`;
+
+    worksheet.mergeCells("U2:X2");
+    worksheet.getCell("U2").value =
+      `Revenue AED: ${totalRevenue.toLocaleString()}`;
+
+    [
+      "A2",
+      "E2",
+      "I2",
+      "M2",
+      "Q2",
+      "U2",
+    ].forEach((cell) => {
+      worksheet.getCell(cell).font = {
+        bold: true,
+        size: 10,
+      };
+
+      worksheet.getCell(cell).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF3F4F6" },
+      };
+
+      worksheet.getCell(cell).border = {
+        top: { style: "thin", color: { argb: "FFE5E7EB" } },
+        left: { style: "thin", color: { argb: "FFE5E7EB" } },
+        bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+        right: { style: "thin", color: { argb: "FFE5E7EB" } },
+      };
+    });
+
+    // =========================================================
+    // EMPTY ROW
+    // =========================================================
+    worksheet.addRow([]);
+
+    // =========================================================
+    // COLUMNS
+    // =========================================================
+    worksheet.columns = [
+      { key: "slNo", width: 10 },
+      { key: "quotationNumber", width: 25 },
+      { key: "company", width: 30 },
+      { key: "customerName", width: 30 },
+      { key: "customerEmail", width: 30 },
+      { key: "customerPhone", width: 20 },
+      { key: "contact", width: 25 },
+      { key: "projectName", width: 40 },
+      { key: "date", width: 15 },
+      { key: "expiryDate", width: 15 },
+      { key: "queryDate", width: 15 },
+      { key: "total", width: 18 },
+      { key: "currency", width: 12 },
+      { key: "totalInAED", width: 20 },
+      { key: "taxPercent", width: 12 },
+      { key: "discountPercent", width: 14 },
+      { key: "status", width: 18 },
+      { key: "createdBy", width: 25 },
+      { key: "createdAt", width: 22 },
+      { key: "itemsCount", width: 14 },
+      { key: "paymentTerms", width: 30 },
+      { key: "deliveryTerms", width: 30 },
+      { key: "tl", width: 15 },
+      { key: "trn", width: 20 },
+    ];
+
+    // =========================================================
+    // HEADER ROW
+    // =========================================================
+    const headerRow = worksheet.addRow([
+      "SL No",
+      "Quotation Number",
+      "Company",
+      "Customer Name",
+      "Customer Email",
+      "Customer Phone",
+      "Contact Person",
+      "Project Name",
+      "Date",
+      "Expiry Date",
+      "Query Date",
+      "Total Amount",
+      "Currency",
+      "Total in AED",
+      "Tax %",
+      "Discount %",
+      "Status",
+      "Created By",
+      "Created At",
+      "Items Count",
+      "Payment Terms",
+      "Delivery Terms",
+      "TL",
+      "TRN",
+    ]);
+
+    headerRow.height = 30;
+
+    headerRow.eachCell((cell) => {
+      cell.font = {
+        bold: true,
+        size: 11,
+        color: { argb: "FFFFFFFF" },
+      };
+
+      cell.alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        wrapText: true,
+      };
+
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF2563EB" },
+      };
+
+      cell.border = {
+        top: { style: "thin", color: { argb: "FFFFFFFF" } },
+        left: { style: "thin", color: { argb: "FFFFFFFF" } },
+        bottom: { style: "thin", color: { argb: "FFFFFFFF" } },
+        right: { style: "thin", color: { argb: "FFFFFFFF" } },
+      };
+    });
+
+    // =========================================================
+    // DATA ROWS
     // =========================================================
     quotations.forEach((q, index) => {
       const row = worksheet.addRow({
@@ -2964,32 +3101,44 @@ exports.exportQuotationsToExcel = async (req, res) => {
         trn: q.trn || "",
       });
 
-      // =====================================================
-      // ROW STYLE
-      // =====================================================
       row.height = 24;
 
-      row.alignment = {
-        vertical: "middle",
-        horizontal: "left",
-        wrapText: false, // IMPORTANT FIX
-      };
-
-      // Alternate row colors
-      if (index % 2 === 0) {
-        row.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFF9FAFB" },
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin", color: { argb: "FFE5E7EB" } },
+          left: { style: "thin", color: { argb: "FFE5E7EB" } },
+          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
+          right: { style: "thin", color: { argb: "FFE5E7EB" } },
         };
+
+        cell.alignment = {
+          vertical: "middle",
+          horizontal: "left",
+        };
+      });
+
+      // Zebra rows
+      if (index % 2 === 0) {
+        row.eachCell((cell) => {
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFF9FAFB" },
+          };
+        });
       }
 
-      // =====================================================
-      // STATUS COLORS
-      // =====================================================
+      // Number formatting
+      row.getCell("total").numFmt = '#,##0.00';
+      row.getCell("totalInAED").numFmt = '"AED" #,##0.00';
+
+      // Status styling
       const statusCell = row.getCell("status");
 
-      if (q.status === "approved") {
+      if (
+        q.status === "approved" ||
+        q.status === "ops_approved"
+      ) {
         statusCell.fill = {
           type: "pattern",
           pattern: "solid",
@@ -3001,8 +3150,10 @@ exports.exportQuotationsToExcel = async (req, res) => {
           color: { argb: "FF065F46" },
         };
       }
-
-      else if (q.status === "pending") {
+      else if (
+        q.status === "pending" ||
+        q.status === "pending_admin"
+      ) {
         statusCell.fill = {
           type: "pattern",
           pattern: "solid",
@@ -3014,8 +3165,10 @@ exports.exportQuotationsToExcel = async (req, res) => {
           color: { argb: "FF92400E" },
         };
       }
-
-      else if (q.status === "rejected") {
+      else if (
+        q.status === "rejected" ||
+        q.status === "not_awarded"
+      ) {
         statusCell.fill = {
           type: "pattern",
           pattern: "solid",
@@ -3027,7 +3180,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
           color: { argb: "FF991B1B" },
         };
       }
-
       else if (q.status === "awarded") {
         statusCell.fill = {
           type: "pattern",
@@ -3048,9 +3200,11 @@ exports.exportQuotationsToExcel = async (req, res) => {
     const totalRow = worksheet.addRow({
       status: "TOTAL",
       totalInAED: {
-        formula: `SUM(N2:N${quotations.length + 1})`,
+        formula: `SUM(N5:N${quotations.length + 4})`,
       },
     });
+
+    totalRow.height = 26;
 
     totalRow.font = {
       bold: true,
@@ -3059,15 +3213,17 @@ exports.exportQuotationsToExcel = async (req, res) => {
     totalRow.fill = {
       type: "pattern",
       pattern: "solid",
-      fgColor: { argb: "FFF3F4F6" },
+      fgColor: { argb: "FFE5E7EB" },
     };
+
+    totalRow.getCell("totalInAED").numFmt = '"AED" #,##0.00';
 
     // =========================================================
     // AUTO FILTER
     // =========================================================
     worksheet.autoFilter = {
-      from: "A1",
-      to: "X1",
+      from: "A4",
+      to: "X4",
     };
 
     // =========================================================
@@ -3076,38 +3232,62 @@ exports.exportQuotationsToExcel = async (req, res) => {
     worksheet.views = [
       {
         state: "frozen",
-        ySplit: 1,
+        ySplit: 4,
       },
     ];
 
     // =========================================================
-    // AUTO FIT COLUMNS
+    // ANALYTICS SHEET
     // =========================================================
-    worksheet.columns.forEach((column) => {
-      let maxLength = 0;
+    const analyticsSheet = workbook.addWorksheet("Analytics");
 
-      column.eachCell({ includeEmpty: true }, (cell) => {
-        const value = cell.value
-          ? cell.value.toString()
-          : "";
+    analyticsSheet.columns = [
+      { header: "Metric", key: "metric", width: 35 },
+      { header: "Value", key: "value", width: 25 },
+    ];
 
-        maxLength = Math.max(maxLength, value.length);
-      });
+    analyticsSheet.getRow(1).font = {
+      bold: true,
+      color: { argb: "FFFFFFFF" },
+    };
 
-      column.width = Math.min(
-        Math.max(maxLength + 3, 12),
-        45
-      );
-    });
+    analyticsSheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF111827" },
+    };
+
+    analyticsSheet.addRows([
+      {
+        metric: "Total Quotations",
+        value: quotations.length,
+      },
+      {
+        metric: "Approved Quotations",
+        value: approvedCount,
+      },
+      {
+        metric: "Pending Quotations",
+        value: pendingCount,
+      },
+      {
+        metric: "Rejected Quotations",
+        value: rejectedCount,
+      },
+      {
+        metric: "Total Revenue (AED)",
+        value: totalRevenue,
+      },
+    ]);
+
+    analyticsSheet.getColumn("value").numFmt = '#,##0.00';
 
     // =========================================================
-    // GENERATE FILE
+    // EXPORT FILE
     // =========================================================
     const buffer = await workbook.xlsx.writeBuffer();
 
-    const fileName = `quotations_export_${
-      new Date().toISOString().split("T")[0]
-    }.xlsx`;
+    const fileName = `quotations_export_${new Date().toISOString().split("T")[0]}.xlsx`;
 
     res.setHeader(
       "Content-Type",

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Plus, Trash2, Upload, FileText, Download, Search, ChevronDown, ChevronUp, X, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Upload, FileText, Download, Search, AlertCircle, ChevronDown, ChevronUp, X, Loader2 } from 'lucide-react';
 import headerImage from '../assets/header.png';
 import TermsEditor, { TermsViewer } from './TermsCondition';
 import ValidatedInput from './ValidatedInput';
@@ -8,8 +8,6 @@ import { useCompanyCurrency } from './CompanyCurrencySelector';
 import MobileQuotationLayout from './MobileQuotationLayout';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { fmtDate } from '../utils/formatters';
-import useItemStore from '../services/itemStore';
-import { itemAPI } from '../services/api';
 import { useAppStore } from '../services/store';
 
 // ============================================================
@@ -30,26 +28,32 @@ const DOCUMENT_CONFIG = {
 const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
 const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
 
+// In QuotationLayout.jsx - Update the LEFT_FIELDS and RIGHT_FIELDS arrays
+
 const LEFT_FIELDS = [
-  ['Project Name', 'projectName', 'text'],
-  ['Customer', 'customer', 'text'],
-  ['Contact', 'contact', 'text'],
-  ['Date', 'date', 'date'],
-  ['Expiry Date', 'expiryDate', 'date'],
+  { label: 'Project Name', field: 'projectName', type: 'text', required: true },
+  { label: 'Scope of Work', field: 'scopeOfWork', type: 'textarea', required: false },
+  { label: 'Company Name', field: 'customer', type: 'text', required: true },  // This is the company name
+  { label: 'Name', field: 'customerName', type: 'text', required: true },  // Contact person name
+  { label: 'Phone', field: 'customerPhone', type: 'text', required: true },  // Contact phone
+  { label: 'Email', field: 'customerEmail', type: 'email', required: true },  // Contact email
+  { label: 'Designation', field: 'customerDesignation', type: 'text', required: false },
+  { label: 'Trade License Number', field: 'customerTradeLicenseNumber', type: 'text', required: false },
+  { label: 'Tax Registration Number', field: 'customerTaxRegistrationNumber', type: 'text', required: false },
 ];
 
 const RIGHT_FIELDS = [
-  // ['Our Ref', 'ourRef', 'text'],
-  ['Sales Email', 'salesManagerEmail', 'text'],
-  ['Sales Contact', 'ourContact', 'text'],
-  ['Payment', 'paymentTerms', 'text'],
-  ['Delivery', 'deliveryTerms', 'text'],
-  ['TL', 'tl', 'text'],
-  ['TRN', 'trn', 'text'],
+  { label: 'Name', field: 'ourFocalPoint', type: 'text', required: true },  // Focal point name
+  { label: 'Phone', field: 'ourContact', type: 'text', required: false },  // Changed from companyPhone to ourContact
+  { label: 'Email', field: 'salesManagerEmail', type: 'email', required: false },  // Changed from companyEmail to salesManagerEmail
+  { label: 'Designation', field: 'ourFocalPointDesignation', type: 'text', required: false },
+  { label: 'Trade License Number', field: 'companyTradeLicense', type: 'text', required: false },
+  { label: 'Tax Registration Number', field: 'companyTaxRegistration', type: 'text', required: false },
+  { label: 'Date', field: 'date', type: 'date', required: true },
+  { label: 'Expiry Date', field: 'expiryDate', type: 'date', required: true },
 ];
-
 // ============================================================
-// STYLES (UPDATED - Cleaner UI)
+// STYLES
 // ============================================================
 export const inputStyle = {
   width: '100%',
@@ -62,8 +66,6 @@ export const inputStyle = {
   boxSizing: 'border-box',
   transition: 'all 0.2s',
 };
-
- 
 
 const styles = {
   container: {
@@ -82,7 +84,6 @@ const styles = {
     overflow: 'hidden',
     borderRadius: '0.5rem',
     backgroundColor: '#f8fafc',
-    // border: '2px solid #000',
   },
   headerImage: {
     width: '100%',
@@ -135,22 +136,25 @@ const styles = {
   },
   fieldGrid: {
     display: 'grid',
-    gridTemplateColumns: '130px 16px 1fr',
+    gridTemplateColumns: '140px 16px 1fr',
     rowGap: '0.75rem',
-    alignItems: 'center',
+    alignItems: 'start',
   },
   fieldLabel: {
     fontWeight: 600,
     color: '#4b5563',
     fontSize: '0.875rem',
+    paddingTop: '0.5rem',
   },
   fieldColon: {
     color: '#6b7280',
+    paddingTop: '0.5rem',
   },
   fieldValue: {
     fontSize: '0.875rem',
     color: '#1f2937',
     fontWeight: 500,
+    paddingTop: '0.5rem',
   },
   fieldError: {
     display: 'flex',
@@ -572,197 +576,7 @@ const styles = {
 };
 
 // ============================================================
-// SEARCHABLE SELECT COMPONENT (UPDATED UI)
-// ============================================================
-const SearchableSelect = ({ 
-  options = [], 
-  value, 
-  onChange, 
-  placeholder = "Select item...",
-  loading = false
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filteredOptions, setFilteredOptions] = useState([]);
-  const dropdownRef = useRef(null);
-  const searchInputRef = useRef(null);
-
-  const selectedOption = options.find(opt => opt.value === value);
-  const selectedLabel = selectedOption?.label || '';
-
-  useEffect(() => {
-    let filtered = options;
-    if (searchTerm) {
-      filtered = options.filter(opt => 
-        opt.label.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-    setFilteredOptions(filtered);
-  }, [searchTerm, options]);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setIsOpen(false);
-        setSearchTerm('');
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (isOpen && searchInputRef.current) {
-      setTimeout(() => searchInputRef.current.focus(), 100);
-    }
-  }, [isOpen]);
-
-  const handleSelect = (option) => {
-    onChange(option.value);
-    setIsOpen(false);
-    setSearchTerm('');
-  };
-
-  const clearSelection = (e) => {
-    e.stopPropagation();
-    onChange('');
-  };
-
-  return (
-    <div ref={dropdownRef} style={{ position: 'relative', width: '100%', marginBottom: '0.5rem' }}>
-      <div
-        onClick={() => setIsOpen(!isOpen)}
-        style={{
-          border: '1px solid #d1d5db',
-          borderRadius: '0.5rem',
-          padding: '0.5rem 0.75rem',
-          fontSize: '0.875rem',
-          backgroundColor: 'white',
-          cursor: 'pointer',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          minHeight: '38px',
-          transition: 'border-color 0.2s',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.borderColor = '#9ca3af'}
-        onMouseLeave={(e) => e.currentTarget.style.borderColor = '#d1d5db'}
-      >
-        <span style={{ color: selectedLabel ? '#000' : '#9ca3af' }}>
-          {selectedLabel || placeholder}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          {value && (
-            <X
-              size={14}
-              onClick={clearSelection}
-              style={{ cursor: 'pointer', color: '#6b7280' }}
-            />
-          )}
-          {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </div>
-      </div>
-
-      {isOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            marginTop: '4px',
-            backgroundColor: 'white',
-            border: '1px solid #e5e7eb',
-            borderRadius: '0.5rem',
-            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-            zIndex: 1000,
-            maxHeight: '320px',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <div style={{ padding: '10px', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ position: 'relative' }}>
-              <Search
-                size={14}
-                style={{
-                  position: 'absolute',
-                  left: '10px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: '#9ca3af',
-                }}
-              />
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder={`Search ${options.length} items...`}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px 8px 34px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '0.375rem',
-                  fontSize: '0.8125rem',
-                  outline: 'none',
-                  transition: 'border-color 0.2s',
-                }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = '#3b82f6')}
-                onBlur={(e) => (e.currentTarget.style.borderColor = '#d1d5db')}
-              />
-            </div>
-          </div>
-
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {loading && filteredOptions.length === 0 ? (
-              <div style={{ padding: '40px', textAlign: 'center' }}>
-                <Loader2 size={24} style={{ animation: 'spin 1s linear infinite', margin: '0 auto', color: '#3b82f6' }} />
-                <p style={{ marginTop: '12px', color: '#6b7280', fontSize: '0.8125rem' }}>Loading items...</p>
-              </div>
-            ) : filteredOptions.length === 0 ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280', fontSize: '0.8125rem' }}>
-                {searchTerm ? `No items matching "${searchTerm}"` : 'No items available'}
-              </div>
-            ) : (
-              filteredOptions.map((option) => (
-                <div
-                  key={option.value}
-                  onClick={() => handleSelect(option)}
-                  style={{
-                    padding: '10px 12px',
-                    cursor: 'pointer',
-                    fontSize: '0.8125rem',
-                    borderBottom: '1px solid #f3f4f6',
-                    backgroundColor: value === option.value ? '#eff6ff' : 'white',
-                    transition: 'background-color 0.15s',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (value !== option.value) e.currentTarget.style.backgroundColor = '#f9fafb';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (value !== option.value) e.currentTarget.style.backgroundColor = 'white';
-                  }}
-                >
-                  {option.label}
-                  {option.sku && (
-                    <span style={{ fontSize: '0.65rem', color: '#9ca3af', marginLeft: '8px' }}>
-                      SKU: {option.sku}
-                    </span>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-};
-
-// ============================================================
-// DOCUMENT UPLOAD SECTION (KEEP EXISTING)
+// DOCUMENT UPLOAD SECTION
 // ============================================================
 function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload, onPreview, loading = false, isEditing = false, formatFileSize, getFileIcon }) {
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -905,61 +719,19 @@ const TABLE_HEADERS = (isEditing, currency) => [
 // ============================================================
 export default function QuotationLayout({
   isEditing, quotationNumber, quotationData, onDataChange,
-  quotationItems = [], availableItems = [], onUpdateItem, onAddItem, onRemoveItem,
+  quotationItems = [], onUpdateItem, onAddItem, onRemoveItem,
   onAddImages, onRemoveExistingImage, onRemoveNewImage, editingImgId, onToggleImgEdit,
   newImages = {}, subtotal = 0, taxAmount = 0, discountAmount = 0, grandTotal = 0,
   amountInWords = '', tcSections, onTcChange, actionBar, headerErrors = {},
   fieldErrors = {}, setHeaderErrors, documents = [], onDocumentUpload, onDocumentDelete,
   onDocumentDownload, onDocumentPreview, documentLoading = false, formatFileSize, getFileIcon,
-  companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai', termsImages = [], onTermsImagesUpload, onRemoveTermsImage
+  companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai', 
+  termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
+  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = ''
 }) {
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
-  const [itemOptions, setItemOptions] = useState([]);
-  const [loadingItems, setLoadingItems] = useState(false);
-  const [totalItemsCount, setTotalItemsCount] = useState(0);
-  const itemCache = useRef(new Map());
-  const initialized = useRef(false);
-  const currentUser = useAppStore((state) => state.user);
-
-  useEffect(() => {
-    console.log('Current user from store:', currentUser);
-    console.log('Sales email field current value:', quotationData.salesManagerEmail);
-    console.log('Our contact field current value:', quotationData.ourContact);
-  }, [currentUser, quotationData.salesManagerEmail, quotationData.ourContact]);
-
-  useEffect(() => {
-    console.log('=== AUTO-POPULATION DEBUG ===');
-    console.log('isEditing:', isEditing);
-    console.log('currentUser:', currentUser);
-    console.log('quotationData.salesManagerEmail before:', quotationData.salesManagerEmail);
-    console.log('quotationData.ourContact before:', quotationData.ourContact);
-    
-    // Only auto-populate when in editing mode and user exists
-    if ( currentUser) {
-      console.log('Auto-population conditions met');
-      
-      // Auto-populate Sales Email ONLY if it's empty
-      if (!quotationData.salesManagerEmail && currentUser.email) {
-        console.log('Setting sales email to:', currentUser.email);
-        onDataChange('salesManagerEmail', currentUser.email);
-      } else {
-        console.log('Not setting sales email - already has value or no email');
-      }
-      
-      // Auto-populate Sales Contact ONLY if it's empty
-      if (!quotationData.ourContact && currentUser.name) {
-        console.log('Setting sales contact to:', currentUser.phone);
-        onDataChange('ourContact', currentUser.phone);
-      } else {
-        console.log('Not setting sales contact - already has value or no name');
-      }
-    } else {
-      console.log('Auto-population conditions NOT met');
-      if (!isEditing) console.log('- isEditing is false');
-      if (!currentUser) console.log('- currentUser is null');
-    }
-  }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, onDataChange]);
+  
   if (!quotationData) return null;
 
   const displayCurrency = useMemo(() => {
@@ -992,157 +764,39 @@ export default function QuotationLayout({
     return fivePercent ? "5" : taxPresets[0].value;
   }, [showTaxSection, taxPresets]);
 
-  const { items: storeItems, getItemOptions, isLoaded } = useItemStore();
-  
-  console.log('LEFT_FIELDS:', LEFT_FIELDS.map(f => f[1]));
-console.log('quotationData keys:', Object.keys(quotationData));
-console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
+  const READONLY_FIELDS_IN_EDIT_MODE = ['customer', 'companyPhone', 'companyEmail', 'companyTradeLicense', 'companyTaxRegistration'];
 
-  useEffect(() => {
-    if (isLoaded && storeItems.length > 0) {
-      const options = getItemOptions();
-      setItemOptions(options);
-      setTotalItemsCount(options.length);
-    }
-  }, [storeItems, isLoaded, getItemOptions]);
-
- 
-  const loadAllItems = useCallback(async () => {
-    if (loadingItems) return;
-    setLoadingItems(true);
-    
-    try {
-      let allItems = [];
-      let currentPage = 1;
-      const pageSize = 100;
-      let hasMorePages = true;
-      
-      while (hasMorePages && currentPage <= 50) {
-         const response = await itemAPI.getAll({
-          page: currentPage,
-          limit: pageSize,
-          can_be_sold: 'true'
-        });
-        
-             const result = response.data;
-        
-        if (!result.success) {
-          throw new Error(result.message || 'Failed to fetch items');
-        }
-        
-        const items = result.data || [];
-        const pagination = result.pagination || {};
-        
-        if (items.length === 0) {
-          hasMorePages = false;
-        } else {
-          allItems = [...allItems, ...items];
-          hasMorePages = pagination.hasNextPage === true;
-          currentPage++;
-        }
-      }
-      
-      if (allItems.length === 0) {
-        setSnackbar({ show: true, message: 'No items found in catalogue', type: 'error' });
-        return;
-      }
-      
-      const formattedOptions = allItems.map(item => ({ 
-        value: item._id, 
-        label: item.name, 
-        sku: item.sku, 
-        fullData: item 
-      }));
-      
-      allItems.forEach(item => itemCache.current.set(item._id, item));
-      setItemOptions(formattedOptions);
-      setTotalItemsCount(allItems.length);
-      
-    } catch (error) {
-      console.error('Error loading items:', error);
-      setSnackbar({ 
-        show: true, 
-        message: 'Failed to load items: ' + (error.response?.data?.message || error.message), 
-        type: 'error' 
-      });
-    } finally {
-      setLoadingItems(false);
-    }
-  }, [loadingItems]);
-
-  const showLocalSnack = useCallback((message, type = 'error') => setSnackbar({ show: true, message, type }), []);
-  const hideSnack = useCallback(() => setSnackbar({ show: false, message: '', type: 'error' }), []);
-
-  useEffect(() => {
-    if (!initialized.current) {
-      initialized.current = true;
-      if (availableItems && availableItems.length > 0) {
-        const formattedOptions = availableItems
-          .filter(i => i.can_be_sold !== false)
-          .map(i => ({ value: i._id, label: i.name, sku: i.sku, fullData: i }));
-        setItemOptions(formattedOptions);
-        setTotalItemsCount(formattedOptions.length);
-        availableItems.forEach(i => itemCache.current.set(i._id, i));
-      } else if (!isLoaded) {
-        loadAllItems();
-      }
-    }
-  }, [availableItems, loadAllItems, isLoaded]);
-
-  const handleTaxChange = useCallback((e) => {
-    onDataChange('tax', parseFloat(e.target.value));
-    if (setHeaderErrors && headerErrors.tax) setHeaderErrors(prev => { const { tax, ...rest } = prev; return rest; });
-  }, [onDataChange, setHeaderErrors, headerErrors]);
-
-  const handleFieldChange = useCallback((field, value) => {
-    onDataChange(field, value);
-    if (setHeaderErrors && headerErrors[field]) setHeaderErrors(prev => { const { [field]: _, ...rest } = prev; return rest; });
-  }, [onDataChange, setHeaderErrors, headerErrors]);
-
-  const handleValidatedUpdate = useCallback((itemId, field, value, validator) => {
-    if (value === '' && field === 'quantity') return showLocalSnack('Quantity cannot be empty');
-    if (validator) {
-      const result = validator(value);
-      if (!result.isValid) return showLocalSnack(result.error);
-    }
-    onUpdateItem(itemId, field, value);
-  }, [onUpdateItem, showLocalSnack]);
-
-  const handleUpdateItem = useCallback((itemId, field, value) => {
-    if (field === 'itemId' && value) {
-      const selected = itemOptions.find(opt => opt.value === value);
-      if (selected?.fullData) {
-        const fd = selected.fullData;
-        onUpdateItem(itemId, 'name', fd.name);
-        onUpdateItem(itemId, 'description', fd.description || '');
-        onUpdateItem(itemId, 'unitPrice', fd.price || 0);
-        onUpdateItem(itemId, 'zohoId', fd.zohoId);
-        onUpdateItem(itemId, 'sku', fd.sku || '');
-        onUpdateItem(itemId, 'unit', fd.unit || '');
-        onUpdateItem(itemId, 'product_type', fd.product_type || 'goods');
-        onUpdateItem(itemId, 'tax_percentage', fd.tax_percentage || 0);
-        onUpdateItem(itemId, 'fullItemData', fd);
-      }
-    }
-    onUpdateItem(itemId, field, value);
-  }, [itemOptions, onUpdateItem]);
-
-  // Render helpers
-
-  const READONLY_FIELDS_IN_EDIT_MODE = ['customer', 'salesManagerEmail', 'ourContact'];
-
-  
   const renderFieldGrid = (fields, isReadOnly = false) => (
     <div style={styles.fieldGrid}>
-      {fields.map(([label, field, type]) => {
-        const isReadOnlyField = READONLY_FIELDS_IN_EDIT_MODE.includes(field);
+      {fields.map(({ label, field, type, required }) => {
+        let fieldValue = quotationData[field];
+        let errorMessage = headerErrors[field];
+        
+        // Special handling for specific fields
+        if (field === 'companyTradeLicense') {
+          fieldValue = companyTradeLicense || quotationData.companyTradeLicense;
+        }
+        if (field === 'companyTaxRegistration') {
+          fieldValue = companyTaxRegistration || quotationData.companyTaxRegistration;
+        }
+        if (field === 'ourContact') {
+          fieldValue = quotationData.ourContact || companyPhone;
+        }
+        if (field === 'salesManagerEmail') {
+          fieldValue = quotationData.salesManagerEmail || companyEmail;
+        }
+        
+        const isReadOnlyField = field === 'date' || field === 'expiryDate' || 
+                                field === 'companyTradeLicense' || field === 'companyTaxRegistration';
         
         return (
           <React.Fragment key={field}>
-            <span style={styles.fieldLabel}>{label}</span>
+            <span style={required ? styles.fieldLabelRequired : styles.fieldLabel}>
+              {label}{required && ' *'}
+            </span>
             <span style={styles.fieldColon}>:</span>
             {isEditing && !isReadOnly ? (
-              <div>
+              <div style={{ width: '100%' }}>
                 {isReadOnlyField ? (
                   <span style={{
                     ...styles.fieldValue,
@@ -1152,29 +806,42 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
                     display: 'block',
                     cursor: 'not-allowed'
                   }}>
-                    {quotationData[field] || 'N/A'}
+                    {fieldValue || 'Auto-filled'}
                   </span>
+                ) : type === 'textarea' ? (
+                  <textarea
+                    value={fieldValue || ''}
+                    onChange={(e) => handleFieldChange(field, e.target.value)}
+                    rows={3}
+                    style={{
+                      ...inputStyle,
+                      resize: 'vertical',
+                      borderColor: errorMessage ? '#dc2626' : undefined,
+                      backgroundColor: errorMessage ? '#fef2f2' : undefined
+                    }}
+                  />
                 ) : (
                   <input
                     type={type}
                     className="edit-input"
-                    value={quotationData[field] || ''}
-                    min={field === 'expiryDate' ? quotationData.date : undefined}
+                    value={fieldValue || ''}
                     onChange={(e) => handleFieldChange(field, e.target.value)}
                     style={{
                       ...inputStyle,
-                      borderColor: headerErrors[field] ? '#dc2626' : undefined,
-                      backgroundColor: headerErrors[field] ? '#fef2f2' : undefined
+                      borderColor: errorMessage ? '#dc2626' : undefined,
+                      backgroundColor: errorMessage ? '#fef2f2' : undefined
                     }}
                   />
                 )}
-                {headerErrors[field] && (
-                  <div style={styles.fieldError}>⚠ {headerErrors[field]}</div>
+                {errorMessage && (
+                  <div style={styles.fieldError}>
+                    <AlertCircle size={12} /> {errorMessage}
+                  </div>
                 )}
               </div>
             ) : (
               <span style={styles.fieldValue}>
-                {type === 'date' ? fmtDate(quotationData[field]) : (quotationData[field] || 'N/A')}
+                {type === 'date' ? fmtDate(fieldValue) : (fieldValue || 'N/A')}
               </span>
             )}
           </React.Fragment>
@@ -1183,6 +850,7 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
     </div>
   );
 
+  // UPDATED: Manual item row without catalog selector
   const renderItemImages = (qi) => {
     if (!qi.imagePaths?.length) return null;
   
@@ -1271,22 +939,18 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
     </div>
   );
 
+  // UPDATED: Manual item row without SearchableSelect
   const renderItemRow = (qi, index) => (
     <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
       <td style={styles.tableCellCenter}>{index + 1}</td>
       <td style={styles.tableCellDescription}>
         {isEditing ? (
           <>
-            <SearchableSelect 
-              options={itemOptions} 
-              value={qi.itemId || ''} 
-              onChange={(v) => handleUpdateItem(qi.id, 'itemId', v)}
-              loading={loadingItems}
-            />
+         
             <textarea
               className="edit-input"
               value={qi.description || ''}
-              onChange={(e) => handleUpdateItem(qi.id, 'description', e.target.value)}
+              onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
               placeholder="Item description (optional)…"
               rows={2}
               style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
@@ -1294,7 +958,7 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
           </>
         ) : (
           <>
-            <div style={styles.itemName}>{qi.name || '—'}</div>
+            
             {qi.description && <div style={styles.itemDescription}>{qi.description}</div>}
           </>
         )}
@@ -1302,7 +966,7 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
         {renderNewImages(qi)}
         {isEditing && renderImageUploadControls(qi)}
       </td>
-       <td style={styles.tableCellCenter}>
+      <td style={styles.tableCellCenter}>
         {isEditing ? (
           <div>
             <ValidatedInput
@@ -1324,8 +988,8 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
             )}
           </div>
         ) : qi.quantity}
-       </td>
-       <td style={styles.tableCellRight}>
+      </td>
+      <td style={styles.tableCellRight}>
         {isEditing ? (
           <div>
             <ValidatedInput
@@ -1348,11 +1012,11 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
             )}
           </div>
         ) : Number(qi.unitPrice || 0).toFixed(2)}
-       </td>
-       <td style={styles.tableCellRightBold}>
+      </td>
+      <td style={styles.tableCellRightBold}>
         {(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
-       </td>
-       {isEditing && (
+      </td>
+      {isEditing && (
         <td style={styles.tableCellCenter}>
           <button onClick={() => onRemoveItem(qi.id)} style={styles.deleteItemBtn}>
             <Trash2 size={15} />
@@ -1361,6 +1025,42 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
       )}
     </tr>
   );
+
+  const handleValidatedUpdate = (itemId, field, value, validator) => {
+    if (value === '' && field === 'quantity') {
+      setSnackbar({ show: true, message: 'Quantity cannot be empty', type: 'error' });
+      return;
+    }
+    if (validator) {
+      const result = validator(value);
+      if (!result.isValid) {
+        setSnackbar({ show: true, message: result.error, type: 'error' });
+        return;
+      }
+    }
+    if (field === 'quantity') {
+      value = parseInt(value, 10);
+    }
+    if (field === 'unitPrice') {
+      value = parseFloat(value) || 0;
+    }
+    onUpdateItem(itemId, field, value);
+  };
+
+  const handleFieldChange = useCallback((field, value) => {
+    onDataChange(field, value);
+    if (setHeaderErrors && headerErrors[field]) {
+      setHeaderErrors(prev => {
+        const { [field]: _, ...rest } = prev;
+        return rest;
+      });
+    }
+  }, [onDataChange, setHeaderErrors, headerErrors]);
+
+  const handleTaxChange = useCallback((e) => {
+    onDataChange('tax', parseFloat(e.target.value));
+    if (setHeaderErrors && headerErrors.tax) setHeaderErrors(prev => { const { tax, ...rest } = prev; return rest; });
+  }, [onDataChange, setHeaderErrors, headerErrors]);
 
   const isMobile = useMediaQuery('(max-width: 768px)');
 
@@ -1371,7 +1071,6 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
       quotationData={quotationData}
       onDataChange={onDataChange}
       quotationItems={quotationItems}
-      availableItems={availableItems}
       onUpdateItem={onUpdateItem}
       onAddItem={onAddItem}
       onRemoveItem={onRemoveItem}
@@ -1544,23 +1243,23 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
         </div>
       )}
 
-<div style={{ marginBottom: '2rem' }}>
-  <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
-  {isEditing ? (
-    <TermsEditor 
-      sections={tcSections} 
-      onChange={onTcChange}
-      termsImages={termsImages}
-      onTermsImagesUpload={onTermsImagesUpload}
-      onRemoveTermsImage={onRemoveTermsImage}
-    />
-  ) : (
-    <TermsViewer 
-      sections={tcSections} 
-      termsImages={termsImages}
-    />
-  )}
-</div>
+      <div style={{ marginBottom: '2rem' }}>
+        <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
+        {isEditing ? (
+          <TermsEditor 
+            sections={tcSections} 
+            onChange={onTcChange}
+            termsImages={termsImages}
+            onTermsImagesUpload={onTermsImagesUpload}
+            onRemoveTermsImage={onRemoveTermsImage}
+          />
+        ) : (
+          <TermsViewer 
+            sections={tcSections} 
+            termsImages={termsImages}
+          />
+        )}
+      </div>
 
       <DocumentUploadSection
         documents={documents}
@@ -1573,6 +1272,50 @@ console.log('salesManagerEmail value:', quotationData.salesManagerEmail);
         formatFileSize={formatFileSize}
         getFileIcon={getFileIcon}
       />
+
+{isEditing ? (
+  <div style={{ marginBottom: '2rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', padding: '1.25rem', border: '1px solid #e2e8f0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+      <FileText size={20} color="#4b5563" />
+      <h3 style={styles.sectionTitle}>Remark</h3>
+      <span style={styles.internalBadge}>Additional notes</span>
+    </div>
+    <textarea
+      className="edit-input"
+      value={quotationData.remark || ''}
+      onChange={(e) => onDataChange('remark', e.target.value)}
+      placeholder="Add any additional remarks or notes about this quotation..."
+      rows={3}
+      style={{
+        ...inputStyle,
+        resize: 'vertical',
+        width: '100%',
+        fontFamily: 'inherit',
+        fontSize: '0.875rem',
+        lineHeight: '1.5'
+      }}
+    />
+  </div>
+) : (
+  quotationData.remark && (
+    <div style={{ marginBottom: '2rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', padding: '1.25rem', border: '1px solid #e2e8f0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        <FileText size={20} color="#4b5563" />
+        <h3 style={styles.sectionTitle}>Remark</h3>
+      </div>
+      <div style={{ 
+        fontSize: '0.875rem', 
+        color: '#1f2937', 
+        lineHeight: '1.5',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word'
+      }}>
+        {quotationData.remark}
+      </div>
+    </div>
+  )
+)}
+
 
       <div style={styles.signatureFooter}>
         <p style={{ margin: 0, fontWeight: '600', color: '#1f2937', fontSize: '0.875rem' }}>Sincerely,</p>

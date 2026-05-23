@@ -22,6 +22,7 @@ import {
   FileText,
   Users,
   ShoppingCart,
+  Bell,
 } from "lucide-react";
 
 import {
@@ -65,6 +66,8 @@ import {
 import { downloadQuotationPDF } from "../utils/pdfGenerator";
 import { htmlToSections, sectionsToHTML } from "../components/TermsCondition";
 import LoadingOverlay from "../components/LoadingOverlay";
+import useNotificationStore from "../services/notificationStore";
+import NotificationDrawer from "../components/NotificationDrawer";
 
 const useMediaQuery = (query) => {
   const [matches, setMatches] = useState(() => {
@@ -154,7 +157,7 @@ const STATUS_CONFIG = {
   },
 };
 
-const EnhancedStatusBadge = ({ status, quotation }) => {
+const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
   const config = STATUS_CONFIG[status] || {
     label: status?.replace(/_/g, " ") || "Unknown",
     bg: "#f1f5f9",
@@ -164,14 +167,13 @@ const EnhancedStatusBadge = ({ status, quotation }) => {
     description: "Unknown status",
   };
 
-  const isExpired = quotation && new Date(quotation.expiryDate) < new Date();
-  const isExpiringSoon =
+  const isExp = quotation && new Date(quotation.expiryDate) < new Date();
+  const isExpiringSn =
     quotation &&
-    !isExpired &&
+    !isExp &&
     new Date(quotation.expiryDate) - new Date() < 7 * 24 * 60 * 60 * 1000;
 
-  // Override for expired quotations
-  if (isExpired && status === "pending") {
+  if (isExp && status === "pending") {
     return (
       <div
         style={{
@@ -195,8 +197,7 @@ const EnhancedStatusBadge = ({ status, quotation }) => {
     );
   }
 
-  // Override for expiring soon
-  if (isExpiringSoon && status === "pending") {
+  if (isExpiringSn && status === "pending") {
     return (
       <div
         style={{
@@ -251,29 +252,57 @@ const EnhancedStatusBadge = ({ status, quotation }) => {
       {config.label}
     </div>
   );
-};
+});
 
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
-  // Responsive hooks
   const isMobile = useMediaQuery("(max-width: 768px)");
   const isTablet = useMediaQuery("(min-width: 769px) and (max-width: 1024px)");
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [viewMode, setViewMode] = useState("table"); // 'table' or 'card'
-  const [saveProgress, setSaveProgress] = useState(0);
-const [saveStep, setSaveStep] = useState('');
-const [pdfProgress, setPdfProgress] = useState(0);
-const [pdfStep, setPdfStep] = useState('');
+ 
+  const { isOpen: notificationOpen, setOpen, unreadCount } = useNotificationStore();
+  const [uiState, setUiState] = useState({
+    mobileMenuOpen: false,
+    viewMode: "table",
+    saveProgress: 0,
+    saveStep: "",
+    pdfProgress: 0,
+    pdfStep: "",
+  });
+
+  const [tableState, setTableState] = useState({
+    activeTab: "all",
+    page: 1,
+    limit: 20,
+    searchInput: "",
+    search: "",
+    sort: { field: "date", dir: "desc" },
+  });
+
+  const [modalsState, setModalsState] = useState({
+    exportingId: null,
+    deleteModal: { open: false, quotation: null, busy: false },
+    awardModal: { open: false, quotation: null, busy: false },
+    queryDateModal: { open: false, quotation: null },
+  });
+
+  const [toasts, setToasts] = useState([]);
+
+  const searchRef = useRef(null);
+  const searchTimer = useRef(null);
+  let toastIdRef = useRef(0);
 
   const {
     quotations: companyQuotations,
-    loading: companyLoading,
+    quotationsLoading,
+    quotationsInitialized,
     refresh: refreshCompanyQuotations,
   } = useCompanyQuotations();
+  
   const {
     totalCustomers,
     loading: statsLoading,
-    refetch,
+    refetch: refetchCustomerStats,
   } = useCustomerStatsWithCompany();
+  
   const customers = useAppStore((s) => s.customers);
   const loadError = useAppStore((s) => s.loadError);
   const deleteQuotation = useAppStore((s) => s.deleteQuotation);
@@ -283,58 +312,48 @@ const [pdfStep, setPdfStep] = useState('');
   const clearError = useAppStore((s) => s.clearError);
   const updateQueryDate = useAppStore((s) => s.updateQueryDate);
   const storeQuotations = useAppStore((s) => s.quotations);
+  const selectedCompany = useAppStore((s) => s.selectedCompany);
+  
   const {
     company: currentCompany,
     selectedCurrency,
     refreshCompanyData,
   } = useCompanyCurrency();
 
-  const [activeTab, setActiveTab] = useState("all");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(isMobile ? 10 : 20);
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [sort, setSort] = useState({ field: "date", dir: "desc" });
-  const [exportingId, setExportingId] = useState(null);
-  const [deleteModal, setDeleteModal] = useState({
-    open: false,
-    quotation: null,
-    busy: false,
-  });
-  const [awardModal, setAwardModal] = useState({
-    open: false,
-    quotation: null,
-    busy: false,
-  });
-  const [queryDateModal, setQueryDateModal] = useState({
-    open: false,
-    quotation: null,
-  });
-  const [toasts, setToasts] = useState([]);
+  const hasMountedRef = useRef(false);
 
-  const searchRef = useRef(null);
-  const searchTimer = useRef(null);
-  let toastIdRef = useRef(0);
-
-  // Update limit when screen size changes
+  // ✅ FIX: Trigger stats refresh when selectedCompany changes (including 'all')
   useEffect(() => {
-    setLimit(isMobile ? 10 : 20);
+    if (selectedCompany) {
+      refetchCustomerStats();
+    }
+  }, [selectedCompany, refetchCustomerStats]);
+
+  useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+    setTableState((prev) => ({
+      ...prev,
+      limit: isMobile ? 10 : 20,
+    }));
   }, [isMobile]);
 
-  // Reset view mode on mobile
   useEffect(() => {
+    if (!hasMountedRef.current) return;
     if (isMobile) {
-      setViewMode("card");
+      setUiState((prev) => ({
+        ...prev,
+        viewMode: "card",
+      }));
     }
   }, [isMobile]);
-
-  const hasFetched = !statsLoading || storeQuotations.length > 0;
-  const safeQ = useMemo(
-    () => (Array.isArray(companyQuotations) ? companyQuotations : []),
-    [companyQuotations]
-  );
-  const isInitialLoading = statsLoading && !hasFetched;
-  const isRefreshing = statsLoading && hasFetched;
+ 
+  const safeQ = companyQuotations || [];
+  const isInitialLoading = !quotationsInitialized || quotationsLoading;
+  const isRefreshing = quotationsInitialized && quotationsLoading; 
+  const showEmptyState = quotationsInitialized && !quotationsLoading && safeQ.length === 0;
 
   const addToast = useCallback((message, type = "info") => {
     const id = ++toastIdRef.current;
@@ -361,7 +380,7 @@ const [pdfStep, setPdfStep] = useState('');
     };
     for (const q of safeQ) {
       rev += q.total || 0;
-      if (q.status === "pending") c.pending++;
+      if (q.status === "pending" || q.status === "pending_admin") c.pending++;
       else if (q.status === "ops_approved") c.in_review++;
       else if (q.status === "approved") c.approved++;
       else if (q.status === "awarded") c.awarded++;
@@ -384,16 +403,16 @@ const [pdfStep, setPdfStep] = useState('');
   );
 
   const tabFiltered = useMemo(() => {
-    const { statusFilter } = TAB_KEYS[activeTab];
+    const { statusFilter } = TAB_KEYS[tableState.activeTab];
     if (!statusFilter) return safeQ;
     if (Array.isArray(statusFilter))
       return safeQ.filter((q) => statusFilter.includes(q.status));
     return safeQ.filter((q) => q.status === statusFilter);
-  }, [safeQ, activeTab]);
+  }, [safeQ, tableState.activeTab]);
 
   const searchFiltered = useMemo(() => {
-    if (!search.trim()) return tabFiltered;
-    const t = search.toLowerCase();
+    if (!tableState.search.trim()) return tabFiltered;
+    const t = tableState.search.toLowerCase();
     return tabFiltered.filter(
       (q) =>
         (q.quotationNumber || "").toLowerCase().includes(t) ||
@@ -401,11 +420,11 @@ const [pdfStep, setPdfStep] = useState('');
           .toLowerCase()
           .includes(t)
     );
-  }, [tabFiltered, search]);
+  }, [tabFiltered, tableState.search]);
 
   const sorted = useMemo(() => {
     const arr = [...searchFiltered];
-    const { field, dir } = sort;
+    const { field, dir } = tableState.sort;
     arr.sort((a, b) => {
       let av = a[field],
         bv = b[field];
@@ -442,47 +461,55 @@ const [pdfStep, setPdfStep] = useState('');
         : 0;
     });
     return arr;
-  }, [searchFiltered, sort]);
+  }, [searchFiltered, tableState.sort]);
 
   const totalFiltered = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
-  const safePage = Math.min(page, totalPages);
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / tableState.limit));
+  const safePage = Math.min(tableState.page, totalPages);
   const paginated = useMemo(
-    () => sorted.slice((safePage - 1) * limit, safePage * limit),
-    [sorted, safePage, limit]
+    () => sorted.slice((safePage - 1) * tableState.limit, safePage * tableState.limit),
+    [sorted, safePage, tableState.limit]
   );
 
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
-    setSearchInput(val);
+    setTableState((prev) => ({ ...prev, searchInput: val }));
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      setSearch(val);
-      setPage(1);
+      setTableState((prev) => ({ ...prev, search: val, page: 1 }));
     }, DEBOUNCE_MS);
   }, []);
 
   const clearSearch = useCallback(() => {
-    setSearchInput("");
-    setSearch("");
-    setPage(1);
+    setTableState((prev) => ({
+      ...prev,
+      searchInput: "",
+      search: "",
+      page: 1,
+    }));
   }, []);
 
   const handleTabChange = useCallback((key) => {
-    setActiveTab(key);
-    setPage(1);
-    setSearchInput("");
-    setSearch("");
-    setSort({ field: "date", dir: "desc" });
-    setMobileMenuOpen(false);
+    setTableState((prev) => ({
+      ...prev,
+      activeTab: key,
+      page: 1,
+      searchInput: "",
+      search: "",
+      sort: { field: "date", dir: "desc" },
+    }));
+    setUiState((prev) => ({ ...prev, mobileMenuOpen: false }));
   }, []);
 
   const handleSort = useCallback((field) => {
-    setSort((prev) => ({
-      field,
-      dir: prev.field === field && prev.dir === "asc" ? "desc" : "asc",
+    setTableState((prev) => ({
+      ...prev,
+      sort: {
+        field,
+        dir: prev.sort.field === field && prev.sort.dir === "asc" ? "desc" : "asc",
+      },
+      page: 1,
     }));
-    setPage(1);
   }, []);
 
   const handleUpdateQueryDate = useCallback(
@@ -494,42 +521,55 @@ const [pdfStep, setPdfStep] = useState('');
       } else {
         addToast(result?.error || "Failed to update follow-up date", "error");
       }
-      setQueryDateModal({ open: false, quotation: null });
+      setModalsState((prev) => ({
+        ...prev,
+        queryDateModal: { open: false, quotation: null },
+      }));
     },
     [updateQueryDate, addToast, refreshCompanyQuotations]
   );
 
   const handleRefresh = useCallback(async () => {
     try {
-      setSaveProgress(10);
-      setSaveStep('Refreshing data...');
-      
+      setUiState((prev) => ({
+        ...prev,
+        saveProgress: 10,
+        saveStep: "Refreshing data...",
+      }));
+
       const progressInterval = setInterval(() => {
-        setSaveProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
+        setUiState((prev) => ({
+          ...prev,
+          saveProgress:
+            prev.saveProgress >= 90 ? 90 : prev.saveProgress + 10,
+        }));
       }, 500);
-      
+
       await fetchAllData();
       refreshCompanyData?.();
-      
-      setSaveProgress(100);
-      setSaveStep('Complete!');
+
+      setUiState((prev) => ({
+        ...prev,
+        saveProgress: 100,
+        saveStep: "Complete!",
+      }));
       addToast("Data refreshed", "success");
-      
+
       setTimeout(() => {
-        setSaveProgress(0);
-        setSaveStep('');
+        setUiState((prev) => ({
+          ...prev,
+          saveProgress: 0,
+          saveStep: "",
+        }));
       }, 1000);
-      
+
       clearInterval(progressInterval);
     } catch (err) {
-      setSaveProgress(0);
-      setSaveStep('');
+      setUiState((prev) => ({
+        ...prev,
+        saveProgress: 0,
+        saveStep: "",
+      }));
       addToast(err.message || "Refresh failed", "error");
     }
   }, [fetchAllData, refreshCompanyData, addToast]);
@@ -543,12 +583,10 @@ const [pdfStep, setPdfStep] = useState('');
     }
 
     const cloudinaryImages = quotation.termsImages || [];
-
     const sections = htmlToSections(
       quotation.termsAndConditions || "",
       cloudinaryImages
     );
-
     const termsHTMLWithImages = sectionsToHTML(sections);
 
     return {
@@ -559,102 +597,129 @@ const [pdfStep, setPdfStep] = useState('');
 
   const handleDownload = useCallback(
     async (q) => {
-      setExportingId(q._id);
-      setPdfProgress(10);
-      setPdfStep('Preparing PDF...');
-      
+      setModalsState((prev) => ({
+        ...prev,
+        exportingId: q._id,
+      }));
+      setUiState((prev) => ({
+        ...prev,
+        pdfProgress: 10,
+        pdfStep: "Preparing PDF...",
+      }));
+
       const progressInterval = setInterval(() => {
-        setPdfProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
+        setUiState((prev) => ({
+          ...prev,
+          pdfProgress: prev.pdfProgress >= 90 ? 90 : prev.pdfProgress + 10,
+        }));
       }, 800);
-      
+
       try {
         const storeQuotations = useAppStore.getState().quotations;
         let completeQuotation = storeQuotations.find(
           (quot) => quot._id === q._id
         );
-  
+
         if (!completeQuotation) {
           completeQuotation = q;
         }
-  
-        setPdfProgress(40);
-        setPdfStep('Processing images...');
-        
+
+        setUiState((prev) => ({
+          ...prev,
+          pdfProgress: 40,
+          pdfStep: "Processing images...",
+        }));
+
         const pdfQuotation = await buildQuotationForPDF(completeQuotation);
-        
-        setPdfProgress(70);
-        setPdfStep('Generating PDF...');
-  
-        console.log(
-          "PDF Quotation termsImages count:",
-          pdfQuotation.termsImages?.length
-        );
-        console.log(
-          "PDF Quotation termsAndConditions includes img:",
-          pdfQuotation.termsAndConditions?.includes("<img")
-        );
-  
+
+        setUiState((prev) => ({
+          ...prev,
+          pdfProgress: 70,
+          pdfStep: "Generating PDF...",
+        }));
+
         await downloadQuotationPDF(pdfQuotation);
-        
-        setPdfProgress(100);
-        setPdfStep('Complete!');
+
+        setUiState((prev) => ({
+          ...prev,
+          pdfProgress: 100,
+          pdfStep: "Complete!",
+        }));
         addToast("PDF generated successfully!", "success");
-        
+
         setTimeout(() => {
-          setPdfProgress(0);
-          setPdfStep('');
+          setUiState((prev) => ({
+            ...prev,
+            pdfProgress: 0,
+            pdfStep: "",
+          }));
         }, 1000);
-        
       } catch (err) {
         console.error("PDF generation error:", err);
-        setPdfProgress(0);
-        setPdfStep('');
+        setUiState((prev) => ({
+          ...prev,
+          pdfProgress: 0,
+          pdfStep: "",
+        }));
         addToast(`PDF failed: ${err.message}`, "error");
       } finally {
         clearInterval(progressInterval);
-        setExportingId(null);
+        setModalsState((prev) => ({
+          ...prev,
+          exportingId: null,
+        }));
       }
     },
     [addToast, buildQuotationForPDF]
   );
 
   const confirmDelete = useCallback(async () => {
-    const { quotation } = deleteModal;
+    const { quotation } = modalsState.deleteModal;
     if (!quotation) return;
-    setDeleteModal((m) => ({ ...m, busy: true }));
+    
+    setModalsState((prev) => ({
+      ...prev,
+      deleteModal: { ...prev.deleteModal, busy: true },
+    }));
+    
     const result = await deleteQuotation(quotation._id);
     if (result?.success) {
       addToast(`Quotation ${quotation.quotationNumber} deleted.`, "success");
-      setDeleteModal({ open: false, quotation: null, busy: false });
-      setPage((p) =>
-        Math.max(1, Math.min(p, Math.ceil((totalFiltered - 1) / limit)))
-      );
+      setModalsState((prev) => ({
+        ...prev,
+        deleteModal: { open: false, quotation: null, busy: false },
+      }));
+      setTableState((prev) => ({
+        ...prev,
+        page: Math.max(1, Math.min(prev.page, Math.ceil((totalFiltered - 1) / prev.limit))),
+      }));
       await refreshCompanyQuotations();
     } else {
       addToast(result?.error || "Delete failed", "error");
-      setDeleteModal((m) => ({ ...m, busy: false }));
+      setModalsState((prev) => ({
+        ...prev,
+        deleteModal: { ...prev.deleteModal, busy: false },
+      }));
     }
   }, [
-    deleteModal,
+    modalsState.deleteModal,
     deleteQuotation,
     addToast,
     totalFiltered,
-    limit,
+    tableState.limit,
     refreshCompanyQuotations,
   ]);
 
   const confirmAward = useCallback(
     async (awarded, awardNote) => {
-      const { quotation } = awardModal;
+      const { quotation } = modalsState.awardModal;
       if (!quotation || awarded === null) return;
 
-      setAwardModal((m) => ({ ...m, busy: true }));
+      setModalsState((prev) => ({
+        ...prev,
+        awardModal: { ...prev.awardModal, busy: true },
+      }));
+      
       const result = await awardQuotation(quotation._id, awarded, awardNote);
 
       if (result?.success) {
@@ -665,25 +730,21 @@ const [pdfStep, setPdfStep] = useState('');
           "success"
         );
 
-        const currentStoreQuotations = useAppStore.getState().quotations;
-        const updatedQuot = currentStoreQuotations.find(
-          (q) => q._id === quotation._id
-        );
-
         await refreshCompanyQuotations();
 
-        const refreshedStoreQuotations = useAppStore.getState().quotations;
-        const refreshedQuot = refreshedStoreQuotations.find(
-          (q) => q._id === quotation._id
-        );
-
-        setAwardModal({ open: false, quotation: null, busy: false });
+        setModalsState((prev) => ({
+          ...prev,
+          awardModal: { open: false, quotation: null, busy: false },
+        }));
       } else {
         addToast(result?.error || "Failed to update", "error");
-        setAwardModal((m) => ({ ...m, busy: false }));
+        setModalsState((prev) => ({
+          ...prev,
+          awardModal: { ...prev.awardModal, busy: false },
+        }));
       }
     },
-    [awardModal, awardQuotation, addToast, refreshCompanyQuotations]
+    [modalsState.awardModal, awardQuotation, addToast, refreshCompanyQuotations]
   );
 
   useEffect(() => {
@@ -711,6 +772,50 @@ const [pdfStep, setPdfStep] = useState('');
         count: tabCounts[key] ?? 0,
       })),
     [tabCounts]
+  );
+
+  // Skeleton loader component
+  const SkeletonLoader = () => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ backgroundColor: "#fafafa" }}>
+            {[
+              "Quote #",
+              "Customer",
+              "Project Name",
+              "Query Date",
+              "Submitted",
+              "Expiry",
+              "Total",
+              "Created By",
+              "Actions",
+            ].map((h) => (
+              <th
+                key={h}
+                style={{
+                  padding: "0.75rem 1rem",
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  color: "#64748b",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  borderBottom: "1px solid #f1f5f9",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+            <SkeletonRow key={i} />
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 
   const NavBtn = React.memo(({ onClick, label, primary }) => (
@@ -755,19 +860,22 @@ const [pdfStep, setPdfStep] = useState('');
       <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <ConfirmModal
-        open={deleteModal.open}
+        open={modalsState.deleteModal.open}
         title="Delete Quotation"
-        message={`Are you sure you want to permanently delete ${deleteModal.quotation?.quotationNumber}? This action cannot be undone.`}
+        message={`Are you sure you want to permanently delete ${modalsState.deleteModal.quotation?.quotationNumber}? This action cannot be undone.`}
         confirmLabel="Delete"
         danger
-        loading={deleteModal.busy}
+        loading={modalsState.deleteModal.busy}
         onConfirm={confirmDelete}
         onCancel={() =>
-          !deleteModal.busy &&
-          setDeleteModal({ open: false, quotation: null, busy: false })
+          !modalsState.deleteModal.busy &&
+          setModalsState((prev) => ({
+            ...prev,
+            deleteModal: { open: false, quotation: null, busy: false },
+          }))
         }
       >
-        {deleteModal.quotation?.status === "ops_rejected" && (
+        {modalsState.deleteModal.quotation?.status === "ops_rejected" && (
           <div
             style={{
               backgroundColor: "#fef2f2",
@@ -787,167 +895,216 @@ const [pdfStep, setPdfStep] = useState('');
       </ConfirmModal>
 
       <AwardModal
-        open={awardModal.open}
-        quotation={awardModal.quotation}
+        open={modalsState.awardModal.open}
+        quotation={modalsState.awardModal.quotation}
         onConfirm={confirmAward}
         onCancel={() =>
-          !awardModal.busy &&
-          setAwardModal({ open: false, quotation: null, busy: false })
+          !modalsState.awardModal.busy &&
+          setModalsState((prev) => ({
+            ...prev,
+            awardModal: { open: false, quotation: null, busy: false },
+          }))
         }
-        loading={awardModal.busy}
+        loading={modalsState.awardModal.busy}
       />
 
       {/* Header */}
       <div
-  style={{
-    backgroundColor: "#0f172a",
-    padding: isMobile ? "0.75rem 1rem" : "0 2rem",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    minHeight: 60,
-    position: "sticky",
-    top: 0,
-    zIndex: 50,
-    boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-    flexWrap: "wrap",
-    gap: "0.75rem",
-  }}
->
-  <div
-    style={{
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      width: isMobile ? "100%" : "auto",
-    }}
-  >
-    <div>
-      <div
         style={{
-          fontSize: isMobile ? "1rem" : "1.0625rem",
-          fontWeight: 800,
-          color: "white",
-          letterSpacing: "-0.01em",
+          backgroundColor: "#0f172a",
+          padding: isMobile ? "0.75rem 1rem" : "0 2rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          minHeight: 60,
+          position: "sticky",
+          top: 0,
+          zIndex: 50,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
+          flexWrap: "wrap",
+          gap: "0.75rem",
         }}
       >
-        📋 My Dashboard
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: isMobile ? "100%" : "auto",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: isMobile ? "1rem" : "1.0625rem",
+                fontWeight: 800,
+                color: "white",
+                letterSpacing: "-0.01em",
+              }}
+            >
+              📋 My Dashboard
+            </div>
+            {!isMobile && <CompanyCurrencyDisplay />}
+          </div>
+          {isMobile && (
+            <button
+              onClick={() =>
+                setUiState((prev) => ({
+                  ...prev,
+                  mobileMenuOpen: !prev.mobileMenuOpen,
+                }))
+              }
+              style={{
+                background: "rgba(255,255,255,0.1)",
+                border: "none",
+                borderRadius: 8,
+                padding: "0.4rem 0.7rem",
+                color: "white",
+                cursor: "pointer",
+              }}
+            >
+              <Menu size={20} />
+            </button>
+          )}
+        </div>
+
+        {isMobile && <CompanyCurrencyDisplay />}
+
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            alignItems: "center",
+            flexWrap: "wrap",
+            ...(isMobile && !uiState.mobileMenuOpen
+              ? { display: "none" }
+              : { display: "flex" }),
+            width: isMobile ? "100%" : "auto",
+            justifyContent: isMobile ? "center" : "flex-end",
+          }}
+        >
+          <CompanyCurrencySelector variant="compact" />
+
+          <button
+            onClick={() => onNavigate("customers")}
+            style={{
+              backgroundColor: "#e0e7ff",
+              color: "#4f46e5",
+              border: "none",
+              borderRadius: 8,
+              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+              fontSize: isMobile ? "0.7rem" : "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <Users size={isMobile ? 12 : 14} /> Customers
+          </button>
+
+          <button
+            onClick={() => onNavigate("items")}
+            style={{
+              backgroundColor: "#e0e7ff",
+              color: "#4f46e5",
+              border: "none",
+              borderRadius: 8,
+              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+              fontSize: isMobile ? "0.7rem" : "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <ShoppingCart size={isMobile ? 12 : 14} /> Items
+          </button>
+
+          <button
+            onClick={() => onNavigate("addQuotation")}
+            style={{
+              backgroundColor: "#10b981",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
+              fontSize: isMobile ? "0.7rem" : "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <FileText size={isMobile ? 12 : 14} /> {isMobile ? "New" : "New Quotation"}
+          </button>
+
+          <button
+            onClick={handleLogout}
+            style={{
+              backgroundColor: "rgba(255,255,255,0.08)",
+              color: "#94a3b8",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 8,
+              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
+              fontSize: isMobile ? "0.7rem" : "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              fontFamily: "inherit",
+            }}
+          >
+            <LogOut size={isMobile ? 12 : 15} /> Logout
+          </button>
+          <button 
+            onClick={() => setOpen(true)}
+            style={{
+              backgroundColor: "rgba(255,255,255,0.08)",
+              color: "#94a3b8",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 8,
+              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
+              fontSize: isMobile ? "0.7rem" : "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <Bell size={isMobile ? 18 : 20} />
+            {unreadCount > 0 && (
+              <div 
+                style={{
+                  position: "absolute",
+                  top: "-4px",
+                  right: "-4px",
+                  backgroundColor: "#ef4444",
+                  color: "white",
+                  fontSize: "10px",
+                  fontWeight: "700",
+                  minWidth: "18px",
+                  height: "18px",
+                  borderRadius: "9999px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "0 5px",
+                  border: "2px solid #0f172a",
+                }}
+              >
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </div>
+            )}
+          </button>
+        </div>
       </div>
-      {!isMobile && <CompanyCurrencyDisplay />}
-    </div>
-    {isMobile && (
-      <button
-        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-        style={{
-          background: "rgba(255,255,255,0.1)",
-          border: "none",
-          borderRadius: 8,
-          padding: "0.4rem 0.7rem",
-          color: "white",
-          cursor: "pointer",
-        }}
-      >
-        <Menu size={20} />
-      </button>
-    )}
-  </div>
-
-  {isMobile && <CompanyCurrencyDisplay />}
-
-  <div
-    style={{
-      display: "flex",
-      gap: "0.5rem",
-      alignItems: "center",
-      flexWrap: "wrap",
-      ...(isMobile && !mobileMenuOpen
-        ? { display: "none" }
-        : { display: "flex" }),
-      width: isMobile ? "100%" : "auto",
-      justifyContent: isMobile ? "center" : "flex-end",
-    }}
-  >
-    <CompanyCurrencySelector variant="compact" />
-    
-    {/* ✅ Always show labels on all devices - made responsive */}
-    <button
-      onClick={() => onNavigate("customers")}
-      style={{
-        backgroundColor: "#e0e7ff",
-        color: "#4f46e5",
-        border: "none",
-        borderRadius: 8,
-        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
-        fontSize: isMobile ? "0.7rem" : "0.8rem",
-        fontWeight: 600,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.4rem",
-      }}
-    >
-      <Users size={isMobile ? 12 : 14} /> Customers
-    </button>
-    
-    <button
-      onClick={() => onNavigate("items")}
-      style={{
-        backgroundColor: "#e0e7ff",
-        color: "#4f46e5",
-        border: "none",
-        borderRadius: 8,
-        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
-        fontSize: isMobile ? "0.7rem" : "0.8rem",
-        fontWeight: 600,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.4rem",
-      }}
-    >
-      <ShoppingCart size={isMobile ? 12 : 14} /> Items
-    </button>
-
-    <button
-      onClick={() => onNavigate("addQuotation")}
-      style={{
-        backgroundColor: "#10b981",
-        color: "white",
-        border: "none",
-        borderRadius: 8,
-        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.875rem",
-        fontSize: isMobile ? "0.7rem" : "0.8rem",
-        fontWeight: 600,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.4rem",
-      }}
-    >
-      <FileText size={isMobile ? 12 : 14} /> {isMobile ? "New" : "New Quotation"}
-    </button>
-    
-    <button
-      onClick={handleLogout}
-      style={{
-        backgroundColor: "rgba(255,255,255,0.08)",
-        color: "#94a3b8",
-        border: "1px solid rgba(255,255,255,0.12)",
-        borderRadius: 8,
-        padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
-        fontSize: isMobile ? "0.7rem" : "0.8rem",
-        fontWeight: 600,
-        cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.4rem",
-        fontFamily: "inherit",
-      }}
-    >
-      <LogOut size={isMobile ? 12 : 15} /> Logout
-    </button>
-  </div>
-</div>
 
       {/* Main Content */}
       <div
@@ -1014,15 +1171,25 @@ const [pdfStep, setPdfStep] = useState('');
           </div>
         )}
 
-        {/* Stats Section - Different components for mobile vs desktop */}
-        {isMobile ? (
+        {/* Stats Section - Show skeleton while loading */}
+        {isInitialLoading ? (
+          <div style={{ marginBottom: "1.5rem" }}>
+            <div style={{ 
+              height: isMobile ? "120px" : "100px", 
+              background: "linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)",
+              backgroundSize: "200% 100%",
+              animation: "hs-shimmer 1.5s infinite",
+              borderRadius: "12px"
+            }} />
+          </div>
+        ) : isMobile ? (
           <CompactStatsCard
             totalRevenue={totalRevenue}
             quotationsCount={safeQ.length}
             customersCount={totalCustomers}
             selectedCurrency={selectedCurrency}
             statusCounts={statusCounts}
-            loading={isInitialLoading}
+            loading={false}
           />
         ) : (
           <DesktopStatsGrid
@@ -1031,7 +1198,7 @@ const [pdfStep, setPdfStep] = useState('');
             customersCount={totalCustomers}
             selectedCurrency={selectedCurrency}
             statusCounts={statusCounts}
-            loading={isInitialLoading}
+            loading={false}
           />
         )}
 
@@ -1070,7 +1237,7 @@ const [pdfStep, setPdfStep] = useState('');
               }}
             >
               {TABS.map(({ key, label, Icon: I, count }) => {
-                const active = activeTab === key;
+                const active = tableState.activeTab === key;
                 const isPending = key === "pending";
                 const isReturned = key === "returned";
                 const hasAlert = (isPending || isReturned) && count > 0;
@@ -1132,25 +1299,25 @@ const [pdfStep, setPdfStep] = useState('');
             >
               <button
                 onClick={handleRefresh}
-                disabled={statsLoading}
+                disabled={isRefreshing}
                 style={{
                   width: isMobile ? 36 : 34,
                   height: isMobile ? 36 : 34,
                   border: "1px solid #e2e8f0",
                   borderRadius: 8,
                   background: "#f8fafc",
-                  cursor: statsLoading ? "not-allowed" : "pointer",
+                  cursor: isRefreshing ? "not-allowed" : "pointer",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  opacity: statsLoading ? 0.5 : 1,
+                  opacity: isRefreshing ? 0.5 : 1,
                 }}
               >
                 <RefreshCw
                   size={isMobile ? 14 : 14}
                   color="#64748b"
                   style={
-                    statsLoading
+                    isRefreshing
                       ? { animation: "hs-spin 1s linear infinite" }
                       : {}
                   }
@@ -1182,11 +1349,11 @@ const [pdfStep, setPdfStep] = useState('');
                     fontFamily: "inherit",
                   }}
                   placeholder="Search… (press /)"
-                  value={searchInput}
+                  value={tableState.searchInput}
                   onChange={handleSearchChange}
                   disabled={isInitialLoading}
                 />
-                {searchInput && (
+                {tableState.searchInput && (
                   <button
                     onClick={clearSearch}
                     style={{
@@ -1202,17 +1369,19 @@ const [pdfStep, setPdfStep] = useState('');
                 )}
               </div>
 
-              {/* View Toggle - Only on desktop */}
+              {/* View Toggle */}
               <ViewToggle
-                view={viewMode}
-                onViewChange={setViewMode}
+                view={uiState.viewMode}
+                onViewChange={(view) =>
+                  setUiState((prev) => ({ ...prev, viewMode: view }))
+                }
                 isMobile={isMobile}
               />
             </div>
           </div>
 
-          {/* Loading Overlay */}
-          {isRefreshing && (
+          {/* Loading Overlay for refresh */}
+          {isRefreshing && !isInitialLoading && (
             <div
               style={{
                 position: "absolute",
@@ -1257,53 +1426,13 @@ const [pdfStep, setPdfStep] = useState('');
             </div>
           )}
 
-          {/* Content */}
-          {isInitialLoading && (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ backgroundColor: "#fafafa" }}>
-                    {[
-                      "Quote #",
-                      "Customer",
-                      "Project Name",
-                      "Query Date",
-                      "Submitted",
-                      "Expiry",
-                      "Total",
-                      "Created By",
-                      "Actions",
-                    ].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: "0.75rem 1rem",
-                          fontSize: "0.72rem",
-                          fontWeight: 700,
-                          color: "#64748b",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.05em",
-                          borderBottom: "1px solid #f1f5f9",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-                    <SkeletonRow key={i} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {/* Content - Show skeleton during initial load */}
+          {(isInitialLoading) && <SkeletonLoader />}
 
-          {hasFetched && (
+          {/* Show actual content when loaded */}
+          {!isInitialLoading && (
             <>
-              {safeQ.length === 0 ? (
+              {showEmptyState ? (
                 <div
                   style={{
                     textAlign: "center",
@@ -1356,7 +1485,7 @@ const [pdfStep, setPdfStep] = useState('');
                 </div>
               ) : (
                 <>
-                  {isMobile || viewMode === "card" ? (
+                  {isMobile || uiState.viewMode === "card" ? (
                     <div
                       style={{
                         padding: "1rem",
@@ -1377,7 +1506,7 @@ const [pdfStep, setPdfStep] = useState('');
                             fontSize: "0.875rem",
                           }}
                         >
-                          No results for "<strong>{search}</strong>"
+                          No results for "<strong>{tableState.search}</strong>"
                           <button
                             onClick={clearSearch}
                             style={{
@@ -1401,24 +1530,33 @@ const [pdfStep, setPdfStep] = useState('');
                             selectedCurrency={selectedCurrency}
                             onView={onViewQuotation}
                             onFollowUp={(quotation) =>
-                              setQueryDateModal({ open: true, quotation })
+                              setModalsState((prev) => ({
+                                ...prev,
+                                queryDateModal: { open: true, quotation },
+                              }))
                             }
                             onDownload={handleDownload}
                             onAward={(quotation) =>
-                              setAwardModal({
-                                open: true,
-                                quotation,
-                                busy: false,
-                              })
+                              setModalsState((prev) => ({
+                                ...prev,
+                                awardModal: {
+                                  open: true,
+                                  quotation,
+                                  busy: false,
+                                },
+                              }))
                             }
                             onDelete={(quotation) =>
-                              setDeleteModal({
-                                open: true,
-                                quotation,
-                                busy: false,
-                              })
+                              setModalsState((prev) => ({
+                                ...prev,
+                                deleteModal: {
+                                  open: true,
+                                  quotation,
+                                  busy: false,
+                                },
+                              }))
                             }
-                            isExporting={exportingId === q._id}
+                            isExporting={modalsState.exportingId === q._id}
                           />
                         ))
                       )}
@@ -1439,9 +1577,9 @@ const [pdfStep, setPdfStep] = useState('');
                           <div
                             style={{ fontSize: "0.75rem", color: "#64748b" }}
                           >
-                            {(safePage - 1) * limit + 1}–
-                            {Math.min(safePage * limit, totalFiltered)} of{" "}
-                            {totalFiltered}
+                            {(safePage - 1) * tableState.limit + 1}–
+                            {Math.min(safePage * tableState.limit, totalFiltered)}{" "}
+                            of {totalFiltered}
                           </div>
                           <div
                             style={{
@@ -1451,7 +1589,12 @@ const [pdfStep, setPdfStep] = useState('');
                             }}
                           >
                             <button
-                              onClick={() => setPage((p) => Math.max(1, p - 1))}
+                              onClick={() =>
+                                setTableState((prev) => ({
+                                  ...prev,
+                                  page: Math.max(1, prev.page - 1),
+                                }))
+                              }
                               disabled={safePage === 1}
                               style={{
                                 padding: "0.4rem 0.8rem",
@@ -1477,7 +1620,10 @@ const [pdfStep, setPdfStep] = useState('');
                             </span>
                             <button
                               onClick={() =>
-                                setPage((p) => Math.min(totalPages, p + 1))
+                                setTableState((prev) => ({
+                                  ...prev,
+                                  page: Math.min(totalPages, prev.page + 1),
+                                }))
                               }
                               disabled={safePage === totalPages}
                               style={{
@@ -1510,13 +1656,13 @@ const [pdfStep, setPdfStep] = useState('');
                             <SortHeader
                               label="Quote #"
                               field="quotationNumber"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                             />
                             <SortHeader
                               label="Customer"
                               field="customer"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                             />
                             <th
@@ -1538,33 +1684,33 @@ const [pdfStep, setPdfStep] = useState('');
                             <SortHeader
                               label="Query Date"
                               field="queryDate"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                               align="center"
                             />
                             <SortHeader
                               label="Submitted"
                               field="date"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                             />
                             <SortHeader
                               label="Expiry"
                               field="expiryDate"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                             />
                             <SortHeader
                               label="Total"
                               field="total"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                               align="right"
                             />
                             <SortHeader
                               label="Status"
                               field="status"
-                              sort={sort}
+                              sort={tableState.sort}
                               onSort={handleSort}
                             />
                             <th
@@ -1597,7 +1743,8 @@ const [pdfStep, setPdfStep] = useState('');
                                   fontSize: "0.875rem",
                                 }}
                               >
-                                No results for "<strong>{search}</strong>"{" "}
+                                No results for "<strong>{tableState.search}</strong>"
+                                {" "}
                                 <button
                                   onClick={clearSearch}
                                   style={{
@@ -1616,7 +1763,7 @@ const [pdfStep, setPdfStep] = useState('');
                             </tr>
                           ) : (
                             paginated.map((q) => {
-                              const isExp = exportingId === q._id;
+                              const isExp = modalsState.exportingId === q._id;
                               const expired = isExpired(q.expiryDate);
                               const expiring =
                                 !expired && isExpiringSoon(q.expiryDate);
@@ -1844,33 +1991,6 @@ const [pdfStep, setPdfStep] = useState('');
                                         label="View"
                                         title="View quotation"
                                       />
-                                      {/* {!["awarded", "not_awarded"].includes(
-                                        q.status
-                                      ) && (
-                                        <ActionBtn
-                                          bg={
-                                            q.queryDate ? "#fef3c7" : "#f1f5f9"
-                                          }
-                                          color={
-                                            q.queryDate ? "#92400e" : "#64748b"
-                                          }
-                                          onClick={() =>
-                                            setQueryDateModal({
-                                              open: true,
-                                              quotation: q,
-                                            })
-                                          }
-                                          icon={Calendar}
-                                          label="Follow-up"
-                                          title={
-                                            q.queryDate
-                                              ? `Follow-up: ${fmtDate(
-                                                  q.queryDate
-                                                )}`
-                                              : "Set follow-up date"
-                                          }
-                                        />
-                                      )} */}
                                       <ActionBtn
                                         bg={isExp ? "#f1f5f9" : "#f0fdf4"}
                                         color={isExp ? "#94a3b8" : "#166534"}
@@ -1887,14 +2007,17 @@ const [pdfStep, setPdfStep] = useState('');
                                           bg="#d1fae5"
                                           color="#065f46"
                                           onClick={() =>
-                                            setAwardModal({
-                                              open: true,
-                                              quotation: q,
-                                              busy: false,
-                                            })
+                                            setModalsState((prev) => ({
+                                              ...prev,
+                                              awardModal: {
+                                                open: true,
+                                                quotation: q,
+                                                busy: false,
+                                              },
+                                            }))
                                           }
                                           icon={Award}
-                                          label="Outcome"
+                                          label="Award"
                                           title="Mark awarded / not awarded"
                                         />
                                       )}
@@ -1903,11 +2026,14 @@ const [pdfStep, setPdfStep] = useState('');
                                           bg="#fff1f2"
                                           color="#e11d48"
                                           onClick={() =>
-                                            setDeleteModal({
-                                              open: true,
-                                              quotation: q,
-                                              busy: false,
-                                            })
+                                            setModalsState((prev) => ({
+                                              ...prev,
+                                              deleteModal: {
+                                                open: true,
+                                                quotation: q,
+                                                busy: false,
+                                              },
+                                            }))
                                           }
                                           icon={Trash2}
                                           label="Del"
@@ -1925,11 +2051,16 @@ const [pdfStep, setPdfStep] = useState('');
                       <PaginationBar
                         total={totalFiltered}
                         page={safePage}
-                        limit={limit}
-                        onPage={setPage}
+                        limit={tableState.limit}
+                        onPage={(p) =>
+                          setTableState((prev) => ({ ...prev, page: p }))
+                        }
                         onLimit={(l) => {
-                          setLimit(l);
-                          setPage(1);
+                          setTableState((prev) => ({
+                            ...prev,
+                            limit: l,
+                            page: 1,
+                          }));
                         }}
                       />
                     </div>
@@ -1940,24 +2071,36 @@ const [pdfStep, setPdfStep] = useState('');
           )}
         </div>
       </div>
- {saveProgress > 0 && (
-  <LoadingOverlay 
-    type="saving"
-    step={saveStep}
-    progress={saveProgress}
-  />
-)}
 
-{pdfProgress > 0 && (
-  <LoadingOverlay 
-    type="pdf"
-    step={pdfStep}
-    progress={pdfProgress}
-  />
-)}
+      {/* Loading Overlays */}
+      {uiState.saveProgress > 0 && (
+        <LoadingOverlay
+          type="saving"
+          step={uiState.saveStep}
+          progress={uiState.saveProgress}
+        />
+      )}
+
+      {uiState.pdfProgress > 0 && (
+        <LoadingOverlay
+          type="pdf"
+          step={uiState.pdfStep}
+          progress={uiState.pdfProgress}
+        />
+      )}
+
+      <NotificationDrawer 
+        isOpen={notificationOpen} 
+        onClose={() => setOpen(false)} 
+      />
       <QueryDateUpdater
-        open={queryDateModal.open}
-        onClose={() => setQueryDateModal({ open: false, quotation: null })}
+        open={modalsState.queryDateModal.open}
+        onClose={() =>
+          setModalsState((prev) => ({
+            ...prev,
+            queryDateModal: { open: false, quotation: null },
+          }))
+        }
         onUpdate={handleUpdateQueryDate}
         quotations={safeQ}
         loading={statsLoading}

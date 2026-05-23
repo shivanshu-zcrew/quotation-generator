@@ -1,37 +1,35 @@
-// screens/QuotationScreen.jsx (Complete Fixed Version with Manual Query Date)
+// screens/QuotationScreen.jsx (Complete with AddItemModal)
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
-  Building2, Mail, Phone, AlertCircle, CheckCircle, RefreshCw, Loader2, Calendar
+  Building2, Mail, Phone, AlertCircle, CheckCircle, RefreshCw, Loader2, Calendar, Edit2, X
 } from "lucide-react";
 import QuotationTemplate from "./QuotationTemplate";
 import { CompanyCurrencySelector, useCompanyCurrency } from "../components/CompanyCurrencySelector";
-import InfiniteItemSelector from "../components/ItemSelector";
-import useItemStore from "../services/itemStore";
 import { useAppStore } from "../services/store";
-import { useItemsList, useQuotations } from "../hooks/customHooks";
+import { useQuotations } from "../hooks/customHooks";
 import { fmtCurrency } from "../utils/formatters";
 import CustomerSelector from "../components/CustomerSelector";
 import useCustomerStore from "../services/customerStore";
+import ItemModal from "../components/AddItemModal";
 
 const PRIMARY = "#0f172a";
 const STEP = { SELECTION: 1, TEMPLATE: 2 };
 const TOAST_DURATION = 3000;
 
-// Helper function to get default query date (30 days from today)
+// Helper functions
 const getDefaultQueryDate = () => {
   const date = new Date();
   date.setDate(date.getDate() + 30);
   return date.toISOString().split("T")[0];
 };
 
-// Helper function to get today's date
 const getTodayDate = () => {
   return new Date().toISOString().split("T")[0];
 };
 
 // ============================================================================
-// Reusable Components
+// Reusable Components (Responsive)
 // ============================================================================
 
 const Shimmer = ({ width = "100%", height = 16, radius = 10 }) => (
@@ -57,50 +55,156 @@ const Toast = ({ message, type = "success", onClose }) => {
     info: "linear-gradient(135deg,#3b82f6,#2563eb)"
   };
 
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+
   return (
-    <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1000, animation: "qs-slideIn 0.3s ease" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, background: colors[type], color: "white", padding: "14px 20px", borderRadius: 16, boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)" }}>
-        {type === "success" ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-        <span style={{ fontWeight: 500, fontSize: "0.875rem" }}>{message}</span>
+    <div style={{ 
+      position: "fixed", 
+      bottom: 24, 
+      right: 24, 
+      zIndex: 1000, 
+      animation: "qs-slideIn 0.3s ease",
+      left: isMobile ? 16 : 'auto',
+      right: isMobile ? 16 : 24,
+    }}>
+      <div style={{ 
+        display: "flex", 
+        alignItems: "center", 
+        gap: 12, 
+        background: colors[type], 
+        color: "white", 
+        padding: "12px 16px", 
+        borderRadius: 16, 
+        boxShadow: "0 10px 25px -5px rgba(0,0,0,0.1)",
+        fontSize: isMobile ? "0.813rem" : "0.875rem",
+      }}>
+        {type === "success" ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+        <span style={{ fontWeight: 500, fontSize: "0.813rem" }}>{message}</span>
         <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 8, padding: 4, cursor: "pointer" }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <X size={14} />
         </button>
       </div>
     </div>
   );
 };
 
-const SectionHeader = ({ icon: Icon, title, required, count, loading }) => (
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-      <div style={{ width: 36, height: 36, borderRadius: 12, background: `${PRIMARY}10`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {loading ? <Loader2 size={18} color={PRIMARY} style={{ animation: "qs-spin 0.9s linear infinite" }} /> : <Icon size={18} color={PRIMARY} />}
+const SectionHeader = ({ icon: Icon, title, required, count, loading }) => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  return (
+    <div style={{ 
+      display: "flex", 
+      alignItems: "center", 
+      justifyContent: "space-between", 
+      marginBottom: "1rem",
+      flexWrap: "wrap",
+      gap: "0.5rem"
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <div style={{ 
+          width: 36, 
+          height: 36, 
+          borderRadius: 12, 
+          background: `${PRIMARY}10`, 
+          display: "flex", 
+          alignItems: "center", 
+          justifyContent: "center" 
+        }}>
+          {loading ? <Loader2 size={18} color={PRIMARY} style={{ animation: "qs-spin 0.9s linear infinite" }} /> : <Icon size={18} color={PRIMARY} />}
+        </div>
+        <h2 style={{ 
+          margin: 0, 
+          fontSize: "clamp(0.875rem, 4vw, 1rem)", 
+          fontWeight: 700, 
+          color: PRIMARY 
+        }}>
+          {title} {required && <span style={{ color: "#ef4444" }}>*</span>}
+        </h2>
       </div>
-      <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: PRIMARY }}>
-        {title} {required && <span style={{ color: "#ef4444" }}>*</span>}
-      </h2>
+      {count > 0 && (
+        <span style={{ 
+          padding: "2px 10px", 
+          borderRadius: 20, 
+          background: "#f1f5f9", 
+          color: "#64748b", 
+          fontSize: "0.75rem", 
+          fontWeight: 600 
+        }}>
+          {count} item{count !== 1 ? "s" : ""}
+        </span>
+      )}
     </div>
-    {count > 0 && (
-      <span style={{ padding: "2px 10px", borderRadius: 20, background: "#f1f5f9", color: "#64748b", fontSize: "0.75rem", fontWeight: 600 }}>
-        {count} item{count !== 1 ? "s" : ""}
-      </span>
-    )}
-  </div>
-);
+  );
+};
 
 const CustomerCard = ({ customer }) => {
   const initials = customer.name?.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase() || "CU";
   return (
-    <div style={{ background: "white", border: "1px solid #f1f5f9", borderRadius: 16, padding: "1rem", marginTop: "0.75rem", transition: "all 0.2s" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <div style={{ width: 48, height: 48, borderRadius: 14, background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700, fontSize: "1.1rem", flexShrink: 0 }}>
+    <div style={{ 
+      background: "white", 
+      border: "1px solid #f1f5f9", 
+      borderRadius: 16, 
+      padding: "1rem", 
+      marginTop: "0.75rem", 
+      transition: "all 0.2s" 
+    }}>
+      <div style={{ 
+        display: "flex", 
+        alignItems: "center", 
+        gap: "0.75rem",
+        flexWrap: "wrap"
+      }}>
+        <div style={{ 
+          width: 48, 
+          height: 48, 
+          borderRadius: 14, 
+          background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, 
+          display: "flex", 
+          alignItems: "center", 
+          justifyContent: "center", 
+          color: "white", 
+          fontWeight: 700, 
+          fontSize: "1.1rem", 
+          flexShrink: 0 
+        }}>
           {initials}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ margin: 0, fontWeight: 700, color: PRIMARY, fontSize: "0.9rem" }}>{customer.name}</p>
-          <div style={{ display: "flex", gap: "1rem", marginTop: "0.25rem", flexWrap: "wrap" }}>
-            {customer.email && <p style={{ margin: 0, color: "#64748b", fontSize: "0.75rem", display: "flex", alignItems: "center", gap: 4 }}><Mail size={12} /> {customer.email}</p>}
-            {customer.phone && <p style={{ margin: 0, color: "#64748b", fontSize: "0.75rem", display: "flex", alignItems: "center", gap: 4 }}><Phone size={12} /> {customer.phone}</p>}
+          <p style={{ 
+            margin: 0, 
+            fontWeight: 700, 
+            color: PRIMARY, 
+            fontSize: "clamp(0.813rem, 4vw, 0.9rem)" 
+          }}>{customer.name}</p>
+          <div style={{ 
+            display: "flex", 
+            gap: "1rem", 
+            marginTop: "0.25rem", 
+            flexWrap: "wrap" 
+          }}>
+            {customer.email && (
+              <p style={{ 
+                margin: 0, 
+                color: "#64748b", 
+                fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
+                display: "flex", 
+                alignItems: "center", 
+                gap: 4 
+              }}>
+                <Mail size={12} /> {customer.email}
+              </p>
+            )}
+            {customer.phone && (
+              <p style={{ 
+                margin: 0, 
+                color: "#64748b", 
+                fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
+                display: "flex", 
+                alignItems: "center", 
+                gap: 4 
+              }}>
+                <Phone size={12} /> {customer.phone}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -108,215 +212,225 @@ const CustomerCard = ({ customer }) => {
   );
 };
 
-const ItemRow = ({ item, index, items, onUpdate, onRemove, selectedCurrency }) => {
+const ManualItemRow = ({ item, index, onRemove, onEdit, selectedCurrency }) => {
   const lineTotal = item.quantity * item.unitPrice;
-  
-  const itemData = useMemo(() => {
-    if (item.fullItemData) return item.fullItemData;
-    if (!items?.length) return null;
-    return items.find(i => i._id === item.itemId || i.zohoId === item.zohoId || i.name === item.name) || null;
-  }, [items, item.itemId, item.zohoId, item.name, item.fullItemData]);
-
-  const hasBasicInfo = item.name || item.itemId;
-
-  if (!itemData && !hasBasicInfo) {
-    return (
-      <div style={{ border: "1px solid #f1f5f9", borderRadius: 16, padding: "1rem", background: "#fef2f2", textAlign: "center" }}>
-        <AlertCircle size={24} color="#dc2626" style={{ marginBottom: "0.5rem" }} />
-        <p style={{ margin: 0, color: "#dc2626", fontSize: "0.875rem", fontWeight: 500 }}>Item not found in catalog</p>
-        <p style={{ margin: "0.25rem 0 0", color: "#991b1b", fontSize: "0.75rem" }}>ID: {item.zohoId || item.itemId || "Unknown"}</p>
-      </div>
-    );
-  }
-
-  const displayData = itemData || { name: item.name || "Unknown Item", price: item.unitPrice };
-  const isWarning = !itemData && hasBasicInfo;
 
   return (
-    <div style={{ border: "1px solid #f1f5f9", borderRadius: 16, padding: "1rem", background: "white" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-        <span style={{ padding: "2px 8px", borderRadius: 20, background: `${PRIMARY}10`, color: PRIMARY, fontSize: "0.7rem", fontWeight: 600 }}>Item {index + 1}</span>
-        <button onClick={() => onRemove(item.id)} style={{ padding: 4, borderRadius: 8, border: "1px solid #fee2e2", background: "#fef2f2", color: "#dc2626", cursor: "pointer" }}>
-          <Trash2 size={14} />
-        </button>
+    <div style={{ 
+      border: "1px solid #f1f5f9", 
+      borderRadius: 16, 
+      padding: "clamp(0.75rem, 3vw, 1rem)", 
+      background: "white" 
+    }}>
+      <div style={{ 
+        display: "flex", 
+        justifyContent: "space-between", 
+        alignItems: "center", 
+        marginBottom: "0.75rem",
+        flexWrap: "wrap",
+        gap: "0.5rem"
+      }}>
+        <span style={{ 
+          padding: "2px 8px", 
+          borderRadius: 20, 
+          background: `${PRIMARY}10`, 
+          color: PRIMARY, 
+          fontSize: "0.7rem", 
+          fontWeight: 600 
+        }}>Item {index + 1}</span>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button 
+            onClick={() => onEdit(item)} 
+            style={{ 
+              padding: "4px 8px", 
+              borderRadius: 8, 
+              border: "1px solid #e2e8f0", 
+              background: "white", 
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "0.7rem"
+            }}
+          >
+            <Edit2 size={12} /> Edit
+          </button>
+          <button 
+            onClick={() => onRemove(item.id)} 
+            style={{ 
+              padding: "4px 8px", 
+              borderRadius: 8, 
+              border: "1px solid #fee2e2", 
+              background: "#fef2f2", 
+              color: "#dc2626", 
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "0.7rem"
+            }}
+          >
+            <Trash2 size={12} /> Delete
+          </button>
+        </div>
       </div>
 
-      <div style={{ background: isWarning ? "#fffbeb" : `linear-gradient(135deg,${PRIMARY}05,${PRIMARY}02)`, borderRadius: 12, padding: "1rem", marginBottom: "1rem", border: `1px solid ${isWarning ? "#fde68a" : `${PRIMARY}10`}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
-          <div>
-            <h3 style={{ margin: 0, fontWeight: 700, color: isWarning ? "#b45309" : PRIMARY, fontSize: "1rem" }}>{displayData.name}</h3>
-            {displayData.sku && <p style={{ margin: "0.25rem 0 0", color: "#64748b", fontSize: "0.7rem" }}><Tag size={10} /> SKU: {displayData.sku}</p>}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <p style={{ margin: 0, color: "#059669", fontWeight: 700, fontSize: "1rem" }}>{fmtCurrency(displayData.price, selectedCurrency)}</p>
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "0.5rem", marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: `1px solid ${isWarning ? "#fde68a" : `${PRIMARY}10`}` }}>
-          {displayData.zohoId && <ItemMeta label="Zoho ID" value={displayData.zohoId} monospace />}
-          {displayData.unit && <ItemMeta label="Unit" value={displayData.unit} />}
-          {displayData.product_type && <ItemMeta label="Type" value={displayData.product_type} />}
-          {displayData.tax_percentage > 0 && <ItemMeta label="Tax" value={`${displayData.tax_percentage}%`} />}
-        </div>
-
-        {displayData.description && (
-          <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: `1px solid ${isWarning ? "#fde68a" : `${PRIMARY}10`}`, fontSize: "0.75rem", color: "#64748b" }}>
-            <span style={{ color: "#94a3b8", fontSize: "0.65rem", fontWeight: 500, display: "block", marginBottom: "0.25rem" }}>Description:</span>
-            {displayData.description}
-          </div>
+      <div style={{ 
+        background: `linear-gradient(135deg,${PRIMARY}05,${PRIMARY}02)`, 
+        borderRadius: 12, 
+        padding: "clamp(0.75rem, 3vw, 1rem)", 
+        marginBottom: "1rem", 
+        border: `1px solid ${PRIMARY}10`
+      }}>
+        <h3 style={{ 
+          margin: 0, 
+          fontWeight: 700, 
+          color: PRIMARY, 
+          fontSize: "clamp(0.875rem, 4vw, 1rem)" 
+        }}>{item.name}</h3>
+        {item.description && (
+          <p style={{ margin: "0.5rem 0 0", color: "#64748b", fontSize: "0.75rem" }}>{item.description}</p>
         )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginBottom: "0.75rem" }}>
-      <ItemInput
-  label="Quantity"
-  type="text"
-  inputMode="numeric"
-  value={item.quantity ?? ""}
-  onChange={(v) => {
-    if (v === "") {
-      onUpdate(item.id, "quantity", "");
-    } else {
-      onUpdate(item.id, "quantity", parseInt(v));
-    }
-  }}
-/>
-
-<ItemInput
-  label="Unit Price"
-  type="text"
-  inputMode="decimal"
-  value={item.unitPrice ?? ""}
-  onChange={(v) => {
-    if (v === "") {
-      onUpdate(item.id, "unitPrice", "");
-    } else {
-      onUpdate(item.id, "unitPrice", parseFloat(v));
-    }
-  }}
-  align="right"
-/>
+      <div style={{ 
+        display: "grid", 
+        gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", 
+        gap: "0.75rem", 
+        marginBottom: "0.75rem" 
+      }}>
+        <div>
+          <label style={{ display: "block", color: "#64748b", fontSize: "0.7rem", fontWeight: 600, marginBottom: "0.25rem" }}>Quantity</label>
+          <div style={{ padding: "0.5rem", background: "#f8fafc", borderRadius: 10, fontSize: "0.875rem", fontWeight: 600, textAlign: "center" }}>
+            {item.quantity}
+          </div>
+        </div>
+        <div>
+          <label style={{ display: "block", color: "#64748b", fontSize: "0.7rem", fontWeight: 600, marginBottom: "0.25rem" }}>Unit Price</label>
+          <div style={{ padding: "0.5rem", background: "#f8fafc", borderRadius: 10, fontSize: "0.875rem", fontWeight: 600, textAlign: "right" }}>
+            {fmtCurrency(item.unitPrice, selectedCurrency)}
+          </div>
+        </div>
       </div>
 
-      <div style={{ paddingTop: "0.5rem", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "0.5rem" }}>
+      <div style={{ 
+        paddingTop: "0.5rem", 
+        borderTop: "1px solid #f1f5f9", 
+        display: "flex", 
+        justifyContent: "flex-end", 
+        alignItems: "center", 
+        gap: "0.5rem",
+        flexWrap: "wrap"
+      }}>
         <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>Line total:</span>
         <span style={{ color: "#059669", fontWeight: 700, fontSize: "0.875rem" }}>{fmtCurrency(lineTotal, selectedCurrency)}</span>
       </div>
+    </div>
+  );
+};
 
-      {isWarning && (
-        <p style={{ margin: "0.5rem 0 0", color: "#b45309", fontSize: "0.7rem", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-          <AlertCircle size={12} /> Item details will be loaded when proceeding
+const SummaryCard = ({ grandTotal, exchangeRates, selectedCurrency }) => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  return (
+    <div style={{ 
+      background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, 
+      borderRadius: 20, 
+      padding: "clamp(1rem, 4vw, 1.5rem)", 
+      color: "white", 
+      marginBottom: "1.5rem" 
+    }}>
+      <div style={{ 
+        display: "flex", 
+        justifyContent: "space-between", 
+        alignItems: "center", 
+        marginBottom: "0.5rem",
+        flexWrap: "wrap",
+        gap: "0.5rem"
+      }}>
+        <div>
+          <p style={{ 
+            margin: 0, 
+            fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
+            opacity: 0.8, 
+            textTransform: "uppercase", 
+            letterSpacing: "0.5px" 
+          }}>Estimated Total</p>
+          <p style={{ 
+            margin: "0.25rem 0 0", 
+            fontSize: "clamp(1.25rem, 6vw, 2rem)", 
+            fontWeight: 800 
+          }}>{fmtCurrency(grandTotal, selectedCurrency)}</p>
+        </div>
+        <div style={{ fontSize: "clamp(1.5rem, 6vw, 2.5rem)", opacity: 0.3 }}>🧾</div>
+      </div>
+      <p style={{ 
+        margin: "0.5rem 0 0", 
+        fontSize: "clamp(0.625rem, 3vw, 0.7rem)", 
+        opacity: 0.7 
+      }}>Excludes tax & discount — configure in the next step</p>
+      {exchangeRates && selectedCurrency !== "AED" && (
+        <p style={{ 
+          margin: "0.25rem 0 0", 
+          fontSize: "clamp(0.563rem, 3vw, 0.65rem)", 
+          opacity: 0.5 
+        }}>
+          ≈ AED {(grandTotal * (exchangeRates.rates?.["AED"] || 1)).toFixed(2)}
         </p>
       )}
     </div>
   );
 };
 
-const ItemMeta = ({ label, value, monospace }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-    <span style={{ color: "#94a3b8", fontSize: "0.65rem", fontWeight: 500 }}>{label}:</span>
-    <span style={{ color: "#475569", fontSize: "0.7rem", fontFamily: monospace ? "monospace" : "inherit" }}>{value}</span>
-  </div>
-);
-
-const ItemInput = ({ label, align = "center", value, onChange, ...props }) => {
-  const handleChange = (e) => {
-    let val = e.target.value;
-
-     if (val === "") {
-      onChange("");
-      return;
-    }
-
-     val = val.replace(/^0+(?=\d)/, "");  
-
-    onChange(val);
-  };
-
+const EmptyItemsState = () => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   return (
-    <div>
-      <label style={{
-        display: "block",
-        color: "#64748b",
-        fontSize: "0.7rem",
-        fontWeight: 600,
-        marginBottom: "0.25rem"
+    <div style={{ 
+      border: "2px dashed #e2e8f0", 
+      borderRadius: 16, 
+      padding: "clamp(1.5rem, 5vw, 2.5rem)", 
+      textAlign: "center", 
+      background: "#fafbff" 
+    }}>
+      <div style={{ 
+        width: 48, 
+        height: 48, 
+        borderRadius: 14, 
+        background: "#f1f5f9", 
+        display: "flex", 
+        alignItems: "center", 
+        justifyContent: "center", 
+        margin: "0 auto 0.875rem" 
       }}>
-        {label}
-      </label>
-
-      <input
-        {...props}
-        value={value ?? ""}  
-        onChange={handleChange}
-        style={{
-          width: "100%",
-          padding: "0.5rem",
-          border: "1.5px solid #e2e8f0",
-          borderRadius: 10,
-          fontSize: "0.875rem",
-          textAlign: align,
-          outline: "none",
-          background: "white",
-          boxSizing: "border-box"
-        }}
-        onFocus={(e) => e.currentTarget.style.borderColor = PRIMARY}
-        onBlur={(e) => e.currentTarget.style.borderColor = "#e2e8f0"}
-      />
+        <Package size={22} color="#94a3b8" />
+      </div>
+      <p style={{ 
+        margin: "0 0 0.3rem", 
+        color: "#475569", 
+        fontWeight: 600, 
+        fontSize: "clamp(0.813rem, 4vw, 0.9rem)" 
+      }}>No items added yet</p>
+      <p style={{ 
+        margin: 0, 
+        color: "#94a3b8", 
+        fontSize: "clamp(0.75rem, 3.5vw, 0.813rem)" 
+      }}>Click the button below to add your first item</p>
     </div>
   );
 };
 
-const SummaryCard = ({ grandTotal, exchangeRates, selectedCurrency }) => (
-  <div style={{ background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, borderRadius: 20, padding: "1.5rem", color: "white", marginBottom: "1.5rem" }}>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-      <div>
-        <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Estimated Total</p>
-        <p style={{ margin: "0.25rem 0 0", fontSize: "2rem", fontWeight: 800 }}>{fmtCurrency(grandTotal, selectedCurrency)}</p>
-      </div>
-      <div style={{ fontSize: "2.5rem", opacity: 0.3 }}>🧾</div>
-    </div>
-    <p style={{ margin: "0.5rem 0 0", fontSize: "0.7rem", opacity: 0.7 }}>Excludes tax & discount — configure in the next step</p>
-    {exchangeRates && selectedCurrency !== "AED" && (
-      <p style={{ margin: "0.25rem 0 0", fontSize: "0.65rem", opacity: 0.5 }}>
-        ≈ AED {(grandTotal * (exchangeRates.rates?.["AED"] || 1)).toFixed(2)}
-      </p>
-    )}
-  </div>
-);
-
-const EmptyItemsState = () => (
-  <div style={{ border: "2px dashed #e2e8f0", borderRadius: 16, padding: "2.5rem", textAlign: "center", background: "#fafbff" }}>
-    <div style={{ width: 48, height: 48, borderRadius: 14, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 0.875rem" }}>
-      <Package size={22} color="#94a3b8" />
-    </div>
-    <p style={{ margin: "0 0 0.3rem", color: "#475569", fontWeight: 600, fontSize: "0.9rem" }}>No items added yet</p>
-    <p style={{ margin: 0, color: "#94a3b8", fontSize: "0.8125rem" }}>Click the button below to add your first item</p>
-  </div>
-);
-
-const ItemsLoadingSkeleton = () => (
-  <div style={{ border: "1.5px solid #e2e8f0", borderRadius: 16, padding: "1.5rem", background: "#fafbff", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-      <Loader2 size={16} color="#94a3b8" style={{ animation: "qs-spin 0.9s linear infinite" }} />
-      <Shimmer width="45%" height={13} radius={8} />
-    </div>
-    {[75, 60, 50].map((w, i) => (
-      <div key={i} style={{ border: "1px solid #f1f5f9", borderRadius: 12, padding: "0.875rem 1rem", display: "flex", alignItems: "center", gap: "0.75rem", background: "white" }}>
-        <Shimmer width={36} height={36} radius={10} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "0.375rem" }}>
-          <Shimmer width={`${w}%`} height={13} radius={7} />
-          <Shimmer width={`${Math.round(w * 0.55)}%`} height={10} radius={6} />
-        </div>
-        <Shimmer width={56} height={20} radius={8} />
-      </div>
-    ))}
-  </div>
-);
-
 const CustomerSelectSkeleton = () => (
   <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-    <div style={{ width: "100%", height: "46px", borderRadius: 14, border: "1.5px solid #e2e8f0", background: "#fafbff", display: "flex", alignItems: "center", padding: "0 1rem", gap: "0.75rem" }}>
+    <div style={{ 
+      width: "100%", 
+      height: "46px", 
+      borderRadius: 14, 
+      border: "1.5px solid #e2e8f0", 
+      background: "#fafbff", 
+      display: "flex", 
+      alignItems: "center", 
+      padding: "0 1rem", 
+      gap: "0.75rem" 
+    }}>
       <Shimmer width="60%" height={14} radius={8} />
       <div style={{ marginLeft: "auto" }}><Shimmer width={16} height={16} radius={4} /></div>
     </div>
@@ -328,13 +442,33 @@ const CustomerSelectSkeleton = () => (
 );
 
 const LoadErrorBanner = ({ error, onRetry }) => (
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", padding: "0.75rem 1rem", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, marginBottom: "0.75rem" }}>
+  <div style={{ 
+    display: "flex", 
+    alignItems: "center", 
+    justifyContent: "space-between", 
+    gap: "0.75rem", 
+    padding: "0.75rem 1rem", 
+    background: "#fef2f2", 
+    border: "1px solid #fecaca", 
+    borderRadius: 12, 
+    marginBottom: "0.75rem",
+    flexWrap: "wrap"
+  }}>
     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
       <AlertCircle size={15} color="#dc2626" />
-      <span style={{ fontSize: "0.8rem", color: "#dc2626", fontWeight: 500 }}>{error}</span>
+      <span style={{ fontSize: "clamp(0.75rem, 3vw, 0.8rem)", color: "#dc2626", fontWeight: 500 }}>{error}</span>
     </div>
     {onRetry && (
-      <button onClick={onRetry} style={{ padding: "4px 10px", borderRadius: 8, fontSize: "0.75rem", fontWeight: 700, background: "#dc2626", color: "white", border: "none", cursor: "pointer" }}>
+      <button onClick={onRetry} style={{ 
+        padding: "4px 10px", 
+        borderRadius: 8, 
+        fontSize: "0.75rem", 
+        fontWeight: 700, 
+        background: "#dc2626", 
+        color: "white", 
+        border: "none", 
+        cursor: "pointer" 
+      }}>
         Retry
       </button>
     )}
@@ -348,10 +482,8 @@ export default function QuotationScreen({ onBack }) {
   // --------------------------------------------------------------------------
   // Hooks & Store
   // --------------------------------------------------------------------------
-  const items = useItemsList();
   const { addQuotation } = useQuotations();
   const { selectedCompany, selectedCurrency, currency, exchangeRates } = useCompanyCurrency();
-  const { loadAllItems, isLoaded: itemsLoaded, resetItems, isLoading: isItemsLoadingStore } = useItemStore();
   const { 
     customers, 
     isLoading: isCustomersLoading, 
@@ -369,83 +501,60 @@ export default function QuotationScreen({ onBack }) {
   const [step, setStep] = useState(STEP.SELECTION);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedItems, setSelectedItems] = useState([]);
-  const [showItemsModal, setShowItemsModal] = useState(false);
   const [toast, setToast] = useState(null);
-  const [manualQueryDate, setManualQueryDate] = useState(getDefaultQueryDate()); // ✅ Added manual query date state
+  const [manualQueryDate, setManualQueryDate] = useState(getDefaultQueryDate());
+  const [isMobile, setIsMobile] = useState(false);
+  const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  // --------------------------------------------------------------------------
+  // Responsive Detection
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // --------------------------------------------------------------------------
-  // Derived State - FIXED
+  // Derived State
   // --------------------------------------------------------------------------
-  const isItemsLoading = !itemsLoaded && (isItemsLoadingStore || items.length === 0);
   const isCustomersActuallyLoading = isCustomersLoading || (!isCustomersLoaded && customers.length === 0);
   const showNoCustomersMessage = initialized && customers.length === 0 && !storeLoading && !isCustomersLoading;
   const grandTotal = useMemo(() => 
-    selectedItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0), 
+    selectedItems.reduce((sum, item) => sum + (item.quantity || 0) * (item.unitPrice || 0), 0), 
     [selectedItems]
   );
-  const canProceed = !isCustomersLoading && !isItemsLoading && selectedCustomer && selectedItems.length > 0;
+  const canProceed = !isCustomersActuallyLoading && selectedCustomer && selectedItems.length > 0;
 
   // --------------------------------------------------------------------------
-  // Debug Logs
+  // Effects
   // --------------------------------------------------------------------------
-  useEffect(() => {
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📊 QUOTATION SCREEN STATE:');
-    console.log('   - Company:', selectedCompany);
-    console.log('   - Items loaded:', itemsLoaded);
-    console.log('   - Items count:', items.length);
-    console.log('   - Items loading:', isItemsLoading);
-    console.log('   - Items loading store:', isItemsLoadingStore);
-    console.log('   - Customers loaded:', isCustomersLoaded);
-    console.log('   - Customers count:', customers.length);
-    console.log('   - Customers loading:', isCustomersLoading);
-    console.log('   - Selected items:', selectedItems.length);
-    console.log('   - Query Date:', manualQueryDate);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  }, [selectedCompany, itemsLoaded, items.length, isItemsLoading, isItemsLoadingStore, isCustomersLoaded, customers.length, isCustomersLoading, selectedItems.length, manualQueryDate]);
-
-  // --------------------------------------------------------------------------
-  // Effects - Company Change Handling
-  // --------------------------------------------------------------------------
-  
-  // Effect 1: Handle company change - reset and reload both customers and items
   useEffect(() => {
     if (!selectedCompany) return;
     
     console.log('🏢 Company changed to:', selectedCompany);
     
-    // Reset customers
     resetCustomers();
     setSelectedCustomer(null);
     loadAllCustomers(selectedCompany);
     
-    // Reset items
-    resetItems();
     setSelectedItems([]);
-    loadAllItems(selectedCompany, true);
-    
-    // Reset query date
     setManualQueryDate(getDefaultQueryDate());
     
-  }, [selectedCompany, resetCustomers, loadAllCustomers, resetItems, loadAllItems]);
+  }, [selectedCompany, resetCustomers, loadAllCustomers]);
 
-  // Effect 2: Initial load when component mounts and company is set
   useEffect(() => {
     if (!selectedCompany) return;
     
-    // Initial customers load
     if (!isCustomersLoaded && !isCustomersLoading) {
       console.log('📚 Initial load of customers for company:', selectedCompany);
       loadAllCustomers(selectedCompany);
     }
     
-    // Initial items load
-    if (!itemsLoaded && !isItemsLoadingStore && items.length === 0) {
-      console.log('📚 Initial load of items for company:', selectedCompany);
-      loadAllItems(selectedCompany);
-    }
-    
-  }, [selectedCompany, isCustomersLoaded, isCustomersLoading, itemsLoaded, isItemsLoadingStore, items.length, loadAllCustomers, loadAllItems]);
+  }, [selectedCompany, isCustomersLoaded, isCustomersLoading, loadAllCustomers]);
 
   // --------------------------------------------------------------------------
   // Handlers
@@ -455,25 +564,9 @@ export default function QuotationScreen({ onBack }) {
     setTimeout(() => setToast(null), TOAST_DURATION);
   }, []);
 
-  const handleAddItems = useCallback((newItemsFromModal) => {
-    setSelectedItems(prev => {
-      const existingMap = new Map(prev.map(item => [item.itemId, item]));
-      const updated = newItemsFromModal.map(modalItem => {
-        const existing = existingMap.get(modalItem.itemId);
-        return {
-          ...existing,
-          ...modalItem,
-          quantity: existing?.quantity || modalItem.quantity || 1,
-          unitPrice: existing?.unitPrice || modalItem.unitPrice || modalItem.price || 0,
-          fullItemData: modalItem.fullItemData || modalItem,
-        };
-      });
-      return [
-        ...prev.filter(old => !newItemsFromModal.some(newItem => newItem.itemId === old.itemId)),
-        ...updated,
-      ];
-    });
-    showToast(`${newItemsFromModal.length} item(s) updated`);
+  const handleAddManualItem = useCallback((newItem) => {
+    setSelectedItems(prev => [...prev, newItem]);
+    showToast("Item added successfully", "success");
   }, [showToast]);
 
   const handleRemoveItem = useCallback((id) => {
@@ -486,18 +579,19 @@ export default function QuotationScreen({ onBack }) {
     ));
   }, []);
 
-  const handleRefreshComplete = useCallback((result) => {
-    if (result?.success) {
-      showToast(`✅ Sync complete! ${result.created || 0} new, ${result.updated || 0} updated`, "success");
-      // Refresh items after sync
-      if (selectedCompany) {
-        resetItems();
-        loadAllItems(selectedCompany, true);
-      }
-    } else if (result?.error) {
-      showToast(`❌ Sync failed: ${result.error}`, "error");
-    }
-  }, [showToast, selectedCompany, resetItems, loadAllItems]);
+  const handleEditItem = useCallback((updatedItem) => {
+    setSelectedItems(prev => prev.map(item => 
+      item.id === updatedItem.id ? updatedItem : item
+    ));
+    showToast("Item updated successfully", "success");
+    setEditingItem(null);
+  }, [showToast]);
+  
+   const handleOpenEditModal = useCallback((item) => {
+    setEditingItem(item);
+    setIsAddItemModalOpen(true);
+  }, []);
+  
 
   const handleSyncCustomers = useCallback(async (result) => {
     if (result?.success) {
@@ -513,15 +607,8 @@ export default function QuotationScreen({ onBack }) {
     if (!selectedCustomer) return showToast("Please select a customer", "error");
     if (selectedItems.length === 0) return showToast("Please add at least one item", "error");
 
-    const enrichedItems = selectedItems.map(item => {
-      if (item.fullItemData) return item;
-      const found = items.find(i => i._id === item.itemId || i.zohoId === item.zohoId);
-      return found ? { ...item, fullItemData: found } : item;
-    });
-
-    setSelectedItems(enrichedItems);
     setStep(STEP.TEMPLATE);
-  }, [selectedCompany, selectedCustomer, selectedItems, items, showToast]);
+  }, [selectedCompany, selectedCustomer, selectedItems, showToast]);
 
   const handleBack = useCallback(() => {
     step === STEP.TEMPLATE ? setStep(STEP.SELECTION) : onBack?.();
@@ -536,6 +623,12 @@ export default function QuotationScreen({ onBack }) {
       @keyframes qs-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
       @keyframes qs-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
       @keyframes qs-slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+      
+      @media (max-width: 768px) {
+        .quotation-container {
+          padding: 1rem !important;
+        }
+      }
     `;
     document.head.appendChild(style);
     return () => document.head.removeChild(style);
@@ -573,126 +666,185 @@ export default function QuotationScreen({ onBack }) {
   // Render: Selection Step
   // --------------------------------------------------------------------------
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#f0f4ff 0%,#e8edf5 100%)", fontFamily: "system-ui,-apple-system,sans-serif" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1.5rem" }}>
+    <div style={{ 
+      minHeight: "100vh", 
+      background: "linear-gradient(135deg,#f0f4ff 0%,#e8edf5 100%)", 
+      fontFamily: "system-ui,-apple-system,sans-serif" 
+    }}>
+      <div style={{ 
+        maxWidth: 900, 
+        margin: "0 auto", 
+        padding: isMobile ? "1rem" : "2rem 1.5rem" 
+      }}>
         
         {/* Header */}
-        <div style={{ marginBottom: "2rem" }}>
-          <p style={{ margin: "0 0 0.35rem", color: "#94a3b8", fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+        <div style={{ marginBottom: isMobile ? "1.5rem" : "2rem" }}>
+          <p style={{ 
+            margin: "0 0 0.35rem", 
+            color: "#94a3b8", 
+            fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
+            fontWeight: 600, 
+            textTransform: "uppercase", 
+            letterSpacing: "0.5px" 
+          }}>
             Step 1 of 2
           </p>
-          <h1 style={{ margin: 0, fontSize: "2rem", fontWeight: 800, background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+          <h1 style={{ 
+            margin: 0, 
+            fontSize: "clamp(1.5rem, 6vw, 2rem)", 
+            fontWeight: 800, 
+            background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, 
+            WebkitBackgroundClip: "text", 
+            WebkitTextFillColor: "transparent" 
+          }}>
             Create Quotation
           </h1>
-          <p style={{ margin: "0.5rem 0 0", color: "#64748b", fontSize: "0.875rem" }}>
+          <p style={{ 
+            margin: "0.5rem 0 0", 
+            color: "#64748b", 
+            fontSize: "clamp(0.75rem, 3.5vw, 0.875rem)" 
+          }}>
             Select company, customer and add items to generate a quotation
           </p>
         </div>
 
         {/* Main Card */}
-        <div style={{ background: "white", borderRadius: 24, boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", overflow: "hidden" }}>
+        <div style={{ 
+          background: "white", 
+          borderRadius: 24, 
+          boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", 
+          overflow: "hidden" 
+        }}>
           
           {/* Company Section */}
-          <div style={{ padding: "1.5rem 1.5rem 0" }}>
+          <div style={{ padding: isMobile ? "1rem 1rem 0" : "1.5rem 1.5rem 0" }}>
             <SectionHeader icon={Building2} title="Company" required />
             <CompanyCurrencySelector variant="full" showLabels={false} />
           </div>
-          <div style={{ height: 1, background: "#f1f5f9", margin: "1.5rem 0" }} />
+          <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
 
           {/* Customer Section */}
-          <div style={{ padding: '0 1.5rem' }}>
+          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem" }}>
             <SectionHeader icon={Users} title="Customer" required loading={isCustomersActuallyLoading} />
             
             {loadError && !isCustomersLoading && (
               <LoadErrorBanner error={`Failed to load data: ${loadError}`} onRetry={fetchAllData} />
             )}
             
-            <div style={{ display: isCustomersLoading ? 'none' : 'block' }}>
+            <div style={{ display: isCustomersActuallyLoading ? 'none' : 'block' }}>
               <CustomerSelector
                 key={selectedCompany}
                 value={selectedCustomer?._id || ''}
                 onChange={(_, customer) => setSelectedCustomer(customer)}
-                placeholder="— Search or select a customer —"
+                placeholder={isMobile ? "— Search customer —" : "— Search or select a customer —"}
                 companyId={selectedCompany}
                 onSyncComplete={handleSyncCustomers}
                 autoLoad={true}
               />
             </div>
 
-            {isCustomersLoading && <CustomerSelectSkeleton />}
+            {isCustomersActuallyLoading && <CustomerSelectSkeleton />}
 
-            {!isCustomersLoading && showNoCustomersMessage && (
-              <p style={{ margin: '0.5rem 0 0', color: '#f59e0b', fontSize: '0.8rem', fontWeight: 500 }}>
+            {!isCustomersActuallyLoading && showNoCustomersMessage && (
+              <p style={{ 
+                margin: "0.5rem 0 0", 
+                color: "#f59e0b", 
+                fontSize: "clamp(0.75rem, 3.5vw, 0.8rem)", 
+                fontWeight: 500 
+              }}>
                 ⚠️ No customers found. Click the sync button to import customers from Zoho.
               </p>
             )}
 
-            {!isCustomersLoading && selectedCustomer && <CustomerCard customer={selectedCustomer} />}
+            {!isCustomersActuallyLoading && selectedCustomer && <CustomerCard customer={selectedCustomer} />}
           </div>
           
-          <div style={{ height: 1, background: "#f1f5f9", margin: "1.5rem 0" }} />
+          <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
 
-          {/* Items Section */}
-          <div style={{ padding: "0 1.5rem" }}>
-            <SectionHeader icon={Package} title="Items" required count={selectedItems.length} loading={isItemsLoading} />
+          {/* Items Section - Manual Entry with Modal */}
+          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem" }}>
+            <SectionHeader icon={Package} title="Items" required count={selectedItems.length} loading={false} />
             
-            {isItemsLoading ? (
-              <ItemsLoadingSkeleton />
-            ) : selectedItems.length === 0 ? (
+            {selectedItems.length === 0 ? (
               <EmptyItemsState />
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "0.75rem" }}>
+              <div style={{ 
+                display: "flex", 
+                flexDirection: "column", 
+                gap: "0.75rem", 
+                marginBottom: "0.75rem" 
+              }}>
                 {selectedItems.map((item, index) => (
-                  <ItemRow 
-                    key={item.id} 
-                    item={item} 
-                    index={index} 
-                    items={items} 
-                    onUpdate={handleItemChange} 
-                    onRemove={handleRemoveItem} 
-                    selectedCurrency={selectedCurrency} 
-                  />
-                ))}
+  <ManualItemRow 
+    key={item.id} 
+    item={item} 
+    index={index} 
+    onUpdate={handleItemChange} 
+    onRemove={handleRemoveItem}
+    onEdit={handleOpenEditModal}  
+    selectedCurrency={selectedCurrency} 
+  />
+))}
               </div>
             )}
 
             <button
-              onClick={() => setShowItemsModal(true)}
-              disabled={isItemsLoading}
+              onClick={() => setIsAddItemModalOpen(true)}
               style={{
-                marginTop: "0.75rem", width: "100%", padding: "0.75rem",
-                background: isItemsLoading ? "#f8fafc" : "#eff1ff",
-                color: isItemsLoading ? "#94a3b8" : "#6366f1",
-                border: `1.5px dashed ${isItemsLoading ? "#e2e8f0" : "#c7d2fe"}`,
-                borderRadius: 14, fontSize: "0.875rem", fontWeight: 600,
-                cursor: isItemsLoading ? "not-allowed" : "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
+                marginTop: "0.75rem",
+                width: "100%",
+                padding: isMobile ? "0.65rem" : "0.75rem",
+                background: "#eff1ff",
+                color: "#6366f1",
+                border: "1.5px dashed #c7d2fe",
+                borderRadius: 14,
+                fontSize: "clamp(0.813rem, 4vw, 0.875rem)",
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "0.5rem",
                 transition: "all 0.2s",
               }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#e0e7ff";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#eff1ff";
+              }}
             >
-              {isItemsLoading ? (
-                <><Loader2 size={15} style={{ animation: "qs-spin 0.9s linear infinite" }} /> Loading catalogue…</>
-              ) : (
-                <><Plus size={16} /> {selectedItems.length > 0 ? "Add More Items" : "Add Items"}</>
-              )}
+              <Plus size={16} /> {selectedItems.length > 0 ? (isMobile ? "Add Another Item" : "Add Another Item") : (isMobile ? "Add Item" : "Add Item")}
             </button>
           </div>
 
-          {/* Query Date Section - ADDED */}
-          <div style={{ padding: "0 1.5rem", marginTop: "1.5rem" }}>
+          {/* Query Date Section */}
+          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem", marginTop: "1.5rem" }}>
             <div style={{ 
               background: "#f8fafc", 
               borderRadius: 16, 
-              padding: "1rem 1.25rem",
+              padding: isMobile ? "0.875rem 1rem" : "1rem 1.25rem",
               border: "1px solid #e2e8f0"
             }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem" }}>
+              <div style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "0.75rem", 
+                marginBottom: "0.75rem",
+                flexWrap: "wrap"
+              }}>
                 <Calendar size={18} color={PRIMARY} />
-                <label style={{ fontWeight: 600, color: PRIMARY, fontSize: "0.875rem" }}>
+                <label style={{ fontWeight: 600, color: PRIMARY, fontSize: "clamp(0.813rem, 4vw, 0.875rem)" }}>
                   Follow-up / Query Date
                 </label>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "1rem", 
+                flexWrap: "wrap",
+                flexDirection: isMobile ? "column" : "row"
+              }}>
                 <input
                   type="date"
                   value={manualQueryDate}
@@ -702,11 +854,11 @@ export default function QuotationScreen({ onBack }) {
                     padding: "0.6rem 1rem",
                     border: "1.5px solid #e2e8f0",
                     borderRadius: 10,
-                    fontSize: "0.875rem",
+                    fontSize: "clamp(0.813rem, 4vw, 0.875rem)",
                     outline: "none",
                     fontFamily: "inherit",
                     flex: 1,
-                    minWidth: "200px",
+                    minWidth: isMobile ? "100%" : "200px",
                     transition: "all 0.2s",
                   }}
                   onFocus={(e) => e.currentTarget.style.borderColor = PRIMARY}
@@ -720,24 +872,29 @@ export default function QuotationScreen({ onBack }) {
                     color: "#475569",
                     border: "none",
                     borderRadius: 10,
-                    fontSize: "0.75rem",
+                    fontSize: "clamp(0.688rem, 3.5vw, 0.75rem)",
                     fontWeight: 500,
                     cursor: "pointer",
                     fontFamily: "inherit",
+                    width: isMobile ? "100%" : "auto",
                   }}
                 >
                   Reset to Default (30 days)
                 </button>
               </div>
-              <p style={{ fontSize: "0.7rem", color: "#94a3b8", marginTop: "0.5rem" }}>
+              <p style={{ 
+                fontSize: "clamp(0.625rem, 3vw, 0.7rem)", 
+                color: "#94a3b8", 
+                marginTop: "0.5rem" 
+              }}>
                 Set a follow-up date to remind when to check back with the customer
               </p>
             </div>
           </div>
 
           {/* Summary */}
-          {selectedItems.some(item => item.itemId) && (
-            <div style={{ padding: "1.5rem" }}>
+          {selectedItems.length > 0 && (
+            <div style={{ padding: isMobile ? "1rem" : "1.5rem" }}>
               <SummaryCard 
                 grandTotal={grandTotal} 
                 exchangeRates={exchangeRates} 
@@ -747,28 +904,54 @@ export default function QuotationScreen({ onBack }) {
           )}
 
           {/* Actions */}
-          <div style={{ padding: "1.25rem 1.5rem", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fafbff" }}>
+          <div style={{ 
+            padding: isMobile ? "1rem" : "1.25rem 1.5rem", 
+            borderTop: "1px solid #f1f5f9", 
+            display: "flex", 
+            justifyContent: "space-between", 
+            alignItems: "center", 
+            background: "#fafbff",
+            flexDirection: isMobile ? "column-reverse" : "row",
+            gap: isMobile ? "1rem" : "0"
+          }}>
             
-            {(isCustomersLoading || isItemsLoading) && (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {isCustomersActuallyLoading && (
+              <div style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "0.5rem",
+                width: isMobile ? "100%" : "auto",
+                justifyContent: "center"
+              }}>
                 <Loader2 size={14} color="#6366f1" style={{ animation: "qs-spin 0.9s linear infinite" }} />
                 <span style={{ fontSize: "0.78rem", color: "#6366f1", fontWeight: 500 }}>
-                  {isCustomersLoading && isItemsLoading 
-                    ? "Loading customers & items…" 
-                    : isCustomersLoading 
-                      ? "Loading customers…" 
-                      : "Loading catalogue…"}
+                  Loading customers…
                 </span>
               </div>
             )}
             
-            <div style={{ display: "flex", gap: "0.75rem", marginLeft: "auto" }}>
+            <div style={{ 
+              display: "flex", 
+              gap: "0.75rem", 
+              width: isMobile ? "100%" : "auto",
+              justifyContent: "center"
+            }}>
               <button 
                 onClick={handleBack} 
                 style={{ 
-                  padding: "0.75rem 1.5rem", background: "white", color: "#475569", 
-                  border: "1.5px solid #e2e8f0", borderRadius: 14, fontSize: "0.875rem", 
-                  fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "0.5rem" 
+                  padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
+                  background: "white", 
+                  color: "#475569", 
+                  border: "1.5px solid #e2e8f0", 
+                  borderRadius: 14, 
+                  fontSize: "clamp(0.813rem, 4vw, 0.875rem)", 
+                  fontWeight: 600, 
+                  cursor: "pointer", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "0.5rem",
+                  flex: isMobile ? 1 : "auto",
+                  justifyContent: "center"
                 }}
               >
                 <ArrowLeft size={17} /> Back
@@ -778,38 +961,46 @@ export default function QuotationScreen({ onBack }) {
                 onClick={handleProceedToTemplate}
                 disabled={!canProceed}
                 style={{
-                  padding: "0.75rem 1.5rem",
+                  padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
                   background: canProceed ? `linear-gradient(135deg,${PRIMARY},#1e293b)` : "#e2e8f0",
                   color: canProceed ? "white" : "#94a3b8",
-                  border: "none", borderRadius: 14, fontSize: "0.875rem", fontWeight: 600,
+                  border: "none", 
+                  borderRadius: 14, 
+                  fontSize: "clamp(0.813rem, 4vw, 0.875rem)", 
+                  fontWeight: 600,
                   cursor: canProceed ? "pointer" : "not-allowed",
-                  display: "flex", alignItems: "center", gap: "0.5rem",
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "0.5rem",
                   boxShadow: canProceed ? `0 4px 12px ${PRIMARY}30` : "none",
                   opacity: canProceed ? 1 : 0.7,
+                  flex: isMobile ? 1 : "auto",
+                  justifyContent: "center"
                 }}
               >
-                {isCustomersLoading || isItemsLoading ? (
+                {isCustomersActuallyLoading ? (
                   <><Loader2 size={15} style={{ animation: "qs-spin 0.9s linear infinite" }} /> Loading…</>
                 ) : (
-                  <>Continue to Template <ArrowRight size={17} /></>
+                  <>Continue <ArrowRight size={17} /></>
                 )}
               </button>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Items Modal */}
-      <InfiniteItemSelector 
-        isOpen={showItemsModal} 
-        onClose={() => setShowItemsModal(false)} 
-        onSelect={handleAddItems} 
-        selectedItems={selectedItems} 
-        selectedCurrency={selectedCurrency} 
-        onSyncComplete={handleRefreshComplete} 
-        companyId={selectedCompany} 
-      />
       
+       <ItemModal
+  isOpen={isAddItemModalOpen}
+  onClose={() => {
+    setIsAddItemModalOpen(false);
+    setEditingItem(null);
+  }}
+  onAddItem={handleAddManualItem}
+  onEditItem={handleEditItem}
+  editingItem={editingItem}
+  selectedCurrency={selectedCurrency}
+/>
+
       {/* Toast Notifications */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>

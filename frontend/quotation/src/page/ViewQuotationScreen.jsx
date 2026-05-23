@@ -1,16 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Download, Edit2, Save, X, ArrowLeft, Loader, AlertCircle, AlertTriangle } from "lucide-react";
 import { useQuotation } from '../hooks/useQuotation';
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import { btnStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
-import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { useAppStore } from '../services/store';
 import LoadingOverlay from '../components/LoadingOverlay';
 
-// Loading Skeleton for Quotation
-const QuotationSkeleton = () => (
+// ============================================================
+// LOADING SKELETON COMPONENT
+// ============================================================
+const QuotationSkeleton = React.memo(() => (
   <div style={styles.skeletonContainer}>
     <div style={styles.skeletonHeader}>
       <div style={styles.skeletonLine} />
@@ -40,15 +41,16 @@ const QuotationSkeleton = () => (
       ))}
     </div>
   </div>
-);
+));
 
-// Rejection/Return Reason Banner Component
-const ReasonBanner = ({ quotation }) => {
+// ============================================================
+// REASON BANNER COMPONENT
+// ============================================================
+const ReasonBanner = React.memo(({ quotation }) => {
   const opsRejectionReason = quotation?.opsRejectionReason;
   const adminRejectionReason = quotation?.rejectionReason;
   const status = quotation?.status;
   
-  // Check if there's a rejection reason
   const hasOpsRejection = opsRejectionReason && opsRejectionReason.trim();
   const hasAdminRejection = adminRejectionReason && adminRejectionReason.trim();
   
@@ -117,11 +119,74 @@ const ReasonBanner = ({ quotation }) => {
           {reason}
         </div>
       </div>
-     
+    </div>
+  );
+});
+
+// ============================================================
+// PDF OPTIONS DROPDOWN COMPONENT
+// ============================================================
+const PDFOptionsDropdown = ({ onSelect, onClose, isExporting }) => {
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        onClose();
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onClose]);
+
+  if (isExporting) return null;
+
+  return (
+    <div ref={dropdownRef} style={{
+      position: 'absolute',
+      top: '100%',
+      right: 0,
+      marginTop: '8px',
+      background: 'white',
+      borderRadius: '12px',
+      boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
+      border: '1px solid #e2e8f0',
+      overflow: 'hidden',
+      zIndex: 100,
+      minWidth: '220px'
+    }}>
+      <button
+        onClick={() => onSelect('with_total')}
+        style={styles.pdfOptionButton}
+        onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+      >
+        <span style={{ fontSize: '1.2rem' }}>💰</span>
+        <div>
+          <div style={{ fontWeight: '600' }}>With Total Amount</div>
+          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Includes pricing and totals</div>
+        </div>
+      </button>
+      <button
+        onClick={() => onSelect('without_total')}
+        style={{ ...styles.pdfOptionButton, borderTop: '1px solid #e2e8f0' }}
+        onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+      >
+        <span style={{ fontSize: '1.2rem' }}>📄</span>
+        <div>
+          <div style={{ fontWeight: '600' }}>Without Total Amount</div>
+          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Excludes pricing and totals</div>
+        </div>
+      </button>
     </div>
   );
 };
 
+// ============================================================
+// MAIN COMPONENT
+// ============================================================
 export default function ViewQuotationScreen() {
   const {
     isEditing, setIsEditing, isSaving, isExporting, setIsExporting, editingImgId, setEditingImgId,
@@ -136,98 +201,125 @@ export default function ViewQuotationScreen() {
     customerPlaceOfSupply   
   } = useQuotation();
 
-  // Local state for progress tracking
+  // Local state
   const [saveProgress, setSaveProgress] = useState(0);
   const [saveStep, setSaveStep] = useState('');
   const [pdfProgress, setPdfProgress] = useState(0);
   const [pdfStep, setPdfStep] = useState('');
-
+  const [showPDFOptions, setShowPDFOptions] = useState(false);
+  
   // Get current user role
   const user = useAppStore(state => state.user);
-  const userRole = user?.role;
+  
+  // Memoized values
+  const allDocuments = useMemo(() => [...internalDocuments, ...newDocuments], [internalDocuments, newDocuments]);
+  
+  const isApproved = useMemo(() => 
+    originalQuotation?.status === 'approved' || originalQuotation?.status === 'awarded',
+    [originalQuotation?.status]
+  );
+  
+  const isRejected = useMemo(() => 
+    originalQuotation?.status === 'rejected',
+    [originalQuotation?.status]
+  );
+  
+  const isOpsRejected = useMemo(() => 
+    originalQuotation?.status === 'ops_rejected',
+    [originalQuotation?.status]
+  );
+  
+  // Progress tracking helpers - memoized to prevent recreation
+  const startProgressTracking = useCallback((setProgress, intervalMs = 800) => {
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(interval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, intervalMs);
+    return interval;
+  }, []);
+  
+  const completeProgressTracking = useCallback((setProgress, setStep, delayMs = 1000) => {
+    setProgress(100);
+    setStep('Complete!');
+    setTimeout(() => {
+      setProgress(0);
+      setStep('');
+    }, delayMs);
+  }, []);
   
   // Check if edit button should be shown
-  const canEdit = () => {
+  const canEdit = useCallback(() => {
     if (isEditing) return false;
-    const isApproved = originalQuotation?.status === 'approved' || 
-                       originalQuotation?.status === 'awarded' ||
-                       originalQuotation?.isApproved === true;
     if (isApproved) return false;
-    // if (userRole === 'admin' || userRole === 'ops_manager') return false;
     return true;
-  };
+  }, [isEditing, isApproved]);
   
-  useEffect(() => {
-    if (originalQuotation?.status) {
-      console.log('📊 Quotation status changed to:', originalQuotation.status);
-      // Force re-render of status badge
-    }
+  const getStatusText = useCallback(() => {
+    const status = originalQuotation?.status;
+    const statusMap = {
+      'approved': 'Approved',
+      'awarded': 'Awarded',
+      'rejected': 'Rejected',
+      'pending': 'Pending',
+      'ops_rejected': 'Returned',
+      'ops_approved': 'In Review'
+    };
+    return statusMap[status] || status || 'Draft';
   }, [originalQuotation?.status]);
-
+  
   // Enhanced save handler with progress tracking
-  const handleSaveWithProgress = async () => {
+  const handleSaveWithProgress = useCallback(async () => {
     setSaveProgress(10);
     setSaveStep('Validating data...');
     
-    const progressInterval = setInterval(() => {
-      setSaveProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return 90;
-        }
-        return prev + 10;
-      });
-    }, 800);
+    const progressInterval = startProgressTracking(setSaveProgress);
     
     try {
       await handleSave();
-      setSaveProgress(100);
-      setSaveStep('Complete!');
-      setTimeout(() => {
-        setSaveProgress(0);
-        setSaveStep('');
-      }, 1000);
+      completeProgressTracking(setSaveProgress, setSaveStep);
     } catch (error) {
       setSaveProgress(0);
       setSaveStep('');
+      console.error('Save error:', error);
     } finally {
       clearInterval(progressInterval);
     }
-  };
+  }, [handleSave, startProgressTracking, completeProgressTracking]);
   
   // Enhanced PDF handler with progress tracking
-  const handlePDFWithProgress = async () => {
+  const handlePDFWithProgress = useCallback(async (exportType = 'with_total') => {
     setPdfProgress(10);
     setPdfStep('Preparing document...');
     
-    const progressInterval = setInterval(() => {
-      setPdfProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return 90;
-        }
-        return prev + 10;
-      });
-    }, 1000);
+    const progressInterval = startProgressTracking(setPdfProgress, 1000);
     
     try {
-      await generatePDF();
-      setPdfProgress(100);
-      setPdfStep('Complete!');
-      setTimeout(() => {
-        setPdfProgress(0);
-        setPdfStep('');
-      }, 1000);
+      await generatePDF(exportType);
+      completeProgressTracking(setPdfProgress, setPdfStep);
     } catch (error) {
       setPdfProgress(0);
       setPdfStep('');
+      console.error('PDF generation error:', error);
     } finally {
       clearInterval(progressInterval);
     }
-  };
+  }, [generatePDF, startProgressTracking, completeProgressTracking]);
   
-  const allDocuments = [...internalDocuments, ...newDocuments];
-
+  const handlePDFOptionSelect = useCallback((exportType) => {
+    handlePDFWithProgress(exportType);
+    setShowPDFOptions(false);
+  }, [handlePDFWithProgress]);
+  
+  const handleSnackbarClose = useCallback(() => {
+    setSnackbar({ show: false, message: '', type: 'error' });
+  }, [setSnackbar]);
+  
+  // Early returns - all hooks are already called above
   if (loading) {
     return (
       <div style={styles.loadingContainer}>
@@ -236,48 +328,36 @@ export default function ViewQuotationScreen() {
       </div>
     );
   }
-
+  
   if (fetchError) {
     return (
       <div style={styles.errorContainer}>
         <div style={styles.errorBanner}>
           <AlertCircle size={18} /> ⚠️ {fetchError}
         </div>
-        <button onClick={handleBack} style={btnStyle("#1e3a8a")}><ArrowLeft size={18} /> Back</button>
+        <button onClick={handleBack} style={btnStyle("#1e3a8a")}>
+          <ArrowLeft size={18} /> Back
+        </button>
       </div>
     );
   }
-
+  
   if (!originalQuotation) {
     return (
       <div style={styles.errorContainer}>
         <p style={styles.notFoundText}>Quotation not found.</p>
-        <button onClick={handleBack} style={{ marginTop: "1rem", ...btnStyle("#1e3a8a") }}><ArrowLeft size={18} /> Back</button>
+        <button onClick={handleBack} style={{ marginTop: "1rem", ...btnStyle("#1e3a8a") }}>
+          <ArrowLeft size={18} /> Back
+        </button>
       </div>
     );
   }
-
-  const getStatusText = () => {
-    const status = originalQuotation?.status;
-    if (status === 'approved') return 'Approved';
-    if (status === 'awarded') return 'Awarded';
-    if (status === 'rejected') return 'Rejected';
-    if (status === 'pending') return 'Pending';
-    if (status === 'ops_rejected') return 'Returned';
-    if (status === 'ops_approved') return 'In Review';
-    return status || 'Draft';
-  };
-
-  const isApproved = originalQuotation?.status === 'approved' || originalQuotation?.status === 'awarded';
+  
   const showEditButton = canEdit();
-
-  // Check if quotation is in rejected/returned state
-  const isRejected = originalQuotation?.status === 'rejected';
-  const isOpsRejected = originalQuotation?.status === 'ops_rejected';
-
+  
   return (
     <div style={styles.container}>
-      {/* Reusable Loading Overlays */}
+      {/* Loading Overlays */}
       {isSaving && saveProgress > 0 && (
         <LoadingOverlay 
           type="saving"
@@ -295,8 +375,9 @@ export default function ViewQuotationScreen() {
       )}
       
       <style>{styles.globalStyles}</style>
-
+      
       <div style={styles.innerContainer}>
+        {/* Header */}
         <div className="no-print" style={styles.header}>
           <div>
             <h1 style={styles.title}>
@@ -314,12 +395,14 @@ export default function ViewQuotationScreen() {
               </div>
             )}
           </div>
+          
           <div style={styles.headerActions}>
             {!isEditing && showEditButton && (
               <button onClick={() => setIsEditing(true)} style={btnStyle("#f59e0b")}>
                 <Edit2 size={16} /> Edit
               </button>
             )}
+            
             {isEditing && (
               <>
                 <button 
@@ -335,73 +418,95 @@ export default function ViewQuotationScreen() {
                 </button>
               </>
             )}
-            <button 
-              onClick={handlePDFWithProgress} 
-              disabled={isExporting} 
-              style={{ ...btnStyle("#0369a1", isExporting), display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              {isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={16} />} 
-              {isExporting ? "Generating…" : "Download PDF"}
-            </button>
+            
+            {/* PDF Download with Dropdown */}
+            <div style={{ position: 'relative' }}>
+              <button 
+                onClick={() => setShowPDFOptions(prev => !prev)} 
+                disabled={isExporting} 
+                style={{ 
+                  ...btnStyle("#0369a1", isExporting), 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '0.5rem' 
+                }}
+              >
+                {isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={16} />} 
+                {isExporting ? "Generating…" : "Download PDF"}
+              </button>
+              
+              {showPDFOptions && (
+                <PDFOptionsDropdown 
+                  onSelect={handlePDFOptionSelect}
+                  onClose={() => setShowPDFOptions(false)}
+                  isExporting={isExporting}
+                />
+              )}
+            </div>
+            
             <button onClick={handleBack} style={btnStyle("#6b7280")}>
               <ArrowLeft size={16} /> Back
             </button>
           </div>
         </div>
-
-        {/* ✅ Rejection/Return Reason Banner - Displayed at the top */}
+        
+        {/* Rejection/Return Reason Banner */}
         <ReasonBanner quotation={originalQuotation} />
-
+        
+        {/* Edit Mode Banner */}
         {isEditing && (
           <div style={styles.editModeBanner}>
             ✏️ <strong>Edit mode active</strong> — make your changes below, then click <strong>Save Changes</strong>.
           </div>
         )}
-
-        {loading ? (
-          <QuotationSkeleton />
-        ) : (
-          <QuotationLayout
-            isEditing={isEditing}
-            quotationNumber={originalQuotation.quotationNumber}
-            quotationData={quotationData}
-            onDataChange={handleDataChange}
-            quotationItems={quotationItems}
-            availableItems={items}
-            onUpdateItem={updateItem}
-            onAddItem={addItem}
-            onRemoveItem={removeItem}
-            onAddImages={handleImageUpload}
-            onRemoveExistingImage={removeExistingImage}
-            onRemoveNewImage={removeNewImage}
-            editingImgId={editingImgId}
-            onToggleImgEdit={(id) => setEditingImgId(editingImgId === id ? null : id)}
-            newImages={newImages}
-            subtotal={subtotal}
-            taxAmount={taxAmount}
-            discountAmount={discountAmount}
-            grandTotal={grandTotal}
-            amountInWords={amountInWords}
-            tcSections={tcSections}
-            onTcChange={setTcSections}
-            fieldErrors={fieldErrors}
-            actionBar={null}
-            documents={allDocuments}
-            onDocumentUpload={handleDocumentUpload}
-            onDocumentDelete={handleDocumentDelete}
-            onDocumentDownload={handleDocumentDownload}
-            onDocumentPreview={handleDocumentPreview}
-            documentLoading={loading}
-            formatFileSize={formatFileSize}
-            getFileIcon={getFileIcon}
-            termsImages={termsImages}
-            onTermsImagesUpload={handleTermsImagesUpload}
-            onRemoveTermsImage={removeTermsImage}
-            customerTaxTreatment={customerTaxTreatment}
-            customerPlaceOfSupply={customerPlaceOfSupply}
-          />
-        )}
-
+        
+        {/* Main Content */}
+        <QuotationLayout
+          isEditing={isEditing}
+          quotationNumber={originalQuotation.quotationNumber}
+          quotationData={quotationData}
+          onDataChange={handleDataChange}
+          quotationItems={quotationItems}
+          availableItems={items}
+          onUpdateItem={updateItem}
+          onAddItem={addItem}
+          onRemoveItem={removeItem}
+          onAddImages={handleImageUpload}
+          onRemoveExistingImage={removeExistingImage}
+          onRemoveNewImage={removeNewImage}
+          editingImgId={editingImgId}
+          onToggleImgEdit={(id) => setEditingImgId(editingImgId === id ? null : id)}
+          newImages={newImages}
+          subtotal={subtotal}
+          taxAmount={taxAmount}
+          discountAmount={discountAmount}
+          grandTotal={grandTotal}
+          amountInWords={amountInWords}
+          tcSections={tcSections}
+          onTcChange={setTcSections}
+          fieldErrors={fieldErrors}
+          actionBar={null}
+          documents={allDocuments}
+          onDocumentUpload={handleDocumentUpload}
+          onDocumentDelete={handleDocumentDelete}
+          onDocumentDownload={handleDocumentDownload}
+          onDocumentPreview={handleDocumentPreview}
+          documentLoading={loading}
+          formatFileSize={formatFileSize}
+          getFileIcon={getFileIcon}
+          termsImages={termsImages}
+          onTermsImagesUpload={handleTermsImagesUpload}
+          onRemoveTermsImage={removeTermsImage}
+          customerTaxTreatment={customerTaxTreatment}
+          customerPlaceOfSupply={customerPlaceOfSupply}
+          companyName={originalQuotation?.companySnapshot?.name || ''}
+          companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
+          companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
+          companyTradeLicense={originalQuotation?.companySnapshot?.crNumber || ''}
+          companyTaxRegistration={originalQuotation?.companySnapshot?.vatNumber || ''}
+        />
+        
+        {/* Document Preview Modal */}
         {previewDoc && (
           <div style={styles.previewOverlay} onClick={() => setPreviewDoc(null)}>
             <div style={styles.previewModal} onClick={(e) => e.stopPropagation()}>
@@ -418,7 +523,10 @@ export default function ViewQuotationScreen() {
                   style={styles.previewImage}
                   onError={(e) => {
                     e.target.style.display = 'none';
-                    e.target.parentElement.innerHTML = '<div style="padding:2rem;color:#ef4444;">Failed to load image</div>';
+                    const parent = e.target.parentElement;
+                    if (parent) {
+                      parent.innerHTML = '<div style="padding:2rem;color:#ef4444;">Failed to load image</div>';
+                    }
                   }} 
                 />
               </div>
@@ -426,8 +534,15 @@ export default function ViewQuotationScreen() {
           </div>
         )}
       </div>
-
-      {snackbar.show && <Snackbar message={snackbar.message} type={snackbar.type} onClose={() => setSnackbar({ show: false, message: '', type: 'error' })} />}
+      
+      {/* Snackbar */}
+      {snackbar.show && (
+        <Snackbar 
+          message={snackbar.message} 
+          type={snackbar.type} 
+          onClose={handleSnackbarClose} 
+        />
+      )}
     </div>
   );
 }
@@ -487,6 +602,21 @@ const styles = {
   skeletonTableHeader: { background: "#f8fafc", padding: "0.75rem 1rem", borderBottom: "1px solid #e2e8f0" },
   skeletonRow: { display: "flex", padding: "0.85rem 1rem", borderBottom: "1px solid #f1f5f9", gap: "1rem" },
   skeletonCell: { flex: 1, height: "14px", borderRadius: "6px", background: "linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)", backgroundSize: "200% 100%", animation: "skeleton 1.4s ease infinite" },
+  
+  // PDF Option Button
+  pdfOptionButton: {
+    width: '100%',
+    padding: '12px 16px',
+    border: 'none',
+    background: 'white',
+    textAlign: 'left',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    fontSize: '0.875rem',
+    transition: 'background 0.2s'
+  },
   
   // Preview Modal
   previewOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' },

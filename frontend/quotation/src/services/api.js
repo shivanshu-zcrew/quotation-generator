@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const API_BASE = import.meta.env?.VITE_API_URL || "http://localhost:4000/api";
+// const API_BASE = import.meta.env?.VITE_API_URL || "http://192.168.1.5:4000/api";
+
+const API_BASE = import.meta.env?.VITE_API_URL;
 
 // Request Deduplication
 class RequestDeduplicator {
@@ -263,7 +265,13 @@ export const authAPI = {
 // ==================== ADMIN ====================
 export const adminAPI = {
   getDashboardStats: (params) => api.get("/admin/dashboard", { params }),
-  getAllQuotations: (params) => api.get("/admin/quotations", { params }),
+  getAllQuotations: (params = {}) => {
+    const { page = 1, limit = 20, ...rest } = params;
+    const key = `/admin/quotations?${new URLSearchParams({ page, limit, ...rest })}`;
+    return withCache(key, () => api.get("/admin/quotations", { params: { page, limit, ...rest } }), {
+      ttl: 30 * 1000 // 30 seconds cache
+    });
+  },
   getPendingQuotations: (params) => api.get("/admin/quotations/pending", { params }),
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/reject`, data),
@@ -295,6 +303,8 @@ export const opsAPI = {
 };
 
 // ==================== CUSTOMERS ====================
+// services/api.js - Update customerAPI
+
 export const customerAPI = {
   getAll: async (params, options = {}) => {
     const { skipCache = false } = options;
@@ -347,12 +357,32 @@ export const customerAPI = {
   syncFromZoho: (fullSync = false) => syncQueue.add(() => 
     api.post(`/customers/sync-from-zoho${fullSync ? '?fullSync=true' : ''}`)
   ),
+  getSyncProgress: () => {
+    return api.get(`/customers/sync/progress`);
+  },
+  cancelSync: async () => {
+    return api.post('/customers/sync/cancel');
+  },
   getSyncStatus: () => api.get("/customers/sync/status"),
   getPendingSync: () => api.get("/customers/sync/pending"),
   forceSyncCustomer: (id) => syncQueue.add(() => api.post(`/customers/sync/force/${id}`)),
   syncWithZoho: (id) => syncQueue.add(() => api.post(`/customers/${id}/sync`)),
   
-  getStats: () => api.get("/customers/stats"),
+  // Updated getStats to handle all companies
+  getStats: (params = {}) => {
+    const { companyId, ...rest } = params;
+    const apiParams = {};
+    
+    // Only add companyId if it's not 'all'
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      apiParams.companyId = companyId;
+    }
+    
+    Object.assign(apiParams, rest);
+    
+    return api.get("/customers/stats", { params: apiParams });
+  },
+  
   getGccCountries: () => {
     const key = "/customers/gcc-countries";
     return withCache(key, () => api.get("/customers/gcc-countries"), { ttl: 24 * 60 * 60 * 1000 });
@@ -365,6 +395,24 @@ export const customerAPI = {
     const key = "/customers/tax-treatments";
     return withCache(key, () => api.get("/customers/tax-treatments"), { ttl: 24 * 60 * 60 * 1000 });
   },
+  
+  // Updated exportCustomers to handle all companies
+  exportCustomers: (params, format = 'xlsx') => {
+    const { companyId, ...rest } = params;
+    const apiParams = { format, ...rest };
+    
+    // Only add companyId if it's not 'all'
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      apiParams.companyId = companyId;
+    }
+    
+    return api.get("/customers/export", { 
+      params: apiParams,
+      responseType: 'blob',
+      timeout: 120000 
+    });
+  },
+  
   getTaxSummary: () => api.get("/customers/tax-summary"),
   getByTaxTreatment: (taxTreatment, params = {}) => api.get("/customers", { params: { ...params, taxTreatment } }),
   getByPlaceOfSupply: (placeOfSupply, params = {}) => api.get("/customers", { params: { ...params, placeOfSupply } }),
@@ -372,7 +420,19 @@ export const customerAPI = {
     apiCache.clear();
     return api.post("/customers/bulk", { customers });
   },
-  export: (params, format = 'csv') => api.get("/customers/export", { params: { ...params, format }, responseType: 'blob' }),
+  
+  // Add place stats endpoint
+  getCustomerPlaceStats: (params = {}) => {
+    const { companyId, ...rest } = params;
+    const apiParams = { ...rest };
+    
+    // Only add companyId if it's not 'all'
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      apiParams.companyId = companyId;
+    }
+    
+    return api.get("/customers/place-stats", { params: apiParams });
+  },
 };
 
 // ==================== ITEMS ====================
@@ -593,6 +653,49 @@ export const quotationAPI = {
     return { success: true };
   },
   documents: documentAPI,
+};
+
+// ==================== NOTIFICATIONS ====================
+export const notificationAPI = {
+  /** Get all notifications with pagination */
+  getAll: (params = {}) => {
+    return api.get("/notifications", { params });
+  },
+
+  /** Get only unread count (for bell icon) */
+  getUnreadCount: () => {
+    return api.get("/notifications/unread-count");
+  },
+
+  /** Get single notification */
+  getById: (id) => {
+    return api.get(`/notifications/${id}`);
+  },
+
+  /** Mark one notification as read */
+  markAsRead: (id) => {
+    return api.put(`/notifications/${id}/read`);
+  },
+
+  /** Mark all notifications as read */
+  markAllAsRead: () => {
+    return api.put("/notifications/read-all");
+  },
+
+  /** Archive a notification */
+  archive: (id) => {
+    return api.put(`/notifications/${id}/archive`);
+  },
+
+  /** Delete a notification */
+  delete: (id) => {
+    return api.delete(`/notifications/${id}`);
+  },
+
+  /** Force refresh notifications */
+  refresh: () => {
+    return api.get("/notifications", { params: { forceRefresh: true } });
+  }
 };
 
 // ==================== UTILITIES ====================

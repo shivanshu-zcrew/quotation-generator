@@ -1,322 +1,746 @@
-// components/CustomerSelector.jsx (Fixed - Shows all customers with scroll)
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, X, Users, RefreshCw, Loader2, ChevronDown, ChevronUp, Mail, Phone, AlertCircle, CheckCircle } from 'lucide-react';
+// components/CustomerSelector.jsx (Responsive Version)
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
+
+import {
+  Search,
+  X,
+  Users,
+  Loader2,
+  ChevronDown,
+  CheckCircle,
+} from 'lucide-react';
+
 import useCustomerStore from '../services/customerStore';
 
-const CustomerSelector = ({ value, onChange, placeholder = "Search or select a customer", companyId, onSyncComplete, autoLoad = false, className = "", style = {} }) => {
-  const [search, setSearch] = useState('');
+const CustomerSelector = ({
+  value,
+  onChange,
+  placeholder = 'Search or select a customer',
+  companyId,
+  onSyncComplete,
+  autoLoad = true,
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
   const [isOpen, setIsOpen] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(50);  
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  
+  const [isMobile, setIsMobile] = useState(false);
+
   const dropdownRef = useRef(null);
   const inputRef = useRef(null);
-  const searchTimeoutRef = useRef(null);
-  const scrollContainerRef = useRef(null);
-  const prevCompanyIdRef = useRef(companyId);
+  const timeoutRef = useRef(null);
 
-  const { 
-    customers, 
-    isLoading: isCustomersLoading, 
-    isLoaded: isCustomersLoaded,
+  const {
+    customers,
+    isLoading,
+    isLoaded,
     loadAllCustomers,
     searchCustomers,
     clearSearch,
     syncCustomers,
     isSearching,
     searchResults,
-    error: storeError,
-    searchQuery,
-    totalCount
   } = useCustomerStore();
 
-  const selectedCustomer = useMemo(() => customers.find(c => c._id === value) || null, [customers, value]);
-
-  // Get display customers - show ALL customers when no search, not just first 50
-  const displayCustomers = useMemo(() => {
-    if (isSearching && searchResults.length > 0) return searchResults;
-    if (search.trim()) {
-      const term = search.toLowerCase();
-      return customers.filter(c => 
-        c.name?.toLowerCase().includes(term) ||
-        c.email?.toLowerCase().includes(term) ||
-        c.phone?.includes(search)
-      );
-    }
-    // Show ALL customers, not just first 50
-    return customers;
-  }, [customers, search, isSearching, searchResults]);
-
-  // Get visible customers for infinite scroll
-  const visibleCustomers = useMemo(() => {
-    return displayCustomers.slice(0, visibleCount);
-  }, [displayCustomers, visibleCount]);
-
-  const hasMore = visibleCount < displayCustomers.length;
-
-  // Load more when scrolling
-  const handleScroll = useCallback(() => {
-    if (!scrollContainerRef.current || isLoadingMore || !hasMore) return;
-    
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-    // Load more when scrolled to bottom (within 100px)
-    if (scrollHeight - scrollTop - clientHeight < 100) {
-      setIsLoadingMore(true);
-      // Load 50 more items
-      setTimeout(() => {
-        setVisibleCount(prev => Math.min(prev + 50, displayCustomers.length));
-        setIsLoadingMore(false);
-      }, 100);
-    }
-  }, [hasMore, isLoadingMore, displayCustomers.length]);
-
-  // Reset visible count when customers change (company change or search)
+  // =========================
+  // Responsive Detection
+  // =========================
   useEffect(() => {
-    setVisibleCount(50);
-  }, [customers, search, companyId]);
-
-  // Attach scroll listener
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (container && isOpen && !isSearching && !search.trim()) {
-      container.addEventListener('scroll', handleScroll);
-      return () => container.removeEventListener('scroll', handleScroll);
-    }
-  }, [isOpen, isSearching, search, handleScroll]);
-
-  // Handle company change
-  useEffect(() => {
-    if (prevCompanyIdRef.current !== companyId) {
-      setSearch('');
-      setIsOpen(false);
-      setVisibleCount(50);
-      
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-      
-      prevCompanyIdRef.current = companyId;
-    }
-  }, [companyId]);
-
-  // Auto-load customers
-  useEffect(() => {
-    if (autoLoad && companyId && !isCustomersLoaded && !isCustomersLoading) {
-      loadAllCustomers(companyId);
-    }
-  }, [autoLoad, companyId, isCustomersLoaded, isCustomersLoading, loadAllCustomers]);
-
-  // Close on outside click
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      const isOutside = dropdownRef.current && !dropdownRef.current.contains(event.target);
-      if (isOutside) {
-        setIsOpen(false);
-      }
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const handleSearchChange = useCallback((e) => {
-    const query = e.target.value;
-    setSearch(query);
-    setVisibleCount(50); // Reset visible count on new search
-    
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
+  // =========================
+  // Display Customers
+  // =========================
+  const displayCustomers = useMemo(() => {
+    if (isSearching && searchResults.length > 0) {
+      return searchResults;
     }
-    
-    if (query.trim().length >= 2) {
-      searchTimeoutRef.current = setTimeout(() => {
-        searchCustomers(query, companyId);
-      }, 300);
-    } else if (query.trim().length === 0) {
-      clearSearch();
-    }
-  }, [companyId, searchCustomers, clearSearch]);
 
-  const handleSelectCustomer = useCallback((customer) => {
-    setSearch('');
-    clearSearch();
+    if (searchTerm.trim().length > 0) {
+      const term = searchTerm.toLowerCase().trim();
+
+      return customers.filter(
+        (customer) =>
+          customer.name?.toLowerCase().includes(term) ||
+          customer.email?.toLowerCase().includes(term) ||
+          customer.phone?.includes(term)
+      );
+    }
+
+    return customers;
+  }, [customers, searchTerm, isSearching, searchResults]);
+
+  // =========================
+  // Selected Customer
+  // =========================
+  const selectedCustomer = useMemo(() => {
+    return customers.find((c) => c._id === value) || null;
+  }, [customers, value]);
+
+  // =========================
+  // Open / Close Dropdown
+  // =========================
+  const openDropdown = useCallback(() => {
+    setIsOpen(true);
+  }, []);
+
+  const closeDropdown = useCallback(() => {
     setIsOpen(false);
-    setVisibleCount(50);
-    onChange(customer._id, customer);
-  }, [onChange, clearSearch]);
+  }, []);
 
-  const handleClear = useCallback(() => {
-    setSearch('');
-    clearSearch();
-    setVisibleCount(50);
-    onChange(null, null);
-  }, [onChange, clearSearch]);
-
-  const handleSync = useCallback(async () => {
-    if (!companyId) return;
-    const result = await syncCustomers(companyId);
-    onSyncComplete?.(result);
-  }, [companyId, syncCustomers, onSyncComplete]);
-
-  const toggleDropdown = useCallback(() => {
-    setIsOpen(!isOpen);
-    if (!isOpen) {
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-        }
-      }, 50);
+  // =========================
+  // Focus Input
+  // =========================
+  useEffect(() => {
+    if (isOpen) {
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
     }
   }, [isOpen]);
 
-  const showLoading = isCustomersLoading || (isSearching && search.trim().length >= 2);
-  const showShortSearchHint = search.trim().length > 0 && search.trim().length < 2;
-  const showNoResults = !showLoading && !showShortSearchHint && visibleCustomers.length === 0 && search.trim().length >= 2;
+  // =========================
+  // Debounced Search
+  // =========================
+  const handleSearchChange = useCallback(
+    (e) => {
+      const value = e.target.value;
+
+      setSearchTerm(value);
+
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+
+      timeoutRef.current = setTimeout(() => {
+        const trimmed = value.trim();
+
+        if (trimmed.length >= 2) {
+          searchCustomers(trimmed, companyId);
+        } else {
+          clearSearch();
+        }
+      }, 400);
+    },
+    [companyId, searchCustomers, clearSearch]
+  );
+
+  // =========================
+  // Cleanup Timeout
+  // =========================
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  // =========================
+  // Select Customer
+  // =========================
+  const handleSelect = useCallback(
+    (customer) => {
+      onChange(customer._id, customer);
+
+      setSearchTerm('');
+      clearSearch();
+      closeDropdown();
+    },
+    [onChange, clearSearch, closeDropdown]
+  );
+
+  // =========================
+  // Clear Customer
+  // =========================
+  const handleClear = useCallback(
+    (e) => {
+      e.stopPropagation();
+
+      onChange(null, null);
+
+      setSearchTerm('');
+      clearSearch();
+      closeDropdown();
+    },
+    [onChange, clearSearch, closeDropdown]
+  );
+
+  // =========================
+  // Sync Customers
+  // =========================
+  const handleSync = useCallback(async () => {
+    if (!companyId) return;
+
+    const result = await syncCustomers(companyId);
+
+    onSyncComplete?.(result);
+  }, [companyId, syncCustomers, onSyncComplete]);
+
+  // =========================
+  // Outside Click
+  // =========================
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target)
+      ) {
+        closeDropdown();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+
+    return () => {
+      document.removeEventListener(
+        'mousedown',
+        handleClickOutside
+      );
+    };
+  }, [closeDropdown]);
+
+  // =========================
+  // Auto Load Customers
+  // =========================
+  useEffect(() => {
+    if (
+      autoLoad &&
+      companyId &&
+      !isLoaded &&
+      !isLoading
+    ) {
+      loadAllCustomers(companyId);
+    }
+  }, [
+    autoLoad,
+    companyId,
+    isLoaded,
+    isLoading,
+    loadAllCustomers,
+  ]);
+
+  // =========================
+  // Animation Styles
+  // =========================
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes cs-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      
+      @keyframes cs-dropdownSlide {
+        from {
+          opacity: 0;
+          transform: translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      
+      @media (max-width: 768px) {
+        .customer-dropdown {
+          position: fixed !important;
+          top: auto !important;
+          bottom: 0 !important;
+          left: 0 !important;
+          right: 0 !important;
+          border-radius: 20px 20px 0 0 !important;
+          max-height: 80vh !important;
+          animation: cs-slideUp 0.3s ease !important;
+        }
+        
+        @keyframes cs-slideUp {
+          from {
+            transform: translateY(100%);
+          }
+          to {
+            transform: translateY(0);
+          }
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
+  // Responsive styles
+  const triggerStyle = {
+    height: isMobile ? '44px' : '48px',
+    border: '1.5px solid #e2e8f0',
+    borderRadius: isMobile ? '12px' : '14px',
+    background: '#fafbff',
+    padding: isMobile ? '0 0.875rem' : '0 1rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: isMobile ? '10px' : '12px',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+  };
+
+  const avatarStyle = {
+    width: isMobile ? '30px' : '34px',
+    height: isMobile ? '30px' : '34px',
+    borderRadius: isMobile ? '8px' : '10px',
+    background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+    color: 'white',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontWeight: 700,
+    fontSize: isMobile ? '0.7rem' : '0.8rem',
+    flexShrink: 0,
+  };
+
+  const dropdownStyle = {
+    position: isMobile ? 'fixed' : 'absolute',
+    top: isMobile ? 'auto' : 'calc(100% + 6px)',
+    bottom: isMobile ? '0' : 'auto',
+    left: isMobile ? '0' : '0',
+    right: isMobile ? '0' : '0',
+    background: 'white',
+    border: isMobile ? 'none' : '1px solid #e2e8f0',
+    borderRadius: isMobile ? '20px 20px 0 0' : '14px',
+    boxShadow: isMobile 
+      ? '0 -5px 25px -5px rgba(0,0,0,0.15)'
+      : '0 10px 25px -5px rgba(0,0,0,0.15)',
+    overflow: 'hidden',
+    zIndex: 1000,
+    maxHeight: isMobile ? '80vh' : 'auto',
+    animation: isMobile ? 'cs-slideUp 0.3s ease' : 'cs-dropdownSlide 0.2s ease',
+  };
+
+  const searchContainerStyle = {
+    padding: isMobile ? '12px' : '12px 16px',
+    borderBottom: '1px solid #f1f5f9',
+    background: 'white',
+    position: isMobile ? 'sticky' : 'relative',
+    top: 0,
+    zIndex: 1,
+  };
+
+  const searchInputStyle = {
+    width: '100%',
+    padding: isMobile ? '10px 12px 10px 38px' : '10px 12px 10px 40px',
+    border: '1px solid #e2e8f0',
+    borderRadius: isMobile ? '10px' : '12px',
+    fontSize: isMobile ? '0.875rem' : '0.9rem',
+    outline: 'none',
+    boxSizing: 'border-box',
+    transition: 'border-color 0.2s',
+  };
+
+  const resultsContainerStyle = {
+    maxHeight: isMobile ? 'calc(80vh - 80px)' : '340px',
+    overflowY: 'auto',
+    WebkitOverflowScrolling: 'touch',
+  };
+
+  const customerItemStyle = {
+    padding: isMobile ? '12px' : '12px 16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: isMobile ? '10px' : '12px',
+    cursor: 'pointer',
+    borderBottom: '1px solid #f8fafc',
+    transition: 'background 0.2s',
+  };
 
   return (
-    <div className={className} style={{ position: 'relative', width: '100%', ...style }} ref={dropdownRef}>
+    <div
+      ref={dropdownRef}
+      style={{
+        position: 'relative',
+        width: '100%',
+      }}
+    >
+      {/* ========================= */}
+      {/* Trigger */}
+      {/* ========================= */}
       <div
-        style={{
-          display: 'flex', alignItems: 'center', height: 46,
-          border: `1.5px solid ${isFocused ? '#0f172a' : '#e2e8f0'}`,
-          borderRadius: 14, background: '#fafbff', padding: '0 1rem', gap: '0.75rem',
-          cursor: 'pointer', transition: 'all 0.2s ease',
+        onClick={openDropdown}
+        style={triggerStyle}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = '#0f172a';
         }}
-        onClick={toggleDropdown}
-        onFocus={() => setIsFocused(true)}
-        onBlur={() => setIsFocused(false)}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = '#e2e8f0';
+        }}
       >
         {selectedCustomer ? (
           <>
-            <div style={{ width: 32, height: 32, borderRadius: 10, background: 'linear-gradient(135deg, #0f172a, #1e293b)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '0.75rem', fontWeight: 700 }}>
-              {selectedCustomer.name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || 'C'}
+            <div style={avatarStyle}>
+              {selectedCustomer.name
+                ?.substring(0, 2)
+                .toUpperCase()}
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{selectedCustomer.name}</div>
-              {/* {selectedCustomer.email && <div style={{ fontSize: '0.7rem', color: '#64748b' }}><Mail size={11} /> {selectedCustomer.email}</div>} */}
+
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 600,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: isMobile ? '0.875rem' : '0.9rem',
+                }}
+              >
+                {selectedCustomer.name}
+              </div>
+
+              {selectedCustomer.email && !isMobile && (
+                <div
+                  style={{
+                    fontSize: '0.75rem',
+                    color: '#64748b',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {selectedCustomer.email}
+                </div>
+              )}
             </div>
-            <button onClick={(e) => { e.stopPropagation(); handleClear(); }} style={{ padding: 4, borderRadius: 6, background: '#fee2e2', border: 'none', cursor: 'pointer' }}>
-              <X size={14} color="#dc2626" />
+
+            <button
+              type="button"
+              onClick={handleClear}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: isMobile ? '6px' : '4px',
+                borderRadius: '6px',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#fef2f2';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <X size={isMobile ? 14 : 16} color="#ef4444" />
             </button>
           </>
         ) : (
           <>
-            <Search size={18} color="#94a3b8" />
-            <span style={{ color: '#94a3b8', fontSize: '0.875rem', flex: 1 }}>{placeholder}</span>
+            <Search size={isMobile ? 16 : 18} color="#94a3b8" />
+
+            <span
+              style={{
+                color: '#94a3b8',
+                flex: 1,
+                fontSize: isMobile ? '0.875rem' : '0.9rem',
+              }}
+            >
+              {isMobile && placeholder.length > 30 
+                ? placeholder.substring(0, 30) + '...' 
+                : placeholder}
+            </span>
           </>
         )}
-        {isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+
+        <ChevronDown
+          size={isMobile ? 16 : 18}
+          style={{
+            transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.2s ease',
+            flexShrink: 0,
+            color: '#64748b',
+          }}
+        />
       </div>
 
+      {/* ========================= */}
+      {/* Dropdown */}
+      {/* ========================= */}
       {isOpen && (
-        <div style={{ 
-          position: 'absolute', top: '110%', left: 0, right: 0, 
-          background: 'white', border: '1px solid #e2e8f0', borderRadius: 14, 
-          boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)', 
-          maxHeight: 400, overflow: 'hidden', zIndex: 1000 
-        }}>
-          {/* Search Input */}
-          <div style={{ padding: '1rem', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '0.75rem', background: '#fafbff' }}>
-            <Search size={16} color="#94a3b8" />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Search customers..."
-              value={search}
-              onChange={handleSearchChange}
-              style={{ flex: 1, border: 'none', outline: 'none', fontSize: '0.875rem', padding: 0 }}
-            />
-            {search && (
-              <button onClick={() => { setSearch(''); clearSearch(); setVisibleCount(50); }} style={{ padding: 4, borderRadius: 6, background: '#f1f5f9', border: 'none', cursor: 'pointer' }}>
-                <X size={14} />
-              </button>
+        <div
+          className="customer-dropdown"
+          style={dropdownStyle}
+        >
+          {/* ========================= */}
+          {/* Search */}
+          {/* ========================= */}
+          <div style={searchContainerStyle}>
+            <div
+              style={{
+                position: 'relative',
+              }}
+            >
+              <Search
+                size={isMobile ? 14 : 16}
+                style={{
+                  position: 'absolute',
+                  left: isMobile ? '10px' : '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: '#94a3b8',
+                  pointerEvents: 'none',
+                }}
+              />
+
+              <input
+                ref={inputRef}
+                type="text"
+                value={searchTerm}
+                placeholder={
+                  isMobile 
+                    ? "Search customers..." 
+                    : "Search by name, email or phone..."
+                }
+                onClick={(e) => e.stopPropagation()}
+                onChange={handleSearchChange}
+                style={searchInputStyle}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#0f172a';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                }}
+              />
+
+              {searchTerm && (
+                <button
+                  onClick={() => {
+                    setSearchTerm('');
+                    clearSearch();
+                  }}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <X size={isMobile ? 12 : 14} color="#94a3b8" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* ========================= */}
+          {/* Results */}
+          {/* ========================= */}
+          <div style={resultsContainerStyle}>
+            {isSearching ? (
+              <div
+                style={{
+                  padding: isMobile ? '2rem 1rem' : '2rem',
+                  textAlign: 'center',
+                }}
+              >
+                <Loader2
+                  size={isMobile ? 20 : 24}
+                  style={{
+                    animation: 'cs-spin 1s linear infinite',
+                    margin: '0 auto',
+                    color: '#0f172a',
+                  }}
+                />
+
+                <p
+                  style={{
+                    marginTop: '0.75rem',
+                    color: '#64748b',
+                    fontSize: isMobile ? '0.875rem' : '0.9rem',
+                  }}
+                >
+                  Searching...
+                </p>
+              </div>
+            ) : displayCustomers.length > 0 ? (
+              displayCustomers.map((customer, index) => (
+                <div
+                  key={customer._id}
+                  onClick={() => handleSelect(customer)}
+                  style={{
+                    ...customerItemStyle,
+                    background: value === customer._id ? '#f0fdf4' : 'white',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (value !== customer._id) {
+                      e.currentTarget.style.background = '#f8fafc';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (value !== customer._id) {
+                      e.currentTarget.style.background = 'white';
+                    }
+                  }}
+                >
+                  <div style={avatarStyle}>
+                    {customer.name
+                      ?.substring(0, 2)
+                      .toUpperCase()}
+                  </div>
+
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: isMobile ? '0.875rem' : '0.9rem',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {customer.name}
+                    </div>
+
+                    {customer.email && (
+                      <div
+                        style={{
+                          fontSize: isMobile ? '0.7rem' : '0.8rem',
+                          color: '#64748b',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {customer.email}
+                      </div>
+                    )}
+
+                    {isMobile && customer.phone && !customer.email && (
+                      <div
+                        style={{
+                          fontSize: '0.7rem',
+                          color: '#64748b',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {customer.phone}
+                      </div>
+                    )}
+                  </div>
+
+                  {value === customer._id && (
+                    <CheckCircle
+                      size={isMobile ? 16 : 20}
+                      color="#10b981"
+                      style={{ flexShrink: 0 }}
+                    />
+                  )}
+                </div>
+              ))
+            ) : (
+              <div
+                style={{
+                  padding: isMobile ? '2rem 1rem' : '2.5rem',
+                  textAlign: 'center',
+                }}
+              >
+                <Users 
+                  size={isMobile ? 36 : 48} 
+                  color="#cbd5e1"
+                  style={{ margin: '0 auto' }}
+                />
+
+                <p
+                  style={{
+                    marginTop: '0.75rem',
+                    color: '#64748b',
+                    fontSize: isMobile ? '0.875rem' : '0.9rem',
+                  }}
+                >
+                  {searchTerm
+                    ? `No results for "${searchTerm}"`
+                    : 'No customers found'}
+                </p>
+
+                {companyId && !searchTerm && (
+                  <button
+                    onClick={handleSync}
+                    style={{
+                      marginTop: '1rem',
+                      padding: '0.5rem 1rem',
+                      background: '#0f172a',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '10px',
+                      fontSize: isMobile ? '0.75rem' : '0.8rem',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <Loader2 size={14} style={{ animation: 'cs-spin 1s linear infinite' }} />
+                    Sync from Zoho
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
-          {/* Loading State */}
-          {showLoading && (
-            <div style={{ padding: '1.5rem', textAlign: 'center' }}>
-              <Loader2 size={20} color="#6366f1" style={{ animation: 'qs-spin 0.9s linear infinite' }} />
-              <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-                {isSearching ? 'Searching...' : 'Loading customers...'}
-              </div>
-            </div>
-          )}
-
-          {/* Short Search Hint */}
-          {!showLoading && showShortSearchHint && (
-            <div style={{ padding: '1.5rem', textAlign: 'center' }}>
-              <div style={{ color: '#f59e0b' }}>🔍 Type at least 2 characters</div>
-            </div>
-          )}
-
-          {/* Results with Infinite Scroll */}
-          {!showLoading && !showShortSearchHint && visibleCustomers.length > 0 && (
-            <div 
-              ref={scrollContainerRef}
-              style={{ maxHeight: 300, overflowY: 'auto' }}
-              onScroll={handleScroll}
+          {/* ========================= */}
+          {/* Mobile Close Button */}
+          {/* ========================= */}
+          {isMobile && (
+            <div
+              style={{
+                padding: '12px 16px',
+                borderTop: '1px solid #f1f5f9',
+                background: 'white',
+              }}
             >
-              {visibleCustomers.map(customer => (
-                <div 
-                  key={customer._id} 
-                  onClick={() => handleSelectCustomer(customer)} 
-                  style={{ 
-                    padding: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', 
-                    cursor: 'pointer', borderBottom: '1px solid #f8fafc', 
-                    background: value === customer._id ? '#eff6ff' : 'transparent' 
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = value === customer._id ? '#eff6ff' : 'transparent'}
-                >
-                  <div style={{ 
-                    width: 40, height: 40, borderRadius: 12, 
-                    background: 'linear-gradient(135deg, #0f172a, #1e293b)', 
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', 
-                    color: 'white', fontWeight: 700 
-                  }}>
-                    {customer.name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || 'C'}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, color: '#0f172a' }}>{customer.name}</div>
-                    {customer.email && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>{customer.email}</div>}
-                  </div>
-                  {value === customer._id && <CheckCircle size={20} color="#10b981" />}
-                </div>
-              ))}
-              
-              {/* Loading more indicator */}
-              {isLoadingMore && (
-                <div style={{ padding: '1rem', textAlign: 'center' }}>
-                  <Loader2 size={16} color="#6366f1" style={{ animation: 'qs-spin 0.9s linear infinite' }} />
-                  <span style={{ marginLeft: '0.5rem', color: '#94a3b8', fontSize: '0.75rem' }}>Loading more...</span>
-                </div>
-              )}
-              
-              {/* End of list indicator */}
-              {!hasMore && displayCustomers.length > 50 && !isLoadingMore && (
-                <div style={{ padding: '1rem', textAlign: 'center', color: '#94a3b8', fontSize: '0.7rem' }}>
-                  ✓ All {displayCustomers.length} customers loaded
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* No Results */}
-          {!showLoading && !showShortSearchHint && visibleCustomers.length === 0 && (
-            <div style={{ padding: '2rem', textAlign: 'center' }}>
-              <Users size={48} color="#94a3b8" />
-              <div style={{ color: '#475569', marginTop: '0.5rem' }}>
-                {search.trim().length >= 2 ? `No results for "${search}"` : 'No customers found'}
-              </div>
-              {!search.trim() && (
-                <button 
-                  onClick={handleSync} 
-                  style={{ marginTop: '1rem', padding: '0.5rem 1rem', background: '#eff6ff', color: '#2563eb', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-                >
-                  <RefreshCw size={12} /> Sync from Zoho
-                </button>
-              )}
+              <button
+                onClick={closeDropdown}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: '#f1f5f9',
+                  border: 'none',
+                  borderRadius: '12px',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  color: '#64748b',
+                  cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
             </div>
           )}
         </div>
