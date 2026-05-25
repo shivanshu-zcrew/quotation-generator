@@ -4,7 +4,7 @@ const { Customer } = require('../models/customer');
 const Item = require('../models/items');
 const puppeteer = require('puppeteer');
 const mime = require('mime-types')
-const { uploadBase64ToS3, deleteFromS3 } = require('../utils/s3Upload');
+const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
 const imageCompressor = require('../utils/imageCompressor');
@@ -36,28 +36,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  // _browser = await puppeteer.launch({
-  //   headless: true,
-  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-  //   args: [
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //     '--no-zygote',
-  //     '--single-process',
-  //   ],
-  // });
-
   _browser = await puppeteer.launch({
     headless: true,
+    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
     ],
   });
+
+  // _browser = await puppeteer.launch({
+  //   headless: true,
+  //   args: [
+  //     '--no-sandbox',
+  //     '--disable-setuid-sandbox',
+  //     '--disable-dev-shm-usage',
+  //     '--disable-gpu',
+  //   ],
+  // });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -67,22 +67,25 @@ const getBrowser = async () => {
 // ─────────────────────────────────────────────────────────────
 const uploadBase64ToCloudinary = async (dataUri, folder) => {
   if (!dataUri?.startsWith('data:')) return null;
+  const matches = dataUri.match(/^data:([^;]+);base64,(.*)$/s);
+  if (!matches) return null;
   
-  // Use the imported S3 upload function
-  const result = await uploadBase64ToS3(dataUri, folder);
+  const mimeType = matches[1];
+  const base64Data = matches[2];
+  const buffer = Buffer.from(base64Data, 'base64');
   
-  if (!result) return null;
+  let resourceType = 'raw';
+  if (mimeType.startsWith('image/')) resourceType = 'image';
+  else if (mimeType.startsWith('video/')) resourceType = 'video';
   
-  return { 
-    url: result.url, 
-    publicId: result.publicId 
-  };
+  const result = await uploadToCloudinary(buffer, folder, resourceType);
+  return { url: result.secure_url, publicId: result.public_id };
 };
 
 const safeDelete = (publicId) =>
   publicId
-    ? deleteFromS3(publicId).catch((e) =>
-        console.warn(`[S3] delete failed for ${publicId}: ${e.message}`)
+    ? deleteFromCloudinary(publicId).catch((e) =>
+        console.warn(`[Cloudinary] delete failed for ${publicId}: ${e.message}`)
       )
     : Promise.resolve();
 
@@ -111,21 +114,29 @@ const getFileInfoFromBase64 = (base64String) => {
 const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, userId, description = '') => {
   try {
     const fileInfo = getFileInfoFromBase64(base64String);
-    const folder = `quotations/${quotationNumber}/internal-docs`;
     
-    // Use S3 upload
-    const result = await uploadBase64ToCloudinary(base64String, folder);
-    
-    if (!result || !result.url) {
-      throw new Error('Failed to upload to S3');
+    let resourceType = 'auto';
+    if (fileInfo.mimeType.startsWith('image/')) {
+      resourceType = 'image';
+    } else if (fileInfo.mimeType.startsWith('video/')) {
+      resourceType = 'video';
+    } else {
+      resourceType = 'raw';  
     }
+    
+    const folder = `quotations/${quotationNumber}/internal-docs`;
+    const result = await uploadToCloudinary(fileInfo.buffer, folder, resourceType, { 
+      access_mode: 'public',
+      use_filename: true,
+      unique_filename: true 
+    });
     
     return {
       fileName: fileInfo.fileName,
       fileType: fileInfo.mimeType,
       fileSize: fileInfo.size,
-      fileUrl: result.url,
-      publicId: result.publicId,
+      fileUrl: result.secure_url,
+      publicId: result.public_id,
       uploadedBy: userId,
       uploadedAt: new Date(),
       description: description,
@@ -156,10 +167,10 @@ const deleteInternalDocument = async (document) => {
   if (!document || !document.publicId) return;
   
   try {
-    await deleteFromS3(document.publicId);
+    const resourceType = getResourceTypeFromMime(document.fileType);
+    await deleteFromCloudinary(document.publicId, resourceType);
     return true;
   } catch (error) {
-    console.error('S3 delete error:', error);
     return false;
   }
 };
@@ -440,7 +451,7 @@ exports.getQuotation = async (req, res) => {
 
 exports.createQuotation = async (req, res) => {
   const {
-    projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, companyId, currencyCode,customerName,  customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -505,7 +516,6 @@ exports.createQuotation = async (req, res) => {
     const item = validatedItems[i];
     let imageUrls = [];
     
-    // Process images from compressedQuotationImages
     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
@@ -516,34 +526,13 @@ exports.createQuotation = async (req, res) => {
               const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
               if (uploaded && uploaded.url) imageUrls.push(uploaded.url);
             } catch (err) { console.error(`❌ Upload failed:`, err.message); }
-          } else if (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) {
+          } else if (imageData.includes('cloudinary.com')) {
             imageUrls.push(imageData);
           }
         }
       }
     }
     
-    // ✅ FIX: Process images from item.imagePaths (where frontend sends images)
-    if (item.imagePaths && Array.isArray(item.imagePaths)) {
-      for (let imgIdx = 0; imgIdx < item.imagePaths.length; imgIdx++) {
-        const imageData = item.imagePaths[imgIdx];
-        if (imageData && typeof imageData === 'string') {
-          if (imageData.startsWith('data:image')) {
-            try {
-              console.log(`📤 Uploading image from imagePaths ${imgIdx + 1} for item ${i + 1}...`);
-              const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
-              if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) {
-                imageUrls.push(uploaded.url);
-              }
-            } catch (err) { console.error(`❌ Upload failed:`, err.message); }
-          } else if ((imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) && !imageUrls.includes(imageData)) {
-            imageUrls.push(imageData);
-          }
-        }
-      }
-    }
-    
-    // Process images from item.images (legacy)
     if (item.images && Array.isArray(item.images)) {
       for (const img of item.images) {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
@@ -551,7 +540,7 @@ exports.createQuotation = async (req, res) => {
             const uploaded = await uploadBase64ToCloudinary(img, `quotations/items/item_${i + 1}`);
             if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) imageUrls.push(uploaded.url);
           } catch (err) { console.error(`Upload failed:`, err.message); }
-        } else if (img && typeof img === 'string' && (img.includes('amazonaws.com') || img.includes('cloudinary.com')) && !imageUrls.includes(img)) {
+        } else if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imageUrls.includes(img)) {
           imageUrls.push(img);
         }
       }
@@ -602,9 +591,9 @@ exports.createQuotation = async (req, res) => {
             processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
           }
         } catch (uploadError) { console.error('Failed to upload terms image:', uploadError.message); }
-      } else if (typeof imageData === 'object' && imageData.url && (imageData.url.includes('amazonaws.com') || imageData.url.includes('cloudinary.com'))) {
+      } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
         processedTermsImages.push(imageData);
-      } else if (typeof imageData === 'string' && (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com'))) {
+      } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
         processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: fileName, uploadedAt: new Date() });
       }
     }
@@ -694,7 +683,7 @@ exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const companyId = req.companyId || req.headers['x-company-id'];
   const {
-    projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, currencyCode,customerName , customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -800,9 +789,6 @@ exports.updateQuotation = async (req, res) => {
     if (customerDesignation !== undefined) customerSnapshotDesignation = customerDesignation?.trim() || '';
     if (customerTradeLicenseNumber !== undefined) customerSnapshotTradeLicense = customerTradeLicenseNumber?.trim() || '';
 
-    // Store existing image paths for deletion comparison
-    const existingImagePaths = existing.items.map(item => item.imagePaths || []);
-
     const processedItems = [];
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -816,87 +802,39 @@ exports.updateQuotation = async (req, res) => {
       
       let imagePaths = [];
       
-      // Process new images from compressedQuotationImages
       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
           if (imageData && typeof imageData === 'string') {
             if (imageData.startsWith('data:image')) {
               try {
-                console.log(`📤 Uploading compressed image for item ${idx + 1}...`);
                 const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
-                if (uploaded && uploaded.url && !imagePaths.includes(uploaded.url)) {
-                  imagePaths.push(uploaded.url);
-                }
+                if (uploaded && uploaded.url) imagePaths.push(uploaded.url);
               } catch (err) { console.error(`Upload failed:`, err.message); }
-            } else if ((imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) && !imagePaths.includes(imageData)) {
+            } else if (imageData.includes('cloudinary.com')) {
               imagePaths.push(imageData);
             }
           }
         }
       }
       
-      // ✅ Keep images sent from frontend (these are the ones that should remain)
       if (item.imagePaths && Array.isArray(item.imagePaths)) {
         for (const img of item.imagePaths) {
-          if (img && typeof img === 'string' && (img.includes('amazonaws.com') || img.includes('cloudinary.com')) && !imagePaths.includes(img)) {
+          if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
             imagePaths.push(img);
           }
         }
       }
       
-      // Remove duplicates
       imagePaths = [...new Set(imagePaths)];
-      console.log(`📸 Item ${idx + 1}: Final ${imagePaths.length} images stored`);
       
       processedItems.push({
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
-        quantity: quantity, 
-        unitPrice: unitPrice, 
-        unitPriceInBaseCurrency: unitPriceInBaseCurrency,
-        totalPrice: totalPrice, 
-        totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-        imagePaths: imagePaths, 
-        imagePublicIds: []
+        quantity: quantity, unitPrice: unitPrice, unitPriceInBaseCurrency: unitPriceInBaseCurrency,
+        totalPrice: totalPrice, totalPriceInBaseCurrency: totalPriceInBaseCurrency,
+        imagePaths: imagePaths, imagePublicIds: []
       });
-    }
-
-    // ✅ DELETE REMOVED IMAGES FROM S3
-    // Compare existing images with new images and delete the ones that are no longer present
-    for (let idx = 0; idx < existing.items.length; idx++) {
-      const existingItem = existing.items[idx];
-      const newItem = processedItems[idx];
-      
-      if (existingItem && existingItem.imagePaths && existingItem.imagePaths.length > 0) {
-        const existingUrls = existingItem.imagePaths;
-        const newUrls = newItem ? newItem.imagePaths : [];
-        
-        // Find URLs that exist in old but not in new
-        const removedUrls = existingUrls.filter(oldUrl => !newUrls.includes(oldUrl));
-        
-        for (const removedUrl of removedUrls) {
-          if (removedUrl && (removedUrl.includes('amazonaws.com') || removedUrl.includes('cloudinary.com'))) {
-            // Extract publicId from URL
-            let publicId = null;
-            if (removedUrl.includes('amazonaws.com')) {
-              publicId = removedUrl.split('.amazonaws.com/')[1];
-            } else if (removedUrl.includes('cloudinary.com')) {
-              publicId = removedUrl.split('/').pop().split('.')[0];
-            }
-            
-            if (publicId) {
-              try {
-                console.log(`🗑️ Deleting removed image from S3: ${publicId}`);
-                await deleteFromS3(publicId);
-                console.log(`✅ Successfully deleted: ${publicId}`);
-              } catch (err) {
-                console.error(`❌ Failed to delete ${publicId}:`, err.message);
-              }
-            }
-          }
-        }
-      }
     }
 
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
@@ -928,7 +866,7 @@ exports.updateQuotation = async (req, res) => {
                 processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
               }
             } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-          } else if (imageData.url && (imageData.url.includes('amazonaws.com') || imageData.url.includes('cloudinary.com'))) {
+          } else if (imageData.url && imageData.url.includes('cloudinary.com')) {
             processedTermsImages.push({ url: imageData.url, publicId: imageData.publicId, fileName: fileName, uploadedAt: imageData.uploadedAt || new Date() });
           }
         } else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
@@ -938,7 +876,7 @@ exports.updateQuotation = async (req, res) => {
               processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
             }
           } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-        } else if (typeof imageData === 'string' && (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com'))) {
+        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
           processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
         }
       }
@@ -962,11 +900,11 @@ exports.updateQuotation = async (req, res) => {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
-      ...(customer && { customer: customer.trim() }),
-      ...(customerName && { 
-        customerName: customerName.trim(),
-        'customerSnapshot.name': customerName.trim() 
-      }),
+       ...(customer && { customer: customer.trim() }),
+       ...(customerName && { 
+         customerName: customerName.trim(),
+         'customerSnapshot.name': customerName.trim() 
+       }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
       ...(ourFocalPointDesignation !== undefined && { ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' }),
@@ -1323,7 +1261,7 @@ exports.deleteQuotation = async (req, res) => {
     const jobs = [];
     quotation.items?.forEach((item) => item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); }));
     if (quotation.termsImagePublicId) jobs.push(safeDelete(quotation.termsImagePublicId));
-    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromS3(doc.publicId)); } });
+    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromCloudinary(doc.publicId, getResourceTypeFromMime(doc.fileType))); } });
     
     await Promise.allSettled(jobs);
     await Quotation.findByIdAndDelete(req.params.id);

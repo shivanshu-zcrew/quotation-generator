@@ -502,6 +502,7 @@ exports.updateCustomer = async (req, res) => {
           contactPersons: updatedCustomer.contactPersons || []
         });
 
+        console.log(">>>>>>>>>>",zohoResult);
         if (!zohoResult.success) {
           await Customer.findByIdAndUpdate(id, customer.toObject(), { runValidators: false });
           await clearCustomerCache(customer.companyId);
