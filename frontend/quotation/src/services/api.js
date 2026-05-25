@@ -1,8 +1,8 @@
 import axios from "axios";
 
-// const API_BASE = import.meta.env?.VITE_API_URL || "http://192.168.1.5:4000/api";
+const API_BASE = import.meta.env?.VITE_API_URL || "http://13.234.239.26:4000/api";
 
-const API_BASE = import.meta.env?.VITE_API_URL;
+// const API_BASE = import.meta.env?.VITE_API_URL;
 
 // Request Deduplication
 class RequestDeduplicator {

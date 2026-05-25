@@ -495,11 +495,11 @@ export default function ViewQuotationScreen() {
           onRemoveTermsImage={removeTermsImage}
           customerTaxTreatment={customerTaxTreatment}
           customerPlaceOfSupply={customerPlaceOfSupply}
-          companyName={originalQuotation?.companySnapshot?.name || ''}
-          companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
-          companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
-          companyTradeLicense={originalQuotation?.companySnapshot?.crNumber || ''}
-          companyTaxRegistration={originalQuotation?.companySnapshot?.vatNumber || ''}
+          companyName={originalQuotation?.companySnapshot?.name || originalQuotation?.customer || ''}
+  companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
+  companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
+  companyTradeLicense={originalQuotation?.companySnapshot?.crNumber || ''}
+  companyTaxRegistration={originalQuotation?.companySnapshot?.vatNumber || ''}
         />
         
         {/* Document Preview Modal */}

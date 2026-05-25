@@ -4,7 +4,7 @@ const { Customer } = require('../models/customer');
 const Item = require('../models/items');
 const puppeteer = require('puppeteer');
 const mime = require('mime-types')
-const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
+const { uploadBase64ToS3, deleteFromS3 } = require('../utils/s3Upload');
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
 const imageCompressor = require('../utils/imageCompressor');
@@ -36,28 +36,28 @@ exports.getPDFMetrics = async (req, res) => {
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  _browser = await puppeteer.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
-  });
-
   // _browser = await puppeteer.launch({
   //   headless: true,
+  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
+  //     '--no-zygote',
+  //     '--single-process',
   //   ],
   // });
+
+  _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
@@ -67,25 +67,22 @@ const getBrowser = async () => {
 // ─────────────────────────────────────────────────────────────
 const uploadBase64ToCloudinary = async (dataUri, folder) => {
   if (!dataUri?.startsWith('data:')) return null;
-  const matches = dataUri.match(/^data:([^;]+);base64,(.*)$/s);
-  if (!matches) return null;
   
-  const mimeType = matches[1];
-  const base64Data = matches[2];
-  const buffer = Buffer.from(base64Data, 'base64');
+  // Use the imported S3 upload function
+  const result = await uploadBase64ToS3(dataUri, folder);
   
-  let resourceType = 'raw';
-  if (mimeType.startsWith('image/')) resourceType = 'image';
-  else if (mimeType.startsWith('video/')) resourceType = 'video';
+  if (!result) return null;
   
-  const result = await uploadToCloudinary(buffer, folder, resourceType);
-  return { url: result.secure_url, publicId: result.public_id };
+  return { 
+    url: result.url, 
+    publicId: result.publicId 
+  };
 };
 
 const safeDelete = (publicId) =>
   publicId
-    ? deleteFromCloudinary(publicId).catch((e) =>
-        console.warn(`[Cloudinary] delete failed for ${publicId}: ${e.message}`)
+    ? deleteFromS3(publicId).catch((e) =>
+        console.warn(`[S3] delete failed for ${publicId}: ${e.message}`)
       )
     : Promise.resolve();
 
@@ -114,29 +111,21 @@ const getFileInfoFromBase64 = (base64String) => {
 const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, userId, description = '') => {
   try {
     const fileInfo = getFileInfoFromBase64(base64String);
-    
-    let resourceType = 'auto';
-    if (fileInfo.mimeType.startsWith('image/')) {
-      resourceType = 'image';
-    } else if (fileInfo.mimeType.startsWith('video/')) {
-      resourceType = 'video';
-    } else {
-      resourceType = 'raw';  
-    }
-    
     const folder = `quotations/${quotationNumber}/internal-docs`;
-    const result = await uploadToCloudinary(fileInfo.buffer, folder, resourceType, { 
-      access_mode: 'public',
-      use_filename: true,
-      unique_filename: true 
-    });
+    
+    // Use S3 upload
+    const result = await uploadBase64ToCloudinary(base64String, folder);
+    
+    if (!result || !result.url) {
+      throw new Error('Failed to upload to S3');
+    }
     
     return {
       fileName: fileInfo.fileName,
       fileType: fileInfo.mimeType,
       fileSize: fileInfo.size,
-      fileUrl: result.secure_url,
-      publicId: result.public_id,
+      fileUrl: result.url,
+      publicId: result.publicId,
       uploadedBy: userId,
       uploadedAt: new Date(),
       description: description,
@@ -167,10 +156,10 @@ const deleteInternalDocument = async (document) => {
   if (!document || !document.publicId) return;
   
   try {
-    const resourceType = getResourceTypeFromMime(document.fileType);
-    await deleteFromCloudinary(document.publicId, resourceType);
+    await deleteFromS3(document.publicId);
     return true;
   } catch (error) {
+    console.error('S3 delete error:', error);
     return false;
   }
 };
@@ -451,7 +440,7 @@ exports.getQuotation = async (req, res) => {
 
 exports.createQuotation = async (req, res) => {
   const {
-    projectName, scopeOfWork, companyId, currencyCode, customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -516,6 +505,7 @@ exports.createQuotation = async (req, res) => {
     const item = validatedItems[i];
     let imageUrls = [];
     
+    // Process images from compressedQuotationImages
     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
@@ -526,13 +516,34 @@ exports.createQuotation = async (req, res) => {
               const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
               if (uploaded && uploaded.url) imageUrls.push(uploaded.url);
             } catch (err) { console.error(`❌ Upload failed:`, err.message); }
-          } else if (imageData.includes('cloudinary.com')) {
+          } else if (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) {
             imageUrls.push(imageData);
           }
         }
       }
     }
     
+    // ✅ FIX: Process images from item.imagePaths (where frontend sends images)
+    if (item.imagePaths && Array.isArray(item.imagePaths)) {
+      for (let imgIdx = 0; imgIdx < item.imagePaths.length; imgIdx++) {
+        const imageData = item.imagePaths[imgIdx];
+        if (imageData && typeof imageData === 'string') {
+          if (imageData.startsWith('data:image')) {
+            try {
+              console.log(`📤 Uploading image from imagePaths ${imgIdx + 1} for item ${i + 1}...`);
+              const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
+              if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) {
+                imageUrls.push(uploaded.url);
+              }
+            } catch (err) { console.error(`❌ Upload failed:`, err.message); }
+          } else if ((imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) && !imageUrls.includes(imageData)) {
+            imageUrls.push(imageData);
+          }
+        }
+      }
+    }
+    
+    // Process images from item.images (legacy)
     if (item.images && Array.isArray(item.images)) {
       for (const img of item.images) {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
@@ -540,7 +551,7 @@ exports.createQuotation = async (req, res) => {
             const uploaded = await uploadBase64ToCloudinary(img, `quotations/items/item_${i + 1}`);
             if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) imageUrls.push(uploaded.url);
           } catch (err) { console.error(`Upload failed:`, err.message); }
-        } else if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imageUrls.includes(img)) {
+        } else if (img && typeof img === 'string' && (img.includes('amazonaws.com') || img.includes('cloudinary.com')) && !imageUrls.includes(img)) {
           imageUrls.push(img);
         }
       }
@@ -591,9 +602,9 @@ exports.createQuotation = async (req, res) => {
             processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
           }
         } catch (uploadError) { console.error('Failed to upload terms image:', uploadError.message); }
-      } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+      } else if (typeof imageData === 'object' && imageData.url && (imageData.url.includes('amazonaws.com') || imageData.url.includes('cloudinary.com'))) {
         processedTermsImages.push(imageData);
-      } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+      } else if (typeof imageData === 'string' && (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com'))) {
         processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: fileName, uploadedAt: new Date() });
       }
     }
@@ -633,7 +644,7 @@ exports.createQuotation = async (req, res) => {
     },
     customerId,
     customerSnapshot: {
-      name: customer?.trim() || customerDoc.name, email: customerDoc.email, phone: customerDoc.phone,
+      name: customerName?.trim() || customerDoc.name, email: customerDoc.email, phone: customerDoc.phone,
       address: customerDoc.address, country: customerCountry || 'UAE', vatNumber: customerDoc.vatNumber,
       designation: customerDesignation?.trim() || '', tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
       taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
@@ -683,7 +694,7 @@ exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const companyId = req.companyId || req.headers['x-company-id'];
   const {
-    projectName, scopeOfWork, currencyCode, customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -789,6 +800,9 @@ exports.updateQuotation = async (req, res) => {
     if (customerDesignation !== undefined) customerSnapshotDesignation = customerDesignation?.trim() || '';
     if (customerTradeLicenseNumber !== undefined) customerSnapshotTradeLicense = customerTradeLicenseNumber?.trim() || '';
 
+    // Store existing image paths for deletion comparison
+    const existingImagePaths = existing.items.map(item => item.imagePaths || []);
+
     const processedItems = [];
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
@@ -802,39 +816,87 @@ exports.updateQuotation = async (req, res) => {
       
       let imagePaths = [];
       
+      // Process new images from compressedQuotationImages
       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
           if (imageData && typeof imageData === 'string') {
             if (imageData.startsWith('data:image')) {
               try {
+                console.log(`📤 Uploading compressed image for item ${idx + 1}...`);
                 const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
-                if (uploaded && uploaded.url) imagePaths.push(uploaded.url);
+                if (uploaded && uploaded.url && !imagePaths.includes(uploaded.url)) {
+                  imagePaths.push(uploaded.url);
+                }
               } catch (err) { console.error(`Upload failed:`, err.message); }
-            } else if (imageData.includes('cloudinary.com')) {
+            } else if ((imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com')) && !imagePaths.includes(imageData)) {
               imagePaths.push(imageData);
             }
           }
         }
       }
       
+      // ✅ Keep images sent from frontend (these are the ones that should remain)
       if (item.imagePaths && Array.isArray(item.imagePaths)) {
         for (const img of item.imagePaths) {
-          if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
+          if (img && typeof img === 'string' && (img.includes('amazonaws.com') || img.includes('cloudinary.com')) && !imagePaths.includes(img)) {
             imagePaths.push(img);
           }
         }
       }
       
+      // Remove duplicates
       imagePaths = [...new Set(imagePaths)];
+      console.log(`📸 Item ${idx + 1}: Final ${imagePaths.length} images stored`);
       
       processedItems.push({
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
-        quantity: quantity, unitPrice: unitPrice, unitPriceInBaseCurrency: unitPriceInBaseCurrency,
-        totalPrice: totalPrice, totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-        imagePaths: imagePaths, imagePublicIds: []
+        quantity: quantity, 
+        unitPrice: unitPrice, 
+        unitPriceInBaseCurrency: unitPriceInBaseCurrency,
+        totalPrice: totalPrice, 
+        totalPriceInBaseCurrency: totalPriceInBaseCurrency,
+        imagePaths: imagePaths, 
+        imagePublicIds: []
       });
+    }
+
+    // ✅ DELETE REMOVED IMAGES FROM S3
+    // Compare existing images with new images and delete the ones that are no longer present
+    for (let idx = 0; idx < existing.items.length; idx++) {
+      const existingItem = existing.items[idx];
+      const newItem = processedItems[idx];
+      
+      if (existingItem && existingItem.imagePaths && existingItem.imagePaths.length > 0) {
+        const existingUrls = existingItem.imagePaths;
+        const newUrls = newItem ? newItem.imagePaths : [];
+        
+        // Find URLs that exist in old but not in new
+        const removedUrls = existingUrls.filter(oldUrl => !newUrls.includes(oldUrl));
+        
+        for (const removedUrl of removedUrls) {
+          if (removedUrl && (removedUrl.includes('amazonaws.com') || removedUrl.includes('cloudinary.com'))) {
+            // Extract publicId from URL
+            let publicId = null;
+            if (removedUrl.includes('amazonaws.com')) {
+              publicId = removedUrl.split('.amazonaws.com/')[1];
+            } else if (removedUrl.includes('cloudinary.com')) {
+              publicId = removedUrl.split('/').pop().split('.')[0];
+            }
+            
+            if (publicId) {
+              try {
+                console.log(`🗑️ Deleting removed image from S3: ${publicId}`);
+                await deleteFromS3(publicId);
+                console.log(`✅ Successfully deleted: ${publicId}`);
+              } catch (err) {
+                console.error(`❌ Failed to delete ${publicId}:`, err.message);
+              }
+            }
+          }
+        }
+      }
     }
 
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
@@ -866,7 +928,7 @@ exports.updateQuotation = async (req, res) => {
                 processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
               }
             } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-          } else if (imageData.url && imageData.url.includes('cloudinary.com')) {
+          } else if (imageData.url && (imageData.url.includes('amazonaws.com') || imageData.url.includes('cloudinary.com'))) {
             processedTermsImages.push({ url: imageData.url, publicId: imageData.publicId, fileName: fileName, uploadedAt: imageData.uploadedAt || new Date() });
           }
         } else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
@@ -876,7 +938,7 @@ exports.updateQuotation = async (req, res) => {
               processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
             }
           } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+        } else if (typeof imageData === 'string' && (imageData.includes('amazonaws.com') || imageData.includes('cloudinary.com'))) {
           processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
         }
       }
@@ -900,7 +962,11 @@ exports.updateQuotation = async (req, res) => {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
-      ...(customer && { 'customerSnapshot.name': customer.trim(), customer: customer.trim() }),
+      ...(customer && { customer: customer.trim() }),
+      ...(customerName && { 
+        customerName: customerName.trim(),
+        'customerSnapshot.name': customerName.trim() 
+      }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
       ...(ourFocalPointDesignation !== undefined && { ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' }),
@@ -1094,77 +1160,98 @@ exports.awardQuotation = async (req, res) => {
         let customerZohoId = customer?.zohoId;
         if (!customerZohoId) throw new Error('Customer Zoho ID not found. Please sync customer with Zoho first.');
         
-        const missingZohoIds = [];
-        for (let i = 0; i < quotation.items.length; i++) {
-          const item = quotation.items[i];
-          if (!item.zohoItemId) {
-            missingZohoIds.push({ index: i + 1, name: item.itemId?.name || `Item ${i + 1}` });
-          }
-        }
-        
-        if (missingZohoIds.length > 0) {
-          return res.status(400).json({
-            success: false, message: `Cannot create estimate in Zoho. The following items are missing Zoho IDs:`,
-            missingItems: missingZohoIds.map(item => `${item.name} (Item #${item.index})`),
-            suggestion: 'Please sync these items with Zoho first or ensure they have valid Zoho IDs.'
-          });
-        }
-        
-        const isVatRegistered = taxRate > 0 || taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered';
         const originalDiscountPercent = quotation.discountPercent || 0;
         let effectiveDiscountPercent = 0;
         let lineItemsWithDiscount = [];
         const subtotal = quotation.subtotal || 0;
         
+        // Create line items using ONLY description (no item_id needed)
         for (let i = 0; i < quotation.items.length; i++) {
           const item = quotation.items[i];
           const originalRate = item.unitPrice;
           let finalRate = originalRate;
           let itemDiscountPercent = 0;
           
-          if (isVatRegistered && originalDiscountPercent > 0) {
+          // Calculate discount
+          if (taxRate > 0 && originalDiscountPercent > 0) {
+            // Apply discount to rate when VAT registered
             finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
             itemDiscountPercent = 0;
-          } else if (!isVatRegistered && originalDiscountPercent > 0) {
+          } else if (!(taxRate > 0) && originalDiscountPercent > 0) {
             effectiveDiscountPercent = originalDiscountPercent;
           }
           
           const itemTotal = item.quantity * finalRate;
+      
+          
+          // Create line item WITHOUT item_id - just using description
           const lineItem = {
-            item_id: item.zohoItemId, name: item.itemId?.name || `Item ${i + 1}`,
-            description: item.description || '', quantity: item.quantity, rate: finalRate,
-            discount: itemDiscountPercent, discount_amount: 0, item_total: itemTotal, item_order: i + 1
+             description: item.description || "",
+            quantity: item.quantity,
+            rate: finalRate,
+            discount: itemDiscountPercent,
+            discount_amount: 0,
+            item_total: itemTotal,
+            item_order: i + 1
           };
+          
+          // Add tax if applicable
           if (taxRate > 0) {
-            lineItem.tax_id = taxId; lineItem.tax_percentage = taxRate; lineItem.tax_name = 'VAT'; lineItem.tax_type = 'tax';
+            lineItem.tax_id = taxId;
+            lineItem.tax_percentage = taxRate;
+            lineItem.tax_name = 'VAT';
+            lineItem.tax_type = 'tax';
           }
+          
           lineItemsWithDiscount.push(lineItem);
         }
         
+        // Recalculate totals
         const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
         const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
-        const recalculatedDiscountAmount = isVatRegistered ? 0 : (subtotal * originalDiscountPercent / 100);
+        const recalculatedDiscountAmount = (taxRate > 0) ? 0 : (subtotal * originalDiscountPercent / 100);
         const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
         
+        // Clean HTML from terms and conditions
+        const cleanHtmlForZoho = (html) => {
+          if (!html) return '';
+          return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        };
+        
         const estimateData = {
-          customer_id: customerZohoId, reference_number: quotation.quotationNumber,
+          customer_id: customerZohoId,
+          reference_number: quotation.quotationNumber,
           date: new Date(quotation.date).toISOString().split('T')[0],
           expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
-          exchange_rate: quotation.currency?.exchangeRate?.rate || 1, discount: effectiveDiscountPercent,
-          is_discount_before_tax: false, discount_type: 'entity_level', is_inclusive_tax: false,
+          exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
+          discount: effectiveDiscountPercent,
+          is_discount_before_tax: false,
+          discount_type: 'entity_level',
+          is_inclusive_tax: false,
           custom_body: quotation.notes || '',
           custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
-          salesperson_name: quotation?.createdBy?.name || '', notes: awardNote || '',
+          salesperson_name: quotation?.createdBy?.name || '',
+          notes: awardNote || '',
           terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
-          line_items: lineItemsWithDiscount, tax_treatment: taxTreatment, place_of_supply: placeOfSupplyCode,
-          is_taxable: taxRate > 0, total: recalculatedGrandTotal, total_before_tax: recalculatedSubtotal,
-          tax_total: recalculatedTaxAmount, discount_total: recalculatedDiscountAmount
+          line_items: lineItemsWithDiscount,
+          tax_treatment: taxTreatment,
+          place_of_supply: placeOfSupplyCode,
+          is_taxable: taxRate > 0,
+          total: recalculatedGrandTotal,
+          total_before_tax: recalculatedSubtotal,
+          tax_total: recalculatedTaxAmount,
+          discount_total: recalculatedDiscountAmount
         };
         
         if (taxRate > 0) estimateData.tax_id = taxId;
         
+        console.log('📝 Creating Zoho Estimate with items (no item_id):', JSON.stringify(lineItemsWithDiscount, null, 2));
+        
         zohoEstimate = await zohoBooksService.createEstimate(estimateData);
-        if (!zohoEstimate.success) throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
+        
+        if (!zohoEstimate.success) {
+          throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
+        }
         
         quotation.zohoEstimateId = zohoEstimate.estimateId;
         quotation.zohoEstimateNumber = zohoEstimate.estimateNumber;
@@ -1174,10 +1261,15 @@ exports.awardQuotation = async (req, res) => {
         
       } catch (zohoError) {
         console.error('❌ Zoho estimate creation error:', zohoError);
-        return res.status(500).json({ success: false, message: `Failed to create estimate in Zoho Books: ${zohoError.message}`, error: zohoError.message });
+        return res.status(500).json({ 
+          success: false, 
+          message: `Failed to create estimate in Zoho Books: ${zohoError.message}`,
+          error: zohoError.message 
+        });
       }
     }
     
+    // Update quotation status
     quotation.status = awarded ? 'awarded' : 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
@@ -1188,18 +1280,26 @@ exports.awardQuotation = async (req, res) => {
     quotation.createdBySnapshot = existingCreatedBySnapshot;
     
     quotation.awardedBySnapshot = {
-      name: req.user.name, email: req.user.email, role: req.user.role,
-      awardedAt: new Date(), awarded: awarded, awardNote: awardNote?.trim() || ''
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role,
+      awardedAt: new Date(),
+      awarded: awarded,
+      awardNote: awardNote?.trim() || ''
     };
     
     await quotation.save();
     
-    const updated = await Quotation.findOne({ _id: quotationId, companyId }).populate('customerId').populate('companyId').lean();
+    const updated = await Quotation.findOne({ _id: quotationId, companyId })
+      .populate('customerId')
+      .populate('companyId')
+      .lean();
     
     res.status(200).json({
       success: true,
       message: awarded ? 'Quotation awarded and synced to Zoho Books successfully' : 'Quotation marked as not awarded',
-      quotation: updated, zohoEstimate: zohoEstimate || null
+      quotation: updated,
+      zohoEstimate: zohoEstimate || null
     });
     
   } catch (err) {
@@ -1223,7 +1323,7 @@ exports.deleteQuotation = async (req, res) => {
     const jobs = [];
     quotation.items?.forEach((item) => item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); }));
     if (quotation.termsImagePublicId) jobs.push(safeDelete(quotation.termsImagePublicId));
-    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromCloudinary(doc.publicId, getResourceTypeFromMime(doc.fileType))); } });
+    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromS3(doc.publicId)); } });
     
     await Promise.allSettled(jobs);
     await Quotation.findByIdAndDelete(req.params.id);

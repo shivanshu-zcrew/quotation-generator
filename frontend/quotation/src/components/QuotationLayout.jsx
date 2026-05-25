@@ -786,8 +786,10 @@ export default function QuotationLayout({
           fieldValue = quotationData.salesManagerEmail || companyEmail;
         }
         
+        // Make Company Name (customer) and Customer Name (customerName) read-only
         const isReadOnlyField = field === 'date' || field === 'expiryDate' || 
-                                field === 'companyTradeLicense' || field === 'companyTaxRegistration';
+                                field === 'companyTradeLicense' || field === 'companyTaxRegistration' ||
+                                field === 'customer' || field === 'customerName';  // ✅ ADD THESE TWO LINES
         
         return (
           <React.Fragment key={field}>
@@ -806,7 +808,7 @@ export default function QuotationLayout({
                     display: 'block',
                     cursor: 'not-allowed'
                   }}>
-                    {fieldValue || 'Auto-filled'}
+                    {fieldValue || 'N/A'}
                   </span>
                 ) : type === 'textarea' ? (
                   <textarea

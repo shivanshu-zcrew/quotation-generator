@@ -107,8 +107,8 @@ export function useQuotation() {
       projectName: originalQuotation.projectName || "",
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
-      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
-      customerName: originalQuotation.customerName || originalQuotation.customerSnapshot?.name || "",
+      customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
+      customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
       customerPhone: originalQuotation.customerPhone || originalQuotation.contact || originalQuotation.customerSnapshot?.phone || "",
       customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
@@ -374,98 +374,124 @@ export function useQuotation() {
   const handleImageUpload = useCallback((e, itemId) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-
+  
     const existingItem = quotationItems.find(item => item.id === itemId);
     const existingImageCount = existingItem?.imagePaths?.length || 0;
     const newImageCount = (newImages[itemId] || []).length;
     const currentTotalImages = existingImageCount + newImageCount;
     const availableSlots = MAX_IMAGES_PER_ITEM - currentTotalImages;
-
+  
     if (availableSlots <= 0) {
       showSnack(`Maximum ${MAX_IMAGES_PER_ITEM} images allowed per item. You already have ${currentTotalImages} image(s).`, 'error');
       e.target.value = "";
       return;
     }
-
+  
     const toProcess = files.slice(0, availableSlots);
-
+  
     if (files.length > availableSlots) {
       showSnack(`Only ${availableSlots} slot(s) left — first ${availableSlots} of ${files.length} will be added.`, 'warning');
     }
-
+  
     const validFiles = [];
     const errors = [];
-
+  
     for (const file of toProcess) {
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
         errors.push(`"${file.name}" is not a supported image type.`);
         continue;
       }
-
+  
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
         errors.push(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
         continue;
       }
-
+  
       validFiles.push(file);
     }
-
+  
     if (errors.length > 0) {
       errors.forEach(err => showSnack(err, 'error'));
     }
-
+  
     if (validFiles.length === 0) {
       e.target.value = "";
       return;
     }
-
+  
     let processedCount = 0;
-
+  
     validFiles.forEach((file) => {
       const reader = new FileReader();
-
+  
       reader.onload = () => {
+        // ✅ Store ONLY the base64 string, NOT an object
+        const base64String = reader.result;
+        
         setNewImages((prev) => ({
           ...prev,
-          [itemId]: [...(prev[itemId] || []), {
-            preview: reader.result,
-            file: file,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            id: `${Date.now()}-${Math.random()}`
-          }],
+          [itemId]: [...(prev[itemId] || []), base64String], // Store as string
         }));
-
+  
+        // Also update quotationItems to keep track
+        setQuotationItems(prev => prev.map(item => 
+          item.id === itemId ? { 
+            ...item, 
+            newImages: [...(item.newImages || []), base64String] 
+          } : item
+        ));
+  
         processedCount++;
-
+  
         if (processedCount === validFiles.length) {
           showSnack(`${validFiles.length} image(s) added to item.`, 'success');
         }
       };
-
+  
       reader.onerror = () => {
         showSnack(`Failed to read file: ${file.name}`, 'error');
+        processedCount++;
       };
-
+  
       reader.readAsDataURL(file);
     });
-
+  
     setEditingImgId(null);
     e.target.value = "";
   }, [quotationItems, newImages, showSnack]);
 
-  const removeNewImage = useCallback((itemId, idx) => {
-    setNewImages((prev) => {
-      const arr = (prev[itemId] || []).filter((_, i) => i !== idx);
-      return { ...prev, [itemId]: arr.length ? arr : undefined };
+  const removeNewImage = useCallback((itemId, imageIndex) => {
+    setNewImages(prev => {
+      const currentNewImages = prev[itemId] || [];
+      const filtered = currentNewImages.filter((_, idx) => idx !== imageIndex);
+      const updated = { ...prev };
+      if (filtered.length === 0) {
+        delete updated[itemId];
+      } else {
+        updated[itemId] = filtered;
+      }
+      return updated;
     });
+    
+    // Also remove from quotationItems if you store newImages there
+    setQuotationItems(prev => prev.map(item =>
+      item.id === itemId ? {
+        ...item,
+        newImages: (item.newImages || []).filter((_, idx) => idx !== imageIndex)
+      } : item
+    ));
   }, []);
 
-  const removeExistingImage = useCallback((itemId, idx) => {
-    setQuotationItems((prev) => prev.map((item) =>
-      item.id === itemId ? { ...item, imagePaths: item.imagePaths.filter((_, i) => i !== idx) } : item
-    ));
+  const removeExistingImage = useCallback((itemId, imageIndex) => {
+    setQuotationItems(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      // Remove the image at the specified index
+      const newImagePaths = item.imagePaths.filter((_, idx) => idx !== imageIndex);
+      return {
+        ...item,
+        imagePaths: newImagePaths
+      };
+    }));
   }, []);
 
   const handleTermsImagesUpload = useCallback((files) => {
@@ -539,8 +565,8 @@ export function useQuotation() {
       projectName: originalQuotation.projectName || "",
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
-      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
-      customerName: originalQuotation.customerName || "",
+      customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
+customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
       customerPhone: originalQuotation.customerPhone || originalQuotation.contact || "",
       customerEmail: originalQuotation.customerEmail || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
@@ -644,16 +670,24 @@ export function useQuotation() {
   
       quotationItems.forEach((item, index) => {
         const allImages = [];
-  
+      
         if (item.imagePaths && Array.isArray(item.imagePaths) && item.imagePaths.length > 0) {
           allImages.push(...item.imagePaths);
         }
-  
+      
         if (newImages[item.id] && Array.isArray(newImages[item.id]) && newImages[item.id].length > 0) {
-          const previewUrls = newImages[item.id].map(img => img.preview || img);
+          const previewUrls = newImages[item.id].map(img => {
+            if (typeof img === 'object' && img.preview) {
+              return img.preview;
+            }
+            if (typeof img === 'string') {
+              return img;
+            }
+            return img;
+          });
           allImages.push(...previewUrls);
         }
-  
+      
         if (allImages.length > 0) {
           quotationImages[index] = allImages;
         }
@@ -693,6 +727,7 @@ export function useQuotation() {
           .join("\n\n");
       }
   
+      // ✅ FIX: Include newImages in imagePaths
       const formattedItems = quotationItems.map((qi) => ({
         itemId: qi.itemId || null,
         name: qi.name || "",
@@ -771,8 +806,8 @@ export function useQuotation() {
             remark: updatedQuotation.remark || "",
             
             // Customer/Company fields
-            customer: updatedQuotation.customer || updatedQuotation.customerSnapshot?.name || "",
-            customerName: updatedQuotation.customerName || updatedQuotation.customerSnapshot?.contactName || updatedQuotation.customerSnapshot?.name || "",
+            customer: updatedQuotation.companySnapshot?.name || updatedQuotation.customer || "",
+            customerName: updatedQuotation.customerName || updatedQuotation.customerId?.name || "",
             customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
             customerEmail: updatedQuotation.customerEmail || updatedQuotation.customerSnapshot?.email || "",
             customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
@@ -804,9 +839,14 @@ export function useQuotation() {
             currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
           });
           
-          // Update items
+          // Update items - preserve newImages as empty after save
           const updatedItems = parseQuotationItems(updatedQuotation.items);
-          setQuotationItems(updatedItems);
+          // Add empty newImages array to each item for future uploads
+          const itemsWithNewImages = updatedItems.map(item => ({
+            ...item,
+            newImages: []
+          }));
+          setQuotationItems(itemsWithNewImages);
   
           // Update terms images
           const serverTermsImages = updatedQuotation.termsImages || [];

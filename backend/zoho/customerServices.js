@@ -1178,17 +1178,34 @@ class ZohoBooksService {
       let currencyId = estimateData.currency_id;
       if (!currencyId && estimateData.currency_code) currencyId = await this._getCurrencyId(estimateData.currency_code);
       
-      const lineItems = estimateData.line_items.map(item => {
+      // Build line items without requiring item_id
+      const lineItems = estimateData.line_items.map((item, index) => {
         const lineItem = {
-          item_id: item.item_id,
+          
           description: item.description || '',
-          quantity: item.quantity,
-          rate: item.rate,
-          item_total: item.item_total,
-          item_order: item.item_order
+          quantity: Number(item.quantity) || 1,
+          rate: Number(item.rate) || 0,
+          item_total: Number(item.item_total) || (Number(item.quantity) * Number(item.rate)),
+          item_order: item.item_order || index + 1
         };
-        if (item.discount && item.discount > 0) { lineItem.discount = item.discount; lineItem.discount_amount = item.discount_amount || 0; }
-        if (item.tax_id && item.tax_percentage > 0) { lineItem.tax_id = item.tax_id; lineItem.tax_percentage = item.tax_percentage; lineItem.tax_name = item.tax_name || 'VAT'; lineItem.tax_type = 'tax'; }
+        
+        // Add discount if present
+        if (item.discount && item.discount > 0) {
+          lineItem.discount = item.discount;
+          lineItem.discount_amount = item.discount_amount || 0;
+        }
+        
+        // Add tax if present
+        if (item.tax_id && item.tax_percentage > 0) {
+          lineItem.tax_id = item.tax_id;
+          lineItem.tax_percentage = item.tax_percentage;
+          lineItem.tax_name = item.tax_name || 'VAT';
+          lineItem.tax_type = 'tax';
+        }
+        
+        // Remove item_id if it exists (don't send it to Zoho)
+        if (lineItem.item_id) delete lineItem.item_id;
+        
         return lineItem;
       });
       
@@ -1206,17 +1223,20 @@ class ZohoBooksService {
         place_of_supply: estimateData.place_of_supply || 'AE'
       };
       
+      // Add optional fields
       if (estimateData.estimate_number) payload.estimate_number = estimateData.estimate_number;
       if (currencyId) payload.currency_id = currencyId;
       if (estimateData.tax_id && estimateData.tax_percentage > 0) payload.tax_id = estimateData.tax_id;
       
+      // Handle entity-level discount
       const hasItemLevelDiscount = lineItems.some(item => item.discount && item.discount > 0);
       if (estimateData.discount && estimateData.discount > 0 && !hasItemLevelDiscount) {
         payload.discount = estimateData.discount;
-        payload.is_discount_before_tax = false;
-        payload.discount_type = 'entity_level';
+        payload.is_discount_before_tax = estimateData.is_discount_before_tax || false;
+        payload.discount_type = estimateData.discount_type || 'entity_level';
       }
       
+      // Add other optional fields
       if (estimateData.is_inclusive_tax !== undefined) payload.is_inclusive_tax = estimateData.is_inclusive_tax;
       if (estimateData.contact_persons_associated) payload.contact_persons_associated = estimateData.contact_persons_associated;
       if (estimateData.template_id) payload.template_id = estimateData.template_id;
@@ -1240,8 +1260,10 @@ class ZohoBooksService {
         logger.info(`Zoho estimate created successfully`, {
           estimateId: response.data.estimate.estimate_id,
           estimateNumber: response.data.estimate.estimate_number,
-          customerId: estimateData.customer_id
+          customerId: estimateData.customer_id,
+          lineItemsCount: lineItems.length
         });
+        
         return {
           success: true,
           estimateId: response.data.estimate.estimate_id,
@@ -1250,14 +1272,21 @@ class ZohoBooksService {
           estimate: response.data.estimate
         };
       }
+      
       throw new Error('Invalid response from Zoho');
+      
     } catch (error) {
       logger.error(`Zoho estimate creation error: ${error.message}`, {
         error: error.message,
         response: error.response?.data,
         status: error.response?.status
       });
-      return { success: false, error: error.response?.data?.message || error.message, details: error.response?.data };
+      
+      return { 
+        success: false, 
+        error: error.response?.data?.message || error.message, 
+        details: error.response?.data 
+      };
     }
   }
 
