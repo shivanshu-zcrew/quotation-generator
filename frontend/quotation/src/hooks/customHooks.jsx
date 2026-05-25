@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react'
 import { useAppStore } from '../services/store';
 import useToast from './useToast';
 import { opsAPI, customerAPI, itemAPI } from '../services/api';
+import { formatCurrency, formatLargeNumber } from '../utils/formatNumbers';
 
 export const useAuth = () => {
   const user = useAppStore((state) => state.user);
@@ -129,26 +130,44 @@ export const useAdminStats = () => {
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const refresh = useCallback(() => fetchAdminStats(selectedCompany), [fetchAdminStats, selectedCompany]);
 
-  console.log(">>>>>>><<<<<<<<",adminStats);
+  // Get raw values
+  const rawTotalCustomers = adminStats?.stats?.totalCustomers || 0;
+  const rawTotalQuotations = adminStats?.stats?.totalQuotations || 0;
+  const rawTotalRevenue = adminStats?.stats?.totalRevenue || 0;
+  const rawAwardedValue = adminStats?.stats?.awardedValue || 0;
 
   return {
-    stats: adminStats, loading: statsLoading, refresh,
-    totalQuotations: adminStats?.stats?.totalQuotations || 0,
+    stats: adminStats,
+    loading: statsLoading,
+    refresh,
+    // Raw values
+    rawTotalCustomers,
+    rawTotalQuotations,
+    rawTotalRevenue,
+    rawAwardedValue,
+    // Quotation stats
+    totalQuotations: rawTotalQuotations,
     actionRequired: adminStats?.stats?.actionRequired || 0,
     approved: adminStats?.stats?.approved || 0,
     awarded: adminStats?.stats?.awarded || 0,
     notAwarded: adminStats?.stats?.notAwarded || 0,
-    totalRevenue: adminStats?.stats?.totalRevenue || 0,
-    awardedValue: adminStats?.stats?.awardedValue || 0,
-    conversionRate: adminStats?.stats?.conversionRate?.rate || 0,
+    totalRevenue: rawTotalRevenue,
+    awardedValue: rawAwardedValue,
+    conversionRate: adminStats?.stats?.conversionRate || 0,
     rejected: adminStats?.stats?.rejected || 0,
     conversionDetails: adminStats?.stats?.conversionRate || 0,
     statusCounts: adminStats?.stats?.statusCounts || {},
-    totalApprovedValue: adminStats?.stats?.totalRevenue || 0,
-    totalAwardedValue: adminStats?.stats?.awardedValue || 0,
+    totalApprovedValue: rawTotalRevenue,
+    totalAwardedValue: rawAwardedValue,
+    // Customer stats
+    totalCustomers: rawTotalCustomers,
+    // Formatted versions for display
+    formattedTotalCustomers: formatLargeNumber(rawTotalCustomers),
+    formattedTotalRevenue: formatCurrency(rawTotalRevenue, 'AED'),
+    formattedAwardedValue: formatCurrency(rawAwardedValue, 'AED'),
+    formattedTotalQuotations: formatLargeNumber(rawTotalQuotations),
   };
 };
-
 
 export const useOpsStats = () => {
   const [stats, setStats] = useState(null);
@@ -215,5 +234,3 @@ export const useCustomerSync = () => {
     pendingSyncCustomers
   };
 };
-
- 

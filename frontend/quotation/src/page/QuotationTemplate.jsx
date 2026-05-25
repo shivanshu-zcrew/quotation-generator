@@ -158,7 +158,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     scopeOfWork: initialQuotationData?.scopeOfWork || "",
     
     // Customer/Left side fields
-    customer: initialQuotationData?.customer || customer?.name || "",
+    customer: initialQuotationData?.customer|| "",
     customerName: initialQuotationData?.customerName || customer?.contactPerson || customer?.name || "",
     customerPhone: initialQuotationData?.customerPhone || customer?.phone || "",
     customerEmail: initialQuotationData?.customerEmail || customer?.email || "",
@@ -241,7 +241,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         ...prev,
         trn: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
         customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
-        customer: customer.name || "",
+        
         customerName: customer.contactPerson || customer.name || "",
         customerPhone: customer.phone || "",
         customerEmail: customer.email || "",
@@ -251,6 +251,24 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     }
   }, [customer]);
 
+  // Auto-populate Company Name from selectedCompany
+useEffect(() => {
+  if (selectedCompany) {
+    let companyNameValue = '';
+    
+    if (typeof selectedCompany === 'object') {
+      companyNameValue = selectedCompany.name || '';
+    } else {
+      const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+      companyNameValue = company?.name || '';
+    }
+    
+    setQuotationData(prev => ({
+      ...prev,
+      customer: companyNameValue,  // This sets the Company Name field
+    }));
+  }
+}, [selectedCompany, companies]);
   // Add this useEffect to auto-populate creator (user) details on the right side
   useEffect(() => {
     if (user && !quotationData.ourFocalPoint) {

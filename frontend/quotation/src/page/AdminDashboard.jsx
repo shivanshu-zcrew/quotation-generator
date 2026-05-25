@@ -123,7 +123,7 @@ const ExpiryBadge = React.memo(({ type }) => {
 const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
-  const canAct = quotation.status === 'ops_approved';
+  const canAct = quotation.status === 'ops_approved' || quotation.status == 'pending_admin';
   const canAward = quotation.status === 'approved';
   const canDelete = DELETABLE.has(quotation.status);
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
@@ -259,6 +259,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     quotationsInitialized,
     goToPage,
     changeLimit,
+    resetPagination,
     currentPage,
     currentLimit
   } = useCompanyQuotations();
@@ -289,9 +290,11 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     notAwarded, 
     awardedValue,
     conversionRate,
+    statusCounts,
     rejected,
     conversionDetails, 
-    totalAwardedValue
+    totalAwardedValue,
+    totalCustomers
   } = useAdminStats();
  
   // ── Company & Currency ────────────────────────────────────
@@ -360,10 +363,16 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     refreshStats();
   }, [selectedCompany, refreshStats]);
 
-  // Refresh when filters change
-  // Replace the problematic useEffect with this:
+  const prevCompanyForPagination = useRef(selectedCompany);
 
-// Create a stable reference for refreshWithFilters
+  useEffect(() => {
+    if (prevCompanyForPagination.current !== selectedCompany) {
+      // Company changed - reset pagination
+      resetPagination();
+      prevCompanyForPagination.current = selectedCompany;
+    }
+  }, [selectedCompany, resetPagination]);
+
 const refreshWithFilters = useCallback(async () => {
   if (!selectedCompany) return;
   
@@ -406,16 +415,17 @@ useEffect(() => {
 }, [serverFilters, sort, refreshWithFilters]);
 
  
-  // ── Tab counts from server pagination ────────────────────────────
-  const tabCounts = useMemo(() => {
-    return {
-      all: quotationsPagination?.total || 0,
-      ops_approved: 0,
-      approved: 0,
-      awarded: 0,
-      rejected: 0,
-    };
-  }, [quotationsPagination]);
+// ── Tab counts from adminStats (already has backend counts) ──
+const tabCounts = useMemo(() => {
+   
+  return {
+    all: statusCounts.total || 0,
+    ops_approved: statusCounts.ops_approved || 0,
+    approved: statusCounts.approved || 0,
+    awarded: statusCounts.awarded || 0,
+    rejected: statusCounts.rejected || 0,
+  };
+}, [statusCounts]);
 
   // ── Loading helpers ───────────────────────────────────────
   const setActionLoading = useCallback((id, action, val) => {
@@ -760,16 +770,58 @@ useEffect(() => {
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
   // ── Tab configuration ─────────────────────────────────────
-  const TABS = useMemo(() =>
-    Object.entries(TAB_KEYS).map(([key, { label, Icon }]) => ({ 
-      key, label, Icon, count: tabCounts[key] ?? 0 
-    })),
-  [tabCounts]);
+  const TABS = useMemo(() => [
+    { key: 'all',           label: 'All',              Icon: FileText,    count: tabCounts.all },
+    { key: 'ops_approved',  label: 'Action Required',  Icon: Clock,       count: tabCounts.ops_approved },
+    { key: 'approved',      label: 'Approved',         Icon: CheckCircle, count: tabCounts.approved },
+    { key: 'awarded',       label: 'Awarded',          Icon: Award,       count: tabCounts.awarded },
+    { key: 'rejected',      label: 'Rejected',         Icon: XCircle,     count: tabCounts.rejected },
+  ], [tabCounts]);
 
   // ── Render helpers ────────────────────────────────────────
   const renderStatCards = () => {
     const safeCustomersLength = Array.isArray(customers) ? customers.length : 0;
     
+    // Helper function to format large numbers
+    const formatLargeNumber = (num) => {
+      if (num === null || num === undefined || isNaN(num)) return '0';
+      if (num === 0) return '0';
+      
+      const absNum = Math.abs(num);
+      
+      if (absNum >= 1_000_000_000) {
+        return (absNum / 1_000_000_000).toFixed(1) + 'B';
+      }
+      if (absNum >= 1_000_000) {
+        return (absNum / 1_000_000).toFixed(1) + 'M';
+      }
+      if (absNum >= 1_000) {
+        return (absNum / 1_000).toFixed(1) + 'K';
+      }
+      
+      return num.toString();
+    };
+  
+    // Helper function to format currency with abbreviations
+    const formatLargeCurrency = (num, currency) => {
+      if (num === null || num === undefined || isNaN(num)) return `0 ${currency}`;
+      if (num === 0) return `0 ${currency}`;
+      
+      const absNum = Math.abs(num);
+      
+      if (absNum >= 1_000_000_000) {
+        return `${(absNum / 1_000_000_000).toFixed(1)}B ${currency}`;
+      }
+      if (absNum >= 1_000_000) {
+        return `${(absNum / 1_000_000).toFixed(1)}M ${currency}`;
+      }
+      if (absNum >= 1_000) {
+        return `${(absNum / 1_000).toFixed(1)}K ${currency}`;
+      }
+      
+      return `${num.toLocaleString()} ${currency}`;
+    };
+  
     if (isMobile) {
       const statusCounts = {
         pending: actionRequired,
@@ -782,7 +834,7 @@ useEffect(() => {
         <CompactStatsCard 
           totalRevenue={totalAwardedValue}
           quotationsCount={totalQuotations}
-          customersCount={safeCustomersLength}
+          customersCount={totalCustomers}
           selectedCurrency={selectedCurrency}
           statusCounts={statusCounts}
           loading={statsLoading}
@@ -793,23 +845,84 @@ useEffect(() => {
     return (
       <>
         <div style={styles.statsRow1}>
-          <StatCard label="Total Quotations" value={totalQuotations} accent="#6366f1" 
-            iconBg="#eff1ff" iconColor="#6366f1" Icon={FileText} loading={statsLoading} sub="All time" />
-          <StatCard label="Action Required" value={actionRequired} accent="#3b82f6" 
-            iconBg="#dbeafe" iconColor="#3b82f6" Icon={Shield} loading={statsLoading} sub="Awaiting your approval" />
-          <StatCard label="Approved" value={approved} accent="#10b981" 
-            iconBg="#d1fae5" iconColor="#10b981" Icon={TrendingUp} loading={statsLoading} sub="quotations approved" />
-          <StatCard label="Awarded Value" value={fmtCurrency(totalAwardedValue, selectedCurrency)} accent="#059669" 
-            iconBg="#d1fae5" iconColor="#059669" Icon={Award} loading={statsLoading} sub={`${awarded} deals won`} />
+          <StatCard 
+            label="Total Quotations" 
+            value={formatLargeNumber(totalQuotations)} 
+            fullValue={totalQuotations.toLocaleString()}
+            accent="#6366f1" 
+            iconBg="#eff1ff" 
+            iconColor="#6366f1" 
+            Icon={FileText} 
+            loading={statsLoading} 
+            sub="All time" 
+          />
+          <StatCard 
+            label="Action Required" 
+            value={formatLargeNumber(actionRequired)} 
+            fullValue={actionRequired.toLocaleString()}
+            accent="#3b82f6" 
+            iconBg="#dbeafe" 
+            iconColor="#3b82f6" 
+            Icon={Shield} 
+            loading={statsLoading} 
+            sub="Awaiting your approval" 
+          />
+          <StatCard 
+            label="Approved" 
+            value={formatLargeNumber(approved)} 
+            fullValue={approved.toLocaleString()}
+            accent="#10b981" 
+            iconBg="#d1fae5" 
+            iconColor="#10b981" 
+            Icon={TrendingUp} 
+            loading={statsLoading} 
+            sub="quotations approved" 
+          />
+          <StatCard 
+            label="Awarded Value" 
+            value={formatLargeCurrency(totalAwardedValue, selectedCurrency)} 
+            fullValue={fmtCurrency(totalAwardedValue, selectedCurrency)}
+            accent="#059669" 
+            iconBg="#d1fae5" 
+            iconColor="#059669" 
+            Icon={Award} 
+            loading={statsLoading} 
+            sub={`${formatLargeNumber(awarded)} deals won`} 
+          />
         </div>
-
+  
         <div style={styles.statsRow2}>
-          <StatCard label="Conversion Rate" value={`${conversionDetails}%`} accent="#f59e0b" 
-            iconBg="#fef3c7" iconColor="#f59e0b" Icon={TrendingUp} loading={statsLoading} />
-          <StatCard label="Rejected by Admin" value={rejected} accent="#ec4899" 
-            iconBg="#fce7f3" iconColor="#ec4899" Icon={Ban} loading={statsLoading} sub="Rejected quotations" />
-          <StatCard label="Total Customers" value={safeCustomersLength} accent="#8b5cf6" 
-            iconBg="#ede9fe" iconColor="#8b5cf6" Icon={Users} loading={false} sub="Active customers" />
+          <StatCard 
+            label="Conversion Rate" 
+            value={`${conversionDetails}%`} 
+            accent="#f59e0b" 
+            iconBg="#fef3c7" 
+            iconColor="#f59e0b" 
+            Icon={TrendingUp} 
+            loading={statsLoading} 
+          />
+          <StatCard 
+            label="Rejected by Admin" 
+            value={formatLargeNumber(rejected)} 
+            fullValue={rejected.toLocaleString()}
+            accent="#ec4899" 
+            iconBg="#fce7f3" 
+            iconColor="#ec4899" 
+            Icon={Ban} 
+            loading={statsLoading} 
+            sub="Rejected quotations" 
+          />
+          <StatCard 
+            label="Total Customers" 
+            value={formatLargeNumber(totalCustomers)} 
+            fullValue={totalCustomers.toLocaleString()}
+            accent="#8b5cf6" 
+            iconBg="#ede9fe" 
+            iconColor="#8b5cf6" 
+            Icon={Users} 
+            loading={statsLoading} 
+            sub="Active customers" 
+          />
         </div>
       </>
     );

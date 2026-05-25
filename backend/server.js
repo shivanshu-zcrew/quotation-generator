@@ -9,8 +9,15 @@ const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const redisService = require('./config/redisService');
 const ItemSyncService = require('./utils/itemsSync');
+const logger = require('./config/logger');
+const { httpLogger, requestLogger } = require('./middleware/httpLogger');
 
 const app = express();
+
+// ── Logger setup ───────────────────────────────────────────────────
+// Use HTTP logger middleware
+app.use(httpLogger);
+app.use(requestLogger);
 
 // ── CORS Configuration ───────────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -25,6 +32,7 @@ const corsOptions = {
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     } else {
+      logger.warn(`CORS blocked request from origin: ${origin}`);
       return callback(new Error('Not allowed by CORS'));
     }
   },
@@ -38,23 +46,28 @@ const corsOptions = {
   exposedHeaders: ['x-company-id'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
 };
+
 app.use(helmet());
 app.use(compression());
 app.use(cors(corsOptions));
 app.options('*', (req, res) => {
   res.sendStatus(200);
 });
+
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200
+  windowMs: 1 * 60 * 1000,
+  max: 200,
+  handler: (req, res) => {
+    logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
+    res.status(429).json({ message: 'Too many requests, please try again later.' });
+  }
 });
 
 app.use(limiter);
+
 // ── Body parsing middleware ──────────────────────────────────────────────
 app.use(express.json({ limit: '200mb' }));
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
-
- 
 
 // ── Cloudinary config ─────────────────────────────────────────────────────
 cloudinary.config({
@@ -62,13 +75,6 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    console.log('➡️', req.method, req.url);
-    next();
-  });
-}
 
 // ── Routes ────────────────────────────────────────────────────────────────
 const customerRoutes = require('./routes/customerRoutes');
@@ -91,14 +97,29 @@ app.use('/api/notifications', notificationRoutes);
 
 // ── Root ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
+  logger.info('API root accessed');
   res.json({ message: 'Quotation System API Running' });
 });
 
- 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
 
 // ── Global error handler ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  // Log error with details
+  logger.error(`${err.message}`, {
+    error: err.stack,
+    url: req.url,
+    method: req.method,
+    ip: req.ip,
+    companyId: req.headers['x-company-id']
+  });
   
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
@@ -113,40 +134,42 @@ app.use((err, req, res, next) => {
 // ── Initialize Application ────────────────────────────────────────────────
 const initializeApp = async () => {
   try {
+    logger.info('Starting application initialization...');
+    
     // Connect to Database
     await connectDB();
-    console.log('✅ Database connected');
+    logger.info('Database connected successfully');
     
     // Connect to Redis (non-blocking - don't crash if Redis fails)
     try {
       await redisService.connect();
-      console.log('✅ Redis connected successfully');
+      logger.info('Redis connected successfully');
       
       // Only flush cache if in development mode
       if (process.env.NODE_ENV !== 'production') {
         await redisService.flushAll();
-        console.log('🧹 Redis cache cleared (development mode)');
+        logger.info('Redis cache cleared (development mode)');
       }
     } catch (redisError) {
-      console.warn('⚠️ Redis connection failed, continuing without cache:', redisError.message);
-      // Don't crash the app - Redis is optional for caching
+      logger.warn(`Redis connection failed, continuing without cache: ${redisError.message}`);
     }
     
     // Initial sync from Zoho (non-blocking)
     try {
       const result = await ItemSyncService.syncFromZoho();
       if (result.success) {
-        console.log('✅ Initial Zoho sync completed');
+        logger.info('Initial Zoho sync completed successfully');
       } else {
-        console.error('❌ Initial Zoho sync failed:', result.error);
+        logger.error(`Initial Zoho sync failed: ${result.error}`);
       }
     } catch (syncError) {
-      console.error('❌ Zoho sync error:', syncError.message);
+      logger.error(`Zoho sync error: ${syncError.message}`);
     }
     
+    logger.info('Application initialization completed');
+    
   } catch (error) {
-    console.error('❌ Application initialization failed:', error.message);
-    // Don't exit - let the app run even if initialization fails partially
+    logger.error(`Application initialization failed: ${error.message}`, { stack: error.stack });
   }
 };
 
@@ -155,8 +178,8 @@ const PORT = process.env.PORT || 5000;
 
 if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.info(`🚀 Server running on port ${PORT}`);
+    logger.info(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
   
   // Initialize app after server starts
@@ -164,21 +187,26 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   
   // ── Graceful Shutdown ─────────────────────────────────────────────────
   const gracefulShutdown = async (signal) => {
-    console.log(`\n⚠️ Received ${signal}, starting graceful shutdown...`);
+    logger.warn(`Received ${signal}, starting graceful shutdown...`);
     
     server.close(async () => {
-      console.log('📡 HTTP server closed');
+      logger.info('HTTP server closed');
       
       // Disconnect Redis gracefully
       await redisService.disconnect();
       
-      console.log('👋 Graceful shutdown completed');
-      process.exit(0);
+      // Close logger
+      logger.info('👋 Graceful shutdown completed');
+      
+      // Give logger time to flush
+      setTimeout(() => {
+        process.exit(0);
+      }, 1000);
     });
     
     // Force shutdown after 10 seconds
     setTimeout(() => {
-      console.error('⚠️ Could not close connections in time, forcefully shutting down');
+      logger.error('Could not close connections in time, forcefully shutting down');
       process.exit(1);
     }, 10000);
   };
@@ -190,16 +218,14 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
   
   // Handle uncaught errors
   process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
+    logger.error('Uncaught Exception:', error);
     gracefulShutdown('uncaughtException');
   });
   
   process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
   });
 } else {
-   module.exports = app;
-  
-   initializeApp();
+  module.exports = app;
+  initializeApp();
 }
- 

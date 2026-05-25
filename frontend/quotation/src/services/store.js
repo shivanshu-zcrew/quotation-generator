@@ -140,12 +140,17 @@ export const useAppStore = create(
               phone: userData.phone,
               role: userData.role,
               token,
+              companyId: userData.companyId || userData.assignedCompany || null,
             };
             
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(user));
             
             batchUpdate(set, [['user', user], ['lastError', null], ['loading', true]]);
+            
+            // Clear any existing company selection
+            persistSelectedCompany(null);
+            set({ selectedCompany: null });
             
             await get()._loadCompanyData();
             
@@ -1084,8 +1089,16 @@ updateCustomer: async (id, data) => {
               customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
               customerAPI.getCurrencies().catch(() => ({ data: [] })),
             ]);
-
+        
             const companies = companiesRes.data?.companies || [];
+            
+            // ✅ If no company selected but companies exist, select the first one
+            let finalSelectedCompany = selectedCompany;
+            if (!finalSelectedCompany && companies.length > 0) {
+              finalSelectedCompany = companies[0]._id;
+              persistSelectedCompany(finalSelectedCompany);
+              set({ selectedCompany: finalSelectedCompany });
+            }
             
             batchUpdate(set, [
               ['customers', parseData(customersRes.data)],
@@ -1100,8 +1113,8 @@ updateCustomer: async (id, data) => {
               ['lastError', null],
               ['initialized', true]
             ]);
-
-            if (companies.length > 0 && !get().selectedCompany) {
+        
+            if (companies.length > 0 && !finalSelectedCompany) {
               const defaultId = companies[0]._id;
               persistSelectedCompany(defaultId);
               set({ selectedCompany: defaultId });
@@ -1111,8 +1124,8 @@ updateCustomer: async (id, data) => {
                 set({ selectedCurrency: company.baseCurrency });
               }
               await get().fetchQuotationsForCompany(defaultId);
-            } else if (selectedCompany) {
-              await get().fetchQuotationsForCompany(selectedCompany);
+            } else if (finalSelectedCompany) {
+              await get().fetchQuotationsForCompany(finalSelectedCompany);
             }
           } catch (error) {
             batchUpdate(set, [['loadError', getErrorMessage(error)], ['lastError', AppError.from(error)], ['initialized', true]]);
@@ -1214,73 +1227,130 @@ updateCustomer: async (id, data) => {
 
         // ==================== PRIVATE HELPERS ====================
 
-_loadCompanyData: async () => {
-  const setFn = set;
-  const getFn = get;
-  
-  try {
-    const companiesRes = await companyAPI.getAll();
-    const companies = companiesRes.data?.companies || [];
-    let companyId = getFn().selectedCompany;
-    
-    // If no company is selected but companies exist, select the first one
-    if (!companyId && companies.length > 0) {
-      companyId = companies[0]._id;
-      
-      // ✅ PERSIST THE COMPANY ID TO LOCALSTORAGE
-      persistSelectedCompany(companyId);
-      
-      batchUpdate(setFn, [['selectedCompany', companyId], ['companies', companies]]);
-      
-      const company = companies.find(c => c._id === companyId);
-      if (company?.baseCurrency) {
-        localStorage.setItem('selectedCurrency', company.baseCurrency);
-        batchUpdate(setFn, [['selectedCurrency', company.baseCurrency]]);
-        await getFn().fetchExchangeRates(company.baseCurrency);
-      }
-    } else {
-      setFn({ companies });
-      
-      // ✅ If companyId exists but not in localStorage, persist it
-      if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-        persistSelectedCompany(companyId);
-      }
-    }
-    
-    if (companyId) {
-      // Fetch all initial data with the selected company
-      const [customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
-        customerAPI.getAll({ companyId: companyId === 'all' ? undefined : companyId }).catch(() => ({ data: [] })),
-        itemAPI.getAll({ companyId: companyId === 'all' ? undefined : companyId }).catch(() => ({ data: [] })),
-        exchangeRateAPI.getRates().catch(() => ({ data: null })),
-        exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
-        customerAPI.getGccCountries().catch(() => ({ data: [] })),
-        customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
-        customerAPI.getCurrencies().catch(() => ({ data: [] })),
-      ]);
-      
-      batchUpdate(setFn, [
-        ['customers', parseData(customersRes.data)],
-        ['items', parseData(itemsRes.data)],
-        ['exchangeRates', ratesRes.data],
-        ['supportedCurrencies', currenciesRes.data?.currencies || null],
-        ['gccCountries', gccRes.data || []],
-        ['taxTreatments', taxRes.data || []],
-        ['currencyOptions', currencyOptsRes.data || []],
-        ['initialized', true],
-        ['loading', false],
-        ['lastError', null]
-      ]);
-      
-      await getFn().fetchQuotationsForCompany(companyId);
-    } else {
-      batchUpdate(setFn, [['initialized', true], ['loading', false]]);
-    }
-  } catch (err) {
-    console.error('Load company data error:', err);
-    batchUpdate(setFn, [['loading', false], ['lastError', AppError.from(err)], ['initialized', true]]);
-  }
-},
+        _loadCompanyData: async () => {
+          const setFn = set;
+          const getFn = get;
+          
+          try {
+            const companiesRes = await companyAPI.getAll();
+            const companies = companiesRes.data?.companies || [];
+            const user = getFn().user;
+            const userRole = user?.role;
+            const userAssignedCompany = user?.companyId || user?.assignedCompany;
+            
+            let companyId = getFn().selectedCompany;
+            
+            // ✅ If no company is selected, automatically select one
+            if (!companyId) {
+              if (userAssignedCompany) {
+                // User has assigned company - use that
+                const assignedCompany = companies.find(c => 
+                  c._id === userAssignedCompany || c.code === userAssignedCompany
+                );
+                if (assignedCompany) {
+                  companyId = assignedCompany._id;
+                  persistSelectedCompany(companyId);
+                }
+              }
+              
+              // If still no company (no assigned or assigned not found), take first company
+              if (!companyId && companies.length > 0) {
+                companyId = companies[0]._id;
+                persistSelectedCompany(companyId);
+              }
+            }
+            
+            // Update store with companies
+            setFn({ companies });
+            
+            // ✅ Set the selected company if we have one (for ALL roles)
+            if (companyId) {
+              // For ops_manager, ensure they only get their assigned company
+              if (userRole === 'ops_manager' && userAssignedCompany && companyId !== userAssignedCompany) {
+                // Force to their assigned company
+                companyId = userAssignedCompany;
+                persistSelectedCompany(companyId);
+              }
+              
+              setFn({ selectedCompany: companyId });
+              
+              const company = companies.find(c => c._id === companyId);
+              if (company?.baseCurrency) {
+                localStorage.setItem('selectedCurrency', company.baseCurrency);
+                setFn({ selectedCurrency: company.baseCurrency });
+                await getFn().fetchExchangeRates(company.baseCurrency);
+              }
+              
+              // Fetch all data for this company
+              const [customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
+                customerAPI.getAll({ companyId: companyId }).catch(() => ({ data: [] })),
+                itemAPI.getAll({ companyId: companyId }).catch(() => ({ data: [] })),
+                exchangeRateAPI.getRates().catch(() => ({ data: null })),
+                exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
+                customerAPI.getGccCountries().catch(() => ({ data: [] })),
+                customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
+                customerAPI.getCurrencies().catch(() => ({ data: [] })),
+              ]);
+              
+              batchUpdate(setFn, [
+                ['customers', parseData(customersRes.data)],
+                ['items', parseData(itemsRes.data)],
+                ['exchangeRates', ratesRes.data],
+                ['supportedCurrencies', currenciesRes.data?.currencies || null],
+                ['gccCountries', gccRes.data || []],
+                ['taxTreatments', taxRes.data || []],
+                ['currencyOptions', currencyOptsRes.data || []],
+                ['initialized', true],
+                ['loading', false],
+                ['lastError', null]
+              ]);
+              
+              await getFn().fetchQuotationsForCompany(companyId);
+            } else if (companies.length > 0) {
+              // Fallback: take first company
+              const firstCompanyId = companies[0]._id;
+              persistSelectedCompany(firstCompanyId);
+              setFn({ selectedCompany: firstCompanyId });
+              
+              const company = companies.find(c => c._id === firstCompanyId);
+              if (company?.baseCurrency) {
+                localStorage.setItem('selectedCurrency', company.baseCurrency);
+                setFn({ selectedCurrency: company.baseCurrency });
+                await getFn().fetchExchangeRates(company.baseCurrency);
+              }
+              
+              const [customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
+                customerAPI.getAll({ companyId: firstCompanyId }).catch(() => ({ data: [] })),
+                itemAPI.getAll({ companyId: firstCompanyId }).catch(() => ({ data: [] })),
+                exchangeRateAPI.getRates().catch(() => ({ data: null })),
+                exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
+                customerAPI.getGccCountries().catch(() => ({ data: [] })),
+                customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
+                customerAPI.getCurrencies().catch(() => ({ data: [] })),
+              ]);
+              
+              batchUpdate(setFn, [
+                ['customers', parseData(customersRes.data)],
+                ['items', parseData(itemsRes.data)],
+                ['exchangeRates', ratesRes.data],
+                ['supportedCurrencies', currenciesRes.data?.currencies || null],
+                ['gccCountries', gccRes.data || []],
+                ['taxTreatments', taxRes.data || []],
+                ['currencyOptions', currencyOptsRes.data || []],
+                ['initialized', true],
+                ['loading', false],
+                ['lastError', null]
+              ]);
+              
+              await getFn().fetchQuotationsForCompany(firstCompanyId);
+            } else {
+              batchUpdate(setFn, [['initialized', true], ['loading', false]]);
+            }
+          } catch (err) {
+            console.error('Load company data error:', err);
+            batchUpdate(setFn, [['loading', false], ['lastError', AppError.from(err)], ['initialized', true]]);
+          }
+        },
       }),
       { name: 'app-store', partialize: (state) => ({
           user: state.user,
@@ -1314,6 +1384,15 @@ export const useCompanyQuotations = () => {
   const [limit, setLimit] = useState(20);
   const isRefreshingRef = useRef(false);
   
+  const previousCompanyRef = useRef(selectedCompany);
+  
+  useEffect(() => {
+    if (previousCompanyRef.current !== selectedCompany) {
+      setPage(1);
+      previousCompanyRef.current = selectedCompany;
+    }
+  }, [selectedCompany]);
+  
   const filteredQuotations = useMemo(() => {
     return Array.isArray(quotations) ? quotations : [];
   }, [quotations]);
@@ -1325,11 +1404,14 @@ export const useCompanyQuotations = () => {
     isRefreshingRef.current = true;
     
     try {
+      const usePage = options.page !== undefined ? options.page : page;
+      const useLimit = options.limit !== undefined ? options.limit : limit;
+      
       const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? 'all' : selectedCompany;
       const result = await refetchQuotations({ 
         companyId: companyIdParam, 
-        page: options.page || page,
-        limit: options.limit || limit,
+        page: usePage,
+        limit: useLimit,
         status: options.status,
         search: options.search,
         fromDate: options.fromDate,
@@ -1361,6 +1443,11 @@ export const useCompanyQuotations = () => {
     refresh({ page: 1, limit: newLimit });
   }, [refresh, limit]);
 
+  const resetPagination = useCallback(() => {
+    setPage(1);
+    refresh({ page: 1, limit });
+  }, [refresh, limit]);
+
   return {
     quotations: filteredQuotations,
     pagination: quotationsPagination,
@@ -1370,6 +1457,7 @@ export const useCompanyQuotations = () => {
     refresh,
     goToPage,
     changeLimit,
+    resetPagination,  
     currentPage: page,
     currentLimit: limit,
     version: quotationsVersion,

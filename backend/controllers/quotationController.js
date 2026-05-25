@@ -10,34 +10,13 @@ const { CURRENCY_OPTIONS } = require('../models/constants');
 const imageCompressor = require('../utils/imageCompressor');
 const ExcelJS = require('exceljs');
 const NotificationService = require("../utils/notificationService");
+const logger = require('../config/logger');
+
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
 // ─────────────────────────────────────────────────────────────
 let _browser = null;
 
-// const getBrowser = async () => {
-//   if (_browser?.isConnected()) return _browser;
-
-//   _browser = await puppeteer.launch({
-//     headless: 'new',
-//     executablePath: process.env.NODE_ENV === 'production'
-//       ? (process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser')
-//       : undefined,
-//     args: [
-//       '--no-sandbox',
-//       '--disable-setuid-sandbox',
-//       '--disable-dev-shm-usage',
-//       '--disable-gpu',
-//     ],
-//   });
-
-//   _browser.on('disconnected', () => { _browser = null; });
-//   return _browser;
-// };
- 
-// ─────────────────────────────────────────────────────────────
-// Health check endpoint for PDF service
-// ─────────────────────────────────────────────────────────────
 exports.getPDFMetrics = async (req, res) => {
   const metrics = browserPool.getMetrics();
   const memory = process.memoryUsage();
@@ -54,45 +33,39 @@ exports.getPDFMetrics = async (req, res) => {
   });
 };
 
-
-
-
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  // _browser = await puppeteer.launch({
-  //   headless: true,
-  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
-  //   args: [
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //     '--no-zygote',
-  //     '--single-process',
-  //   ],
-  // });
-
   _browser = await puppeteer.launch({
     headless: true,
+    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/google-chrome',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
     ],
   });
+
+  // _browser = await puppeteer.launch({
+  //   headless: true,
+  //   args: [
+  //     '--no-sandbox',
+  //     '--disable-setuid-sandbox',
+  //     '--disable-dev-shm-usage',
+  //     '--disable-gpu',
+  //   ],
+  // });
 
   _browser.on('disconnected', () => { _browser = null; });
   return _browser;
 };
-
-
 // ─────────────────────────────────────────────────────────────
 // Cloudinary helpers
 // ─────────────────────────────────────────────────────────────
 const uploadBase64ToCloudinary = async (dataUri, folder) => {
-  // FIX: Allow any data: URI, not just images
   if (!dataUri?.startsWith('data:')) return null;
   const matches = dataUri.match(/^data:([^;]+);base64,(.*)$/s);
   if (!matches) return null;
@@ -101,7 +74,6 @@ const uploadBase64ToCloudinary = async (dataUri, folder) => {
   const base64Data = matches[2];
   const buffer = Buffer.from(base64Data, 'base64');
   
-  // Determine resource type from mime
   let resourceType = 'raw';
   if (mimeType.startsWith('image/')) resourceType = 'image';
   else if (mimeType.startsWith('video/')) resourceType = 'video';
@@ -117,9 +89,6 @@ const safeDelete = (publicId) =>
       )
     : Promise.resolve();
 
-/**
- * Determine Cloudinary resource type from MIME type
- */
 const getResourceTypeFromMime = (mimeType) => {
   if (!mimeType) return 'raw';
   if (mimeType.startsWith('image/')) return 'image';
@@ -128,9 +97,6 @@ const getResourceTypeFromMime = (mimeType) => {
   return 'raw';
 };
 
-/**
- * Get file info from base64 string
- */
 const getFileInfoFromBase64 = (base64String) => {
   const matches = base64String.match(/^data:([^;]+);base64,(.*)$/s);
   if (!matches) throw new Error('Invalid base64 data');
@@ -139,27 +105,17 @@ const getFileInfoFromBase64 = (base64String) => {
   const base64Data = matches[2];
   const buffer = Buffer.from(base64Data, 'base64');
   
-  // Generate filename with proper extension
   const ext = mime.extension(mimeType) || 'bin';
   const fileName = `document-${Date.now()}-${Math.random().toString(36).substring(7)}.${ext}`;
   
-  return {
-    mimeType,
-    buffer,
-    size: buffer.length,
-    fileName
-  };
+  return { mimeType, buffer, size: buffer.length, fileName };
 };
 
-/**
- * Upload internal document to Cloudinary (from base64)
- */
- 
 const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, userId, description = '') => {
   try {
     const fileInfo = getFileInfoFromBase64(base64String);
     
-     let resourceType = 'auto';
+    let resourceType = 'auto';
     if (fileInfo.mimeType.startsWith('image/')) {
       resourceType = 'image';
     } else if (fileInfo.mimeType.startsWith('video/')) {
@@ -168,20 +124,12 @@ const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, u
       resourceType = 'raw';  
     }
     
-     const folder = `quotations/${quotationNumber}/internal-docs`;
-    
-     const result = await uploadToCloudinary(
-      fileInfo.buffer, 
-      folder, 
-      resourceType,
-      { 
-        access_mode: 'public',
-        use_filename: true,
-        unique_filename: true 
-      }
-    );
-    
-     
+    const folder = `quotations/${quotationNumber}/internal-docs`;
+    const result = await uploadToCloudinary(fileInfo.buffer, folder, resourceType, { 
+      access_mode: 'public',
+      use_filename: true,
+      unique_filename: true 
+    });
     
     return {
       fileName: fileInfo.fileName,
@@ -194,30 +142,19 @@ const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, u
       description: description,
       isInternalOnly: true
     };
-    
   } catch (error) {
-     
     throw error;
   }
 };
 
-/**
- * Upload multiple internal documents from base64 array
- */
 const uploadMultipleInternalDocumentsFromBase64 = async (base64Array, quotationNumber, userId, descriptions = []) => {
   if (!Array.isArray(base64Array)) base64Array = [base64Array];
   
   const uploadPromises = base64Array.map(async (base64String, index) => {
     try {
       const description = descriptions[index] || '';
-      return await uploadInternalDocumentFromBase64(
-        base64String, 
-        quotationNumber, 
-        userId, 
-        description
-      );
+      return await uploadInternalDocumentFromBase64(base64String, quotationNumber, userId, description);
     } catch (err) {
-       
       return null;
     }
   });
@@ -226,9 +163,6 @@ const uploadMultipleInternalDocumentsFromBase64 = async (base64Array, quotationN
   return results.filter(Boolean);
 };
 
-/**
- * Delete internal document from Cloudinary
- */
 const deleteInternalDocument = async (document) => {
   if (!document || !document.publicId) return;
   
@@ -237,87 +171,35 @@ const deleteInternalDocument = async (document) => {
     await deleteFromCloudinary(document.publicId, resourceType);
     return true;
   } catch (error) {
-     
     return false;
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// Item-image processor with currency conversion
-// ─────────────────────────────────────────────────────────────
- 
-
-const processItemImages = async (item, itemIndex) => {
-  let imagePaths = [];
-  
-  if (item.imagePaths && Array.isArray(item.imagePaths)) {
-    const validUrls = item.imagePaths.filter(img => 
-      img && typeof img === 'string' && img.includes('cloudinary.com')
-    );
-    imagePaths.push(...validUrls);
-  }
-  
-  if (item.newImages && Array.isArray(item.newImages)) {
-    for (let imgIdx = 0; imgIdx < item.newImages.length; imgIdx++) {
-      const imageData = item.newImages[imgIdx];
-      if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
-        try {
-          const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${itemIndex + 1}`);
-          if (uploaded && uploaded.url) {
-            imagePaths.push(uploaded.url);
-          }
-        } catch (uploadError) {
-          console.error(`Failed to upload image for item ${itemIndex + 1}:`, uploadError.message);
-        }
-      }
-    }
-  }
-  
-  return imagePaths;
-};
-
- 
-// ─────────────────────────────────────────────────────────────
-// Calculate totals with currency conversion
-// ─────────────────────────────────────────────────────────────
 const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
-   const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
+  const subtotal = items.reduce((sum, item) => sum + item.totalPrice, 0);
   const subtotalInBaseCurrency = subtotal * exchangeRate;
   
-   const discountAmount = (subtotal * (discountPercent || 0)) / 100;
+  const discountAmount = (subtotal * (discountPercent || 0)) / 100;
   const discountAmountInBaseCurrency = discountAmount * exchangeRate;
   
-   const subtotalAfterDiscount = subtotal - discountAmount;
+  const subtotalAfterDiscount = subtotal - discountAmount;
   const subtotalAfterDiscountInBaseCurrency = subtotalAfterDiscount * exchangeRate;
   
-   const taxAmount = (subtotalAfterDiscount * (taxPercent || 0)) / 100;
+  const taxAmount = (subtotalAfterDiscount * (taxPercent || 0)) / 100;
   const taxAmountInBaseCurrency = taxAmount * exchangeRate;
   
   const total = subtotalAfterDiscount + taxAmount;
   const totalInBaseCurrency = total * exchangeRate;
   
-   const subtotalOriginal = subtotal;
-  const subtotalOriginalInBaseCurrency = subtotalInBaseCurrency;
-
   return {
-     subtotal,
-    taxAmount,
-    discountAmount,
-    total,
-    subtotalInBaseCurrency,      
-    taxAmountInBaseCurrency,     
-    discountAmountInBaseCurrency, 
-    totalInBaseCurrency,
-    subtotalOriginal,
-    subtotalOriginalInBaseCurrency,
-    subtotalAfterDiscount,
-    subtotalAfterDiscountInBaseCurrency
+    subtotal, taxAmount, discountAmount, total,
+    subtotalInBaseCurrency, taxAmountInBaseCurrency, discountAmountInBaseCurrency,
+    totalInBaseCurrency, subtotalOriginal: subtotal,
+    subtotalOriginalInBaseCurrency: subtotalInBaseCurrency,
+    subtotalAfterDiscount, subtotalAfterDiscountInBaseCurrency
   };
 };
 
-// ─────────────────────────────────────────────────────────────
-// Generate quotation number with company prefix
-// ─────────────────────────────────────────────────────────────
 const generateQuotationNumber = (companyCode) => {
   const prefix = companyCode || 'QT';
   const timestamp = Date.now();
@@ -325,9 +207,6 @@ const generateQuotationNumber = (companyCode) => {
   return `${prefix}-${timestamp}-${random}`;
 };
 
-// ─────────────────────────────────────────────────────────────
-// Pagination helpers
-// ─────────────────────────────────────────────────────────────
 const parsePagination = ({ page, limit }) => {
   const p = Math.max(1, parseInt(page, 10) || 1);
   const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -338,18 +217,13 @@ const paginated = (res, data, total, page, limit) =>
   res.status(200).json({
     data,
     pagination: {
-      total,
-      page,
-      limit,
+      total, page, limit,
       totalPages: Math.ceil(total / limit),
       hasNextPage: page * limit < total,
       hasPrevPage: page > 1,
     },
   });
 
-// ─────────────────────────────────────────────────────────────
-// Date validation
-// ─────────────────────────────────────────────────────────────
 const validateDates = (date, expiryDate) => {
   if (!expiryDate) return 'Expiry date is required';
   if (date && expiryDate && new Date(expiryDate) < new Date(date))
@@ -357,33 +231,54 @@ const validateDates = (date, expiryDate) => {
   return null;
 };
 
-// ─────────────────────────────────────────────────────────────
-// Allowed sort fields
-// ─────────────────────────────────────────────────────────────
 const SORT_FIELDS = new Set([
   'createdAt', 'date', 'expiryDate', 'queryDate',
   'total', 'totalInAED', 'customer', 'status', 'quotationNumber', 'company.code'
 ]);
 
-// ─────────────────────────────────────────────────────────────
-// Standard populate chains
-// ─────────────────────────────────────────────────────────────
 const fullPopulate = (q) =>
   q
     .populate('customerId', 'name email phone address')
-     .populate('createdBy', 'name email')
+    .populate('createdBy', 'name email')
     .populate('opsApprovedBy', 'name email')
     .populate('approvedBy', 'name email')
     .populate('awardedBy', 'name email');
+
+function convertHtmlToPlainText(html) {
+  if (!html) return '';
+  let text = html.replace(/<[^>]*>/g, ' ');
+  text = text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+  text = text.replace(/\s+/g, ' ').trim();
+  text = text.replace(/(\d+\.\d+)/g, '\n  $1');
+  text = text.replace(/(\d+\.)(\s+)([^\d])/g, '\n$1 $3');
+  text = text.replace(/(\d+\.\s+)(?!\d)/g, '\n$1');
+  text = text.replace(/(\d+\.\s+[^\n]+?)(\n\s*\d+\.\d+)/g, '$1\n$2');
+  text = text.replace(/\n{3,}/g, '\n\n');
+  text = text.trim();
+  return text;
+}
+
+function cleanHtmlForZoho(html) {
+  if (!html) return '';
+  let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
+  cleaned = cleaned.replace(/<img[^>]*>/gi, '');
+  let text = convertHtmlToPlainText(cleaned);
+  if (text.length > 9500) {
+    text = text.substring(0, 9500) + '... (truncated)';
+  }
+  return text;
+}
 
 // =============================================================
 // COMPANY CONTROLLERS
 // =============================================================
 
-/**
- * Get all companies
- * GET /api/quotations/companies
- */
 exports.getCompanies = async (req, res) => {
   try {
     const companies = await Company.find({ isActive: true })
@@ -391,59 +286,29 @@ exports.getCompanies = async (req, res) => {
       .sort({ name: 1 })
       .lean();
 
-    res.json({
-      success: true,
-      companies,
-      count: companies.length
-    });
+    res.json({ success: true, companies, count: companies.length });
   } catch (err) {
-     
-    res.status(500).json({ 
-      success: false,
-      message: 'Error fetching companies', 
-      error: err.message 
-    });
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Error fetching companies', error: err.message });
   }
 };
 
-/**
- * Get company by code
- * GET /api/quotations/companies/:code
- */
 exports.getCompanyByCode = async (req, res) => {
   try {
     const { code } = req.params;
-    
-    const company = await Company.findOne({ 
-      code: code.toUpperCase(),
-      isActive: true 
-    }).lean();
+    const company = await Company.findOne({ code: code.toUpperCase(), isActive: true }).lean();
 
     if (!company) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Company not found' 
-      });
+      return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
-    res.json({
-      success: true,
-      company
-    });
+    res.json({ success: true, company });
   } catch (err) {
-     
-    res.status(500).json({ 
-      success: false,
-      message: 'Error fetching company', 
-      error: err.message 
-    });
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Error fetching company', error: err.message });
   }
 };
 
-/**
- * Get company statistics
- * GET /api/quotations/companies/:id/stats
- */
 exports.getCompanyStats = async (req, res) => {
   try {
     const { id } = req.params;
@@ -451,142 +316,55 @@ exports.getCompanyStats = async (req, res) => {
 
     const company = await Company.findById(id);
     if (!company) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Company not found' 
-      });
+      return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
     const matchStage = { companyId: company._id };
-    
     if (from || to) {
       matchStage.createdAt = {};
       if (from) matchStage.createdAt.$gte = new Date(from);
       if (to) matchStage.createdAt.$lte = new Date(to);
     }
 
-    const [
-      totalQuotations,
-      totalValue,
-      statusCounts,
-      currencyBreakdown,
-      recentQuotations
-    ] = await Promise.all([
+    const [totalQuotations, totalValue, statusCounts, currencyBreakdown, recentQuotations] = await Promise.all([
       Quotation.countDocuments(matchStage),
-      
-      Quotation.aggregate([
-        { $match: { ...matchStage, status: { $in: ['approved', 'awarded'] } } },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalInBaseCurrency' } 
-          } 
-        }
-      ]),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { 
-          $group: { 
-            _id: '$status', 
-            count: { $sum: 1 } 
-          } 
-        }
-      ]),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { 
-          $group: { 
-            _id: '$currency.code', 
-            count: { $sum: 1 },
-            total: { $sum: '$totalInBaseCurrency' }
-          } 
-        }
-      ]),
-      
-      Quotation.find(matchStage)
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .populate('customerId', 'name')
-        .populate('createdBy', 'name')
-        .select('quotationNumber customerSnapshot.name total status createdAt currency.code')
-        .lean()
+      Quotation.aggregate([{ $match: { ...matchStage, status: { $in: ['approved', 'awarded'] } } }, { $group: { _id: null, total: { $sum: '$totalInBaseCurrency' } } }]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: '$currency.code', count: { $sum: 1 }, total: { $sum: '$totalInBaseCurrency' } } }]),
+      Quotation.find(matchStage).sort({ createdAt: -1 }).limit(5).populate('customerId', 'name').populate('createdBy', 'name').select('quotationNumber customerSnapshot.name total status createdAt currency.code').lean()
     ]);
 
-    const statusMap = {
-      draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0,
-      approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0
-    };
-    
-    statusCounts.forEach(item => {
-      statusMap[item._id] = item.count;
-    });
+    const statusMap = { draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0, approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0 };
+    statusCounts.forEach(item => { statusMap[item._id] = item.count; });
 
     res.json({
       success: true,
-      company: {
-        id: company._id,
-        code: company.code,
-        name: company.name,
-        baseCurrency: company.baseCurrency,
-        logo: company.logo
-      },
-      stats: {
-        totalQuotations,
-        totalValue: totalValue[0]?.total || 0,
-        statusCounts: statusMap,
-        currencyBreakdown,
-        recentQuotations
-      }
+      company: { id: company._id, code: company.code, name: company.name, baseCurrency: company.baseCurrency, logo: company.logo },
+      stats: { totalQuotations, totalValue: totalValue[0]?.total || 0, statusCounts: statusMap, currencyBreakdown, recentQuotations }
     });
-
   } catch (err) {
-     
-    res.status(500).json({ 
-      success: false,
-      message: 'Error fetching company stats', 
-      error: err.message 
-    });
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Error fetching company stats', error: err.message });
   }
 };
 
 // =============================================================
-// QUOTATION CONTROLLERS
+// QUOTATION CRUD OPERATIONS
 // =============================================================
 
-// ─────────────────────────────────────────────────────────────
-// GET ALL QUOTATIONS (admin) with company filter
-// ─────────────────────────────────────────────────────────────
 exports.getAllQuotations = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
-
     const filter = {};
     
-    if (req.query.companyId) {
-      filter.companyId = req.query.companyId;
-    }
-    
-    if (req.query.status) {
-      filter.status = req.query.status;
-    }
-    
-    if (req.query.customerId) {
-      filter.customerId = req.query.customerId;
-    }
-    
-    if (req.query.currency) {
-      filter['currency.code'] = req.query.currency;
-    }
+    if (req.query.companyId) filter.companyId = req.query.companyId;
+    if (req.query.status) filter.status = req.query.status;
+    if (req.query.customerId) filter.customerId = req.query.customerId;
+    if (req.query.currency) filter['currency.code'] = req.query.currency;
     
     if (req.query.search) {
       const re = new RegExp(req.query.search.trim(), 'i');
-      filter.$or = [
-        { quotationNumber: re }, 
-        { 'customerSnapshot.name': re }, 
-        { contact: re }
-      ];
+      filter.$or = [{ quotationNumber: re }, { 'customerSnapshot.name': re }, { contact: re }];
     }
     
     if (req.query.from || req.query.to) {
@@ -599,106 +377,64 @@ exports.getAllQuotations = async (req, res) => {
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
 
     const [data, total] = await Promise.all([
-      fullPopulate(
-        Quotation.find(filter)
-          .sort({ [sortField]: sortDir })
-          .skip(skip)
-          .limit(limit)
-      ).lean(),
+      fullPopulate(Quotation.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limit)).lean(),
       Quotation.countDocuments(filter),
     ]);
 
     return paginated(res, data, total, page, limit);
   } catch (err) {
-     
+    console.error(err);
     res.status(500).json({ message: 'Error fetching quotations', error: err.message });
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GET MY QUOTATIONS (logged-in user) with company filter
-// ─────────────────────────────────────────────────────────────
 exports.getMyQuotations = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
     const { companyId = null } = req.query;
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
  
-    // ✅ UPDATED: Build filter for single or all companies
     let filter = { createdBy: req.user.id };
-    
-    if (!isAllCompanies) {
-      filter.companyId = companyId;
-    }
-    
+    if (!isAllCompanies) filter.companyId = companyId;
     if (req.query.status) filter.status = req.query.status;
     
     if (req.query.search) {
       const re = new RegExp(req.query.search.trim(), 'i');
-      filter.$or = [
-        { quotationNumber: re }, 
-        { 'customerSnapshot.name': re }
-      ];
+      filter.$or = [{ quotationNumber: re }, { 'customerSnapshot.name': re }];
     }
  
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
  
     const [data, total] = await Promise.all([
-      fullPopulate(
-        Quotation.find(filter)
-          .sort({ [sortField]: sortDir })
-          .skip(skip)
-          .limit(limit)
-      ).lean(),
+      fullPopulate(Quotation.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limit)).lean(),
       Quotation.countDocuments(filter),
     ]);
  
     const totalPages = Math.ceil(total / limit);
     
     res.status(200).json({
-      success: true,
-      data,
+      success: true, data,
       pagination: {
-        page: parseInt(req.query.page) || 1,
-        limit,
-        total,
-        totalPages,
+        page: parseInt(req.query.page) || 1, limit, total, totalPages,
         hasNextPage: parseInt(req.query.page) < totalPages,
         hasPreviousPage: parseInt(req.query.page) > 1
       },
-      isAllCompanies,  // ✅ Include flag
-      companyId: isAllCompanies ? 'ALL' : companyId
+      isAllCompanies, companyId: isAllCompanies ? 'ALL' : companyId
     });
   } catch (err) {
     console.error('Get My Quotations Error:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Error fetching your quotations', 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: 'Error fetching your quotations', error: err.message });
   }
 };
- 
-
-// ─────────────────────────────────────────────────────────────
-// GET SINGLE QUOTATION
-// ─────────────────────────────────────────────────────────────
 
 exports.getQuotation = async (req, res) => {
   try {
     const companyId = req.companyId || req.headers['x-company-id'] || req.query.companyId;
+    if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
     
-    if (!companyId) {
-      return res.status(400).json({ message: 'Company ID is required' });
-    }
-    
-    const quotation = await fullPopulate(
-      Quotation.findOne({ _id: req.params.id, companyId })
-    ).lean();
-
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
+    const quotation = await fullPopulate(Quotation.findOne({ _id: req.params.id, companyId })).lean();
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
@@ -713,127 +449,58 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// CREATE QUOTATION - UPDATED to handle base64 documents
-// ─────────────────────────────────────────────────────────────
 exports.createQuotation = async (req, res) => {
   const {
-    projectName,
-    scopeOfWork,
-    companyId,
-    currencyCode,
-    customerId, customer, contact, customerCountry,
-    customerDesignation,
-    customerTradeLicenseNumber,
-    date, expiryDate, queryDate, tl, trn,
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
-    ourFocalPointDesignation,
-    focalPointDesignation,
-    items, taxPercent, discountPercent, notes, remark,  // Added remark field
-    quotationImages, termsAndConditions, termsImages,
-    internalDocuments,
-    internalDocDescriptions
+    projectName, scopeOfWork, companyId, currencyCode, customerId, customer, contact, customerCountry,
+    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
+    focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
+    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions
   } = req.body;
 
-  // Validation
-  if (!projectName) {
-    return res.status(400).json({ message: 'Project Name is required' });
-  }
-  if (!companyId) {
-    return res.status(400).json({ message: 'Company selection is required' });
-  }
+  if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
+  if (!companyId) return res.status(400).json({ message: 'Company selection is required' });
 
   const company = await Company.findById(companyId);
-  if (!company) {
-    return res.status(400).json({ message: 'Invalid company selected' });
-  }
+  if (!company) return res.status(400).json({ message: 'Invalid company selected' });
 
   const customerDoc = await Customer.findOne({ _id: customerId, companyId: company._id }).lean();
-  if (!customerDoc) {
-    return res.status(404).json({ message: 'Customer not found for this company' });
-  }
+  if (!customerDoc) return res.status(404).json({ message: 'Customer not found for this company' });
   
-  if (!expiryDate) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Expiry date is required' 
-    });
-  }
+  if (!expiryDate) return res.status(400).json({ success: false, message: 'Expiry date is required' });
   
   const expiryDateObj = new Date(expiryDate);
-  if (isNaN(expiryDateObj.getTime())) {
-    return res.status(400).json({ 
-      success: false, 
-      message: `Invalid expiry date format: "${expiryDate}"` 
-    });
-  }
+  if (isNaN(expiryDateObj.getTime())) return res.status(400).json({ success: false, message: `Invalid expiry date format: "${expiryDate}"` });
   
-  // Validate date (optional, with default)
   let dateObj = new Date();
   if (date) {
     dateObj = new Date(date);
-    if (isNaN(dateObj.getTime())) {
-      dateObj = new Date();
-      console.warn(`Invalid date received: "${date}", using current date`);
-    }
+    if (isNaN(dateObj.getTime())) dateObj = new Date();
   }
 
-  // Validate items (now manual items without catalog lookup)
   const validatedItems = [];
   for (const item of items) {
-    // Manual items don't need to be validated against catalog
-    if (!item.description && !item.name) {
-      return res.status(400).json({ 
-        message: `Item ${validatedItems.length + 1} requires a name or description`
-      });
-    }
-    
-    if (!item.quantity || item.quantity < 1) {
-      return res.status(400).json({ 
-        message: `Item ${validatedItems.length + 1} requires a valid quantity`
-      });
-    }
-    
-    if (!item.unitPrice || item.unitPrice < 0) {
-      return res.status(400).json({ 
-        message: `Item ${validatedItems.length + 1} requires a valid unit price`
-      });
-    }
-    
+    if (!item.description && !item.name) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a name or description` });
+    if (!item.quantity || item.quantity < 1) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid quantity` });
+    if (!item.unitPrice || item.unitPrice < 0) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid unit price` });
     validatedItems.push(item);
   }
     
-  // Compress quotation images (item images)
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
-      maxWidth: 800,
-      quality: 70,
-      maxSizeKB: 300
-    });
+    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, { maxWidth: 800, quality: 70, maxSizeKB: 300 });
   }
   
-  // Compress terms images
   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
-      maxWidth: 600,
-      quality: 65,
-      maxSizeKB: 200
-    });
+    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, { maxWidth: 600, quality: 65, maxSizeKB: 200 });
   }
   
-  // Compress internal documents that are images
   let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
-      maxWidth: 1000,
-      quality: 75,
-      maxSizeKB: 400
-    });
+    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, { maxWidth: 1000, quality: 75, maxSizeKB: 400 });
   }
 
-  // Exchange rate calculation
   let exchangeRate = 1;
   const targetCurrency = currencyCode || company.baseCurrency;
   
@@ -844,33 +511,23 @@ exports.createQuotation = async (req, res) => {
     console.error('Error getting exchange rates:', rateError.message);
   }
 
-  // Process items with images (manual items)
   const processedItems = [];
-  
   for (let i = 0; i < validatedItems.length; i++) {
     const item = validatedItems[i];
-    
     let imageUrls = [];
     
     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
-        
         if (imageData && typeof imageData === 'string') {
           if (imageData.startsWith('data:image')) {
             try {
               console.log(`📤 Uploading compressed image ${imgIdx + 1} for item ${i + 1}...`);
               const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
-              if (uploaded && uploaded.url) {
-                imageUrls.push(uploaded.url);
-              }
-            } catch (err) {
-              console.error(`❌ Upload failed:`, err.message);
-            }
-          }
-          else if (imageData.includes('cloudinary.com')) {
+              if (uploaded && uploaded.url) imageUrls.push(uploaded.url);
+            } catch (err) { console.error(`❌ Upload failed:`, err.message); }
+          } else if (imageData.includes('cloudinary.com')) {
             imageUrls.push(imageData);
-            console.log(`📎 Keeping existing Cloudinary URL`);
           }
         }
       }
@@ -881,12 +538,8 @@ exports.createQuotation = async (req, res) => {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
           try {
             const uploaded = await uploadBase64ToCloudinary(img, `quotations/items/item_${i + 1}`);
-            if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) {
-              imageUrls.push(uploaded.url);
-            }
-          } catch (err) {
-            console.error(`Upload failed:`, err.message);
-          }
+            if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) imageUrls.push(uploaded.url);
+          } catch (err) { console.error(`Upload failed:`, err.message); }
         } else if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imageUrls.includes(img)) {
           imageUrls.push(img);
         }
@@ -894,7 +547,6 @@ exports.createQuotation = async (req, res) => {
     }
     
     imageUrls = [...new Set(imageUrls)];
-    
     console.log(`📸 Item ${i + 1}: Final ${imageUrls.length} images stored`);
     
     const unitPriceInBaseCurrency = item.unitPrice * exchangeRate;
@@ -914,12 +566,10 @@ exports.createQuotation = async (req, res) => {
     });
   }
   
-  // Calculate totals
   const tax = parseFloat(taxPercent) || 0;
   const discount = parseFloat(discountPercent) || 0;
   const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
-  // Process terms images
   let processedTermsImages = [];
   if (compressedTermsImages && compressedTermsImages.length > 0) {
     console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
@@ -938,95 +588,55 @@ exports.createQuotation = async (req, res) => {
         try {
           const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
           if (uploaded && uploaded.url) {
-            processedTermsImages.push({
-              url: uploaded.url,
-              publicId: uploaded.publicId,
-              fileName: fileName,
-              uploadedAt: new Date()
-            });
+            processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
           }
-        } catch (uploadError) {
-          console.error('Failed to upload terms image:', uploadError.message);
-        }
-      }
-      else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
+        } catch (uploadError) { console.error('Failed to upload terms image:', uploadError.message); }
+      } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
         processedTermsImages.push(imageData);
-      }
-      else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-        processedTermsImages.push({
-          url: imageData,
-          publicId: imageData.split('/').pop().split('.')[0],
-          fileName: fileName,
-          uploadedAt: new Date()
-        });
+      } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+        processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: fileName, uploadedAt: new Date() });
       }
     }
   }
 
   const quotationNumber = generateQuotationNumber(company.code);
 
-  // Process internal documents
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
     console.log(`📸 Processing ${compressedInternalDocuments.length} compressed internal documents`);
-    processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
-      compressedInternalDocuments,
-      quotationNumber,
-      req.user.id,
-      internalDocDescriptions || []
-    );
+    processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(compressedInternalDocuments, quotationNumber, req.user.id, internalDocDescriptions || []);
   }
 
-  // Determine status based on user role
   const userRole = req.user?.role;
   const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
   
   console.log(`📝 Creating quotation with status: ${initialStatus} (User role: ${userRole})`);
 
-  // Create quotation with all fields including remark
   const quotation = new Quotation({
     quotationNumber,
     projectName: projectName?.trim() || '',
     scopeOfWork: scopeOfWork?.trim() || '',
     companyId: company._id,
     companySnapshot: {
-      code: company.code,
-      name: company.name,
-      address: typeof company.address === 'string' 
-        ? company.address 
-        : `${company.address?.street || ''}, ${company.address?.city || ''}, ${company.address?.country || 'UAE'}`,
-      phone: company.phone,
-      email: company.email,
-      vatNumber: company.vatNumber,
-      crNumber: company.crNumber,
-      logo: company.logo,
-      zohoOrganizationId: company.zohoOrganizationId,
+      code: company.code, name: company.name,
+      address: typeof company.address === 'string' ? company.address : `${company.address?.street || ''}, ${company.address?.city || ''}, ${company.address?.country || 'UAE'}`,
+      phone: company.phone, email: company.email, vatNumber: company.vatNumber, crNumber: company.crNumber,
+      logo: company.logo, zohoOrganizationId: company.zohoOrganizationId,
       focalPointDesignation: focalPointDesignation || company.focalPointDesignation || '',
       bankDetails: company.bankDetails
     },
     currency: {
-      code: targetCurrency,
-      symbol: CURRENCY_OPTIONS[targetCurrency]?.symbol || targetCurrency,
+      code: targetCurrency, symbol: CURRENCY_OPTIONS[targetCurrency]?.symbol || targetCurrency,
       name: CURRENCY_OPTIONS[targetCurrency]?.name || targetCurrency,
       decimalPlaces: CURRENCY_OPTIONS[targetCurrency]?.decimalPlaces || 2,
-      exchangeRate: {
-        rate: exchangeRate,
-        baseCurrency: company.baseCurrency,
-        fetchedAt: new Date()
-      }
+      exchangeRate: { rate: exchangeRate, baseCurrency: company.baseCurrency, fetchedAt: new Date() }
     },
     customerId,
     customerSnapshot: {
-      name: customer?.trim() || customerDoc.name,
-      email: customerDoc.email,
-      phone: customerDoc.phone,
-      address: customerDoc.address,
-      country: customerCountry || 'UAE',
-      vatNumber: customerDoc.vatNumber,
-      designation: customerDesignation?.trim() || '',
-      tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
-      taxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
-      placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
+      name: customer?.trim() || customerDoc.name, email: customerDoc.email, phone: customerDoc.phone,
+      address: customerDoc.address, country: customerCountry || 'UAE', vatNumber: customerDoc.vatNumber,
+      designation: customerDesignation?.trim() || '', tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
+      taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
     },
     customerTaxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
     customerPlaceOfSupply: customerDoc.placeOfSupply || 'Dubai',
@@ -1034,29 +644,20 @@ exports.createQuotation = async (req, res) => {
     date: date ? new Date(date) : new Date(),
     expiryDate: new Date(expiryDate),
     queryDate: queryDate ? new Date(queryDate) : null,
-    ourRef: ourRef?.trim() || '',
-    ourContact: ourContact?.trim() || '',
+    ourRef: ourRef?.trim() || '', ourContact: ourContact?.trim() || '',
     ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '',
     salesManagerEmail: salesManagerEmail?.trim() || '',
-    paymentTerms: paymentTerms?.trim() || '',
-    deliveryTerms: deliveryTerms?.trim() || '',
-    tl: tl?.trim() || '',
-    trn: trn?.trim() || '',
+    paymentTerms: paymentTerms?.trim() || '', deliveryTerms: deliveryTerms?.trim() || '',
+    tl: tl?.trim() || '', trn: trn?.trim() || '',
     items: processedItems,
-    taxPercent: tax,
-    discountPercent: discount,
+    taxPercent: tax, discountPercent: discount,
     ...totals,
-    notes: notes?.trim() || '',
-    remark: remark?.trim() || '',  // NEW - Remark field
+    notes: notes?.trim() || '', remark: remark?.trim() || '',
     termsAndConditions: termsAndConditions || '',
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
     createdBy: req.user.id,
-    createdBySnapshot: {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role
-    },
+    createdBySnapshot: { name: req.user.name, email: req.user.email, role: req.user.role },
     status: initialStatus,
   });
 
@@ -1064,116 +665,60 @@ exports.createQuotation = async (req, res) => {
   const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
   
   const originalSize = JSON.stringify(req.body).length;
-  const compressedSize = JSON.stringify({
-    ...req.body,
-    quotationImages: compressedQuotationImages,
-    termsImages: compressedTermsImages,
-    internalDocuments: compressedInternalDocuments
-  }).length;
+  const compressedSize = JSON.stringify({ ...req.body, quotationImages: compressedQuotationImages, termsImages: compressedTermsImages, internalDocuments: compressedInternalDocuments }).length;
   const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
   
   res.status(201).json({
-    success: true,
-    message: 'Quotation created successfully',
-    quotation: populated,
+    success: true, message: 'Quotation created successfully', quotation: populated,
     stats: {
       itemsCount: processedItems.length,
       imagesUploaded: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
       termsImagesUploaded: processedTermsImages.length,
-      compression: {
-        originalSizeMB: (originalSize / 1024 / 1024).toFixed(2),
-        compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2),
-        reductionPercent: reduction
-      }
+      compression: { originalSizeMB: (originalSize / 1024 / 1024).toFixed(2), compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2), reductionPercent: reduction }
     }
   });
 };
 
-// ─────────────────────────────────────────────────────────────
-// UPDATE QUOTATION (with document support)
-// ─────────────────────────────────────────────────────────────
-
- 
 exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const companyId = req.companyId || req.headers['x-company-id'];
   const {
-    projectName,
-    scopeOfWork,
-    currencyCode,
-    customerId, customer, contact, customerCountry,
-    customerDesignation,
-    customerTradeLicenseNumber,
-    date, expiryDate, queryDate,
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms,
-    tl, trn,
-    ourFocalPointDesignation,
-    focalPointDesignation,
-    items, taxPercent, discountPercent, notes, remark,  // Added remark field
-    quotationImages,
-    termsAndConditions, termsImages,
-    internalDocuments,
-    internalDocDescriptions
+    projectName, scopeOfWork, currencyCode, customerId, customer, contact, customerCountry,
+    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
+    ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
+    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions
   } = req.body;
-
-  // ============================================================
-  // ✅ STEP 1: COMPRESS ALL IMAGES BEFORE PROCESSING
-  // ============================================================
 
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
-    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, {
-      maxWidth: 800,
-      quality: 70,
-      maxSizeKB: 300
-    });
+    compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, { maxWidth: 800, quality: 70, maxSizeKB: 300 });
   }
   
   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
-    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, {
-      maxWidth: 600,
-      quality: 65,
-      maxSizeKB: 200
-    });
+    compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, { maxWidth: 600, quality: 65, maxSizeKB: 200 });
   }
   
   let compressedInternalDocuments = internalDocuments;
   if (internalDocuments && internalDocuments.length > 0) {
-    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, {
-      maxWidth: 1000,
-      quality: 75,
-      maxSizeKB: 400
-    });
+    compressedInternalDocuments = await imageCompressor.compressInternalDocuments(internalDocuments, { maxWidth: 1000, quality: 75, maxSizeKB: 400 });
   }
   
-  const compressedPayloadSize = JSON.stringify({
-    ...req.body,
-    quotationImages: compressedQuotationImages,
-    termsImages: compressedTermsImages,
-    internalDocuments: compressedInternalDocuments
-  }).length;
+  const compressedPayloadSize = JSON.stringify({ ...req.body, quotationImages: compressedQuotationImages, termsImages: compressedTermsImages, internalDocuments: compressedInternalDocuments }).length;
   
-  if (!companyId) {
-    return res.status(400).json({ message: 'Company ID is required' });
-  }
-
-  if (!items?.length) {
-    return res.status(400).json({ message: 'At least one item is required' });
-  }
+  if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
+  if (!items?.length) return res.status(400).json({ message: 'At least one item is required' });
 
   const dateErr = validateDates(date, expiryDate);
   if (dateErr) return res.status(400).json({ message: dateErr });
 
   try {
     const existing = await Quotation.findOne({ _id: id, companyId });
-    if (!existing) {
-      return res.status(404).json({ message: 'Quotation not found' });
-    }
+    if (!existing) return res.status(404).json({ message: 'Quotation not found' });
 
     const isAdmin = req.user?.role === 'admin';
     const isOpsManager = req.user?.role === 'ops_manager';
-    const isUser = req.user?.role === 'user';
     
     let isCreator = false;
     if (existing.createdBy) {
@@ -1181,80 +726,42 @@ exports.updateQuotation = async (req, res) => {
       isCreator = creatorId.toString() === req.user?.id;
     }
 
-    // Authorization check
-    if (!isAdmin && !isOpsManager && !isCreator) {
-      return res.status(403).json({ message: 'Not authorized to update this quotation' });
-    }
-
-    // ============================================================
-    // ✅ STEP 2: DETERMINE NEW STATUS BASED ON WHO IS EDITING AND CURRENT STATUS
-    // ============================================================
+    if (!isAdmin && !isOpsManager && !isCreator) return res.status(403).json({ message: 'Not authorized to update this quotation' });
     
     let newStatus = existing.status;
     const currentStatus = existing.status;
     
-    // Case 1: Admin editing ANY quotation (including their own)
     if (isAdmin) {
       if (currentStatus === 'approved' || currentStatus === 'awarded' || currentStatus === 'not_awarded') {
         newStatus = currentStatus;
-      } 
-      else if (['pending', 'ops_approved', 'ops_rejected', 'rejected', 'draft'].includes(currentStatus)) {
+      } else if (['pending', 'ops_approved', 'ops_rejected', 'rejected', 'draft'].includes(currentStatus)) {
         newStatus = 'pending_admin';
-      } 
-      else {
-        newStatus = currentStatus;
-      }
-    }
-    
-    // Case 2: Ops Manager editing
-    else if (isOpsManager) {
+      } else { newStatus = currentStatus; }
+    } else if (isOpsManager) {
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
         newStatus = 'ops_approved';
-      }
-      else if (currentStatus === 'rejected' && isCreator) {
+      } else if (currentStatus === 'rejected' && isCreator) {
         newStatus = 'pending';
-        console.log('🔄 Ops Manager revising admin-rejected quotation - moving to pending for ops review');
-      }
-      else if (currentStatus === 'ops_approved') {
+      } else if (currentStatus === 'ops_approved') {
         newStatus = 'ops_approved';
-      }
-      else {
-        newStatus = currentStatus;
-      }
-    }
-    
-    // Case 3: User/Creator editing
-    else if (isCreator) {
+      } else { newStatus = currentStatus; }
+    } else if (isCreator) {
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
         newStatus = 'pending';
-      }
-      else if (currentStatus === 'rejected') {
+      } else if (currentStatus === 'rejected') {
         newStatus = 'pending';
-      }
-      else {
-        newStatus = currentStatus;
-      }
+      } else { newStatus = currentStatus; }
     }
 
-    console.log('📝 Status update:', {
-      role: req.user?.role,
-      currentStatus: currentStatus,
-      newStatus: newStatus,
-      isCreator: isCreator,
-      isOpsManager: isOpsManager
-    });
+    console.log('📝 Status update:', { role: req.user?.role, currentStatus, newStatus });
 
     const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
     if (!isAdmin && !editableStatuses.includes(currentStatus)) {
-      return res.status(400).json({ 
-        message: `Cannot edit quotation with status: ${currentStatus}. Only quotations in pending, rejected, or returned status can be edited.` 
-      });
+      return res.status(400).json({ message: `Cannot edit quotation with status: ${currentStatus}` });
     }
 
     const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(404).json({ message: 'Company not found' });
-    }
+    if (!company) return res.status(404).json({ message: 'Company not found' });
 
     let exchangeRate = existing.currency?.exchangeRate?.rate || 1;
     if (currencyCode && currencyCode !== existing.currency?.code) {
@@ -1266,8 +773,6 @@ exports.updateQuotation = async (req, res) => {
     let customerPlaceOfSupply = existing.customerPlaceOfSupply || 'Dubai';
     let customerSnapshotTaxTreatment = existing.customerSnapshot?.taxTreatment || 'non_vat_registered';
     let customerSnapshotPlaceOfSupply = existing.customerSnapshot?.placeOfSupply || 'Dubai';
-    
-    // Preserve existing customer snapshot fields
     let customerSnapshotDesignation = existing.customerSnapshot?.designation || '';
     let customerSnapshotTradeLicense = existing.customerSnapshot?.tradeLicenseNumber || '';
     
@@ -1278,22 +783,13 @@ exports.updateQuotation = async (req, res) => {
         customerPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
         customerSnapshotTaxTreatment = customerDoc.taxTreatment || 'non_vat_registered';
         customerSnapshotPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
-        if (!customerDesignation) customerSnapshotDesignation = customerDoc.designation || '';
-        if (!customerTradeLicenseNumber) customerSnapshotTradeLicense = customerDoc.tradeLicenseNumber || '';
       }
     }
     
-    // Override with explicit values from request
-    if (customerDesignation !== undefined) {
-      customerSnapshotDesignation = customerDesignation?.trim() || '';
-    }
-    if (customerTradeLicenseNumber !== undefined) {
-      customerSnapshotTradeLicense = customerTradeLicenseNumber?.trim() || '';
-    }
+    if (customerDesignation !== undefined) customerSnapshotDesignation = customerDesignation?.trim() || '';
+    if (customerTradeLicenseNumber !== undefined) customerSnapshotTradeLicense = customerTradeLicenseNumber?.trim() || '';
 
-    // Process items (manual items - no catalog lookup)
     const processedItems = [];
-    
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx];
       if (!item) continue;
@@ -1309,19 +805,13 @@ exports.updateQuotation = async (req, res) => {
       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
-          
           if (imageData && typeof imageData === 'string') {
             if (imageData.startsWith('data:image')) {
               try {
                 const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
-                if (uploaded && uploaded.url) {
-                  imagePaths.push(uploaded.url);
-                }
-              } catch (err) {
-                console.error(`❌ Upload failed:`, err.message);
-              }
-            }
-            else if (imageData.includes('cloudinary.com')) {
+                if (uploaded && uploaded.url) imagePaths.push(uploaded.url);
+              } catch (err) { console.error(`Upload failed:`, err.message); }
+            } else if (imageData.includes('cloudinary.com')) {
               imagePaths.push(imageData);
             }
           }
@@ -1341,38 +831,22 @@ exports.updateQuotation = async (req, res) => {
       processedItems.push({
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
-        quantity: quantity,
-        unitPrice: unitPrice,
-        unitPriceInBaseCurrency: unitPriceInBaseCurrency,
-        totalPrice: totalPrice,
-        totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-        imagePaths: imagePaths,
-        imagePublicIds: []
+        quantity: quantity, unitPrice: unitPrice, unitPriceInBaseCurrency: unitPriceInBaseCurrency,
+        totalPrice: totalPrice, totalPriceInBaseCurrency: totalPriceInBaseCurrency,
+        imagePaths: imagePaths, imagePublicIds: []
       });
     }
 
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
     const discount = discountPercent !== undefined ? parseFloat(discountPercent) : (existing.discountPercent || 0);
-    
     const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
-    const {
-      subtotal,
-      taxAmount,
-      discountAmount,
-      total
-    } = totals;
-    
     const subtotalInBaseCurrency = processedItems.reduce((sum, item) => sum + (item.totalPriceInBaseCurrency || 0), 0);
     const taxAmountInBaseCurrency = (subtotalInBaseCurrency * tax) / 100;
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    // ============================================================
-    // ✅ STEP 3: PROCESS TERMS IMAGES WITH COMPRESSION & CLOUDINARY UPLOAD
-    // ============================================================
     let processedTermsImages = [];
-
     if (compressedTermsImages && compressedTermsImages.length > 0) {
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
@@ -1381,63 +855,29 @@ exports.updateQuotation = async (req, res) => {
           let base64ToUpload = null;
           let fileName = imageData.fileName || `terms_image_${i + 1}`;
           
-          if (imageData.base64 && imageData.base64.startsWith('data:')) {
-            base64ToUpload = imageData.base64;
-          } else if (imageData.url && imageData.url.startsWith('data:')) {
-            base64ToUpload = imageData.url;
-          } else if (imageData.compressedBase64 && imageData.compressedBase64.startsWith('data:')) {
-            base64ToUpload = imageData.compressedBase64;
-          }
+          if (imageData.base64 && imageData.base64.startsWith('data:')) base64ToUpload = imageData.base64;
+          else if (imageData.url && imageData.url.startsWith('data:')) base64ToUpload = imageData.url;
+          else if (imageData.compressedBase64 && imageData.compressedBase64.startsWith('data:')) base64ToUpload = imageData.compressedBase64;
           
           if (base64ToUpload) {
             try {
               const uploaded = await uploadBase64ToCloudinary(base64ToUpload, `quotations/terms/${existing.quotationNumber || Date.now()}`);
               if (uploaded && uploaded.url) {
-                processedTermsImages.push({
-                  url: uploaded.url,
-                  publicId: uploaded.publicId,
-                  fileName: fileName,
-                  uploadedAt: new Date()
-                });
-                console.log(`✅ Uploaded compressed terms image ${i + 1}: ${uploaded.url}`);
+                processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
               }
-            } catch (uploadError) {
-              console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
-            }
+            } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
+          } else if (imageData.url && imageData.url.includes('cloudinary.com')) {
+            processedTermsImages.push({ url: imageData.url, publicId: imageData.publicId, fileName: fileName, uploadedAt: imageData.uploadedAt || new Date() });
           }
-          else if (imageData.url && imageData.url.includes('cloudinary.com')) {
-            processedTermsImages.push({
-              url: imageData.url,
-              publicId: imageData.publicId,
-              fileName: fileName,
-              uploadedAt: imageData.uploadedAt || new Date()
-            });
-            console.log(`✅ Keeping existing terms image: ${imageData.url}`);
-          }
-        }
-        else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
+        } else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
           try {
             const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
             if (uploaded && uploaded.url) {
-              processedTermsImages.push({
-                url: uploaded.url,
-                publicId: uploaded.publicId,
-                fileName: `terms_image_${i + 1}`,
-                uploadedAt: new Date()
-              });
-              console.log(`✅ Uploaded compressed terms image from string ${i + 1}: ${uploaded.url}`);
+              processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
             }
-          } catch (uploadError) {
-            console.error(`Failed to upload terms image ${i + 1}:`, uploadError.message);
-          }
-        }
-        else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-          processedTermsImages.push({
-            url: imageData,
-            publicId: imageData.split('/').pop().split('.')[0],
-            fileName: `terms_image_${i + 1}`,
-            uploadedAt: new Date()
-          });
+          } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
+        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
+          processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
         }
       }
     }
@@ -1446,75 +886,40 @@ exports.updateQuotation = async (req, res) => {
       processedTermsImages = existing.termsImages;
     }
 
-    console.log(`📸 Final processed terms images count: ${processedTermsImages.length}`);
-
-    // Process internal documents
     let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
       const validBase64Strings = compressedInternalDocuments.filter(doc => typeof doc === 'string' && doc.startsWith('data:'));
       if (validBase64Strings.length > 0) {
-        newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(
-          validBase64Strings,
-          existing.quotationNumber,
-          req.user.id,
-          internalDocDescriptions || []
-        );
+        newInternalDocs = await uploadMultipleInternalDocumentsFromBase64(validBase64Strings, existing.quotationNumber, req.user.id, internalDocDescriptions || []);
       }
     }
 
     const existingCompanySnapshot = existing.companySnapshot || {};
     
-    // Build update data
     const updateData = {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
-      ...(customer && { 
-        'customerSnapshot.name': customer.trim(),
-        customer: customer.trim() 
-      }),
-      ...(customerDesignation !== undefined && { 
-        'customerSnapshot.designation': customerDesignation?.trim() || '' 
-      }),
-      ...(customerTradeLicenseNumber !== undefined && { 
-        'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' 
-      }),
-      ...(ourFocalPointDesignation !== undefined && { 
-        ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' 
-      }),
-      ...(focalPointDesignation !== undefined && { 
-        'companySnapshot.focalPointDesignation': focalPointDesignation?.trim() || existingCompanySnapshot.focalPointDesignation || '' 
-      }),
+      ...(customer && { 'customerSnapshot.name': customer.trim(), customer: customer.trim() }),
+      ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
+      ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
+      ...(ourFocalPointDesignation !== undefined && { ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' }),
+      ...(focalPointDesignation !== undefined && { 'companySnapshot.focalPointDesignation': focalPointDesignation?.trim() || existingCompanySnapshot.focalPointDesignation || '' }),
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
       ...(customerCountry && { 'customerSnapshot.country': customerCountry }),
-      ...(customerId && {
-        'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment,
-        'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply,
-        customerTaxTreatment: customerTaxTreatment,
-        customerPlaceOfSupply: customerPlaceOfSupply
-      }),
-      ...(date && { date: new Date(date) }),
-      ...(expiryDate && { expiryDate: new Date(expiryDate) }),
+      ...(customerId && { 'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment, 'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply, customerTaxTreatment, customerPlaceOfSupply }),
+      ...(date && { date: new Date(date) }), ...(expiryDate && { expiryDate: new Date(expiryDate) }),
       ...(queryDate !== undefined && { queryDate: queryDate ? new Date(queryDate) : null }),
-      ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }),
-      ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
+      ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }), ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
       ...(salesManagerEmail !== undefined && { salesManagerEmail: salesManagerEmail?.trim() || '' }),
-      ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }),
-      ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
-      ...(tl !== undefined && { tl: tl?.trim() || '' }),
-      ...(trn !== undefined && { trn: trn?.trim() || '' }),
-      ...(remark !== undefined && { remark: remark?.trim() || '' }),  // NEW - Remark field
-      items: processedItems,
-      taxPercent: tax,
-      discountPercent: discount,
-      subtotal: subtotal,
-      subtotalInBaseCurrency: subtotalInBaseCurrency,
-      taxAmount: taxAmount,
-      taxAmountInBaseCurrency: taxAmountInBaseCurrency,
-      discountAmount: discountAmount,
-      discountAmountInBaseCurrency: discountAmountInBaseCurrency,
-      total: total,
-      totalInBaseCurrency: totalInBaseCurrency,
+      ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }), ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
+      ...(tl !== undefined && { tl: tl?.trim() || '' }), ...(trn !== undefined && { trn: trn?.trim() || '' }),
+      ...(remark !== undefined && { remark: remark?.trim() || '' }),
+      items: processedItems, taxPercent: tax, discountPercent: discount,
+      subtotal: totals.subtotal, subtotalInBaseCurrency: subtotalInBaseCurrency,
+      taxAmount: totals.taxAmount, taxAmountInBaseCurrency: taxAmountInBaseCurrency,
+      discountAmount: totals.discountAmount, discountAmountInBaseCurrency: discountAmountInBaseCurrency,
+      total: totals.total, totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
       ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions || '' }),
       termsImages: processedTermsImages,
@@ -1522,14 +927,10 @@ exports.updateQuotation = async (req, res) => {
       status: newStatus,
     };
 
-    // Clear rejection reasons when moving to pending or pending_admin
     if (newStatus === 'pending' || newStatus === 'pending_admin') {
-      updateData.opsRejectionReason = '';
-      updateData.rejectionReason = '';
-      updateData.opsApprovedBy = null;
-      updateData.opsApprovedAt = null;
-      updateData.approvedBy = null;
-      updateData.approvedAt = null;
+      updateData.opsRejectionReason = ''; updateData.rejectionReason = '';
+      updateData.opsApprovedBy = null; updateData.opsApprovedAt = null;
+      updateData.approvedBy = null; updateData.approvedAt = null;
     }
 
     if (currencyCode && currencyCode !== existing.currency?.code) {
@@ -1541,102 +942,54 @@ exports.updateQuotation = async (req, res) => {
     }
 
     const updated = await Quotation.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
-
-    if (!updated) {
-      return res.status(404).json({ message: 'Quotation not found after update' });
-    }
+    if (!updated) return res.status(404).json({ message: 'Quotation not found after update' });
 
     const populated = await Quotation.findById(updated._id)
       .populate('customerId', 'name email phone address taxTreatment placeOfSupply designation tradeLicenseNumber')
-      .populate('createdBy', 'name email')
-      .populate('opsApprovedBy', 'name email')
-      .populate('approvedBy', 'name email')
-      .populate('awardedBy', 'name email')
-      .populate('companyId', 'name code baseCurrency logo focalPointDesignation')
-      .lean();
+      .populate('createdBy', 'name email').populate('opsApprovedBy', 'name email')
+      .populate('approvedBy', 'name email').populate('awardedBy', 'name email')
+      .populate('companyId', 'name code baseCurrency logo focalPointDesignation').lean();
     
     const originalSize = JSON.stringify(req.body).length;
     const compressedSize = compressedPayloadSize;
     const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
      
     res.status(200).json({
-      success: true,
-      message: 'Quotation updated successfully',
-      quotation: populated,
+      success: true, message: 'Quotation updated successfully', quotation: populated,
       stats: {
         itemsCount: processedItems.length,
         imagesCount: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
         termsImagesCount: processedTermsImages.length,
-        compression: {
-          originalSizeMB: (originalSize / 1024 / 1024).toFixed(2),
-          compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2),
-          reductionPercent: reduction
-        }
+        compression: { originalSizeMB: (originalSize / 1024 / 1024).toFixed(2), compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2), reductionPercent: reduction }
       }
     });
 
   } catch (err) {
     console.error('Update error:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Error updating quotation', 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: 'Error updating quotation', error: err.message });
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// UPDATE QUERY DATE
-// ─────────────────────────────────────────────────────────────
 exports.updateQueryDate = async (req, res) => {
   try {
     const { queryDate } = req.body;
     const companyId = req.companyId || req.headers['x-company-id'];
-    
-    if (!companyId) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Company ID is required' 
-      });
-    }
+    if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 
-    const quotation = await Quotation.findOne({ 
-      _id: req.params.id, 
-      companyId 
-    });
-    
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Quotation not found for this company' 
-      });
-    }
+    const quotation = await Quotation.findOne({ _id: req.params.id, companyId });
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const isCreator = quotation.createdBy._id.toString() === req.user.id;
     const isAdmin = req.user.role === 'admin';
-
-    if (!isCreator && !isAdmin) {
-      return res.status(403).json({ 
-        success: false,
-        message: 'Not authorized' 
-      });
-    }
+    if (!isCreator && !isAdmin) return res.status(403).json({ success: false, message: 'Not authorized' });
 
     quotation.queryDate = queryDate ? new Date(queryDate) : null;
     await quotation.save();
 
-    res.status(200).json({ 
-      success: true,
-      message: 'Query date updated', 
-      queryDate: quotation.queryDate 
-    });
+    res.status(200).json({ success: true, message: 'Query date updated', queryDate: quotation.queryDate });
   } catch (err) {
     console.error('Error updating query date:', err);
-    res.status(500).json({ 
-      success: false,
-      message: 'Error updating query date', 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: 'Error updating query date', error: err.message });
   }
 };
 
@@ -1650,68 +1003,27 @@ exports.awardQuotation = async (req, res) => {
     const quotationId = req.params.id;
     const companyId = req.companyId || req.headers['x-company-id'];
     
-    if (!companyId) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Company ID is required' 
-      });
-    }
+    if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
+    if (typeof awarded !== 'boolean') return res.status(400).json({ success: false, message: '`awarded` (boolean) is required' });
 
-    if (typeof awarded !== 'boolean') {
-      return res.status(400).json({ 
-        success: false,
-        message: '`awarded` (boolean) is required' 
-      });
-    }
-
-    // STEP 1: Fetch quotation with company filter
     const quotation = await Quotation.findOne({ _id: quotationId, companyId })
-      .populate('companyId')
-      .populate('createdBy', 'name email');
+      .populate('companyId').populate('createdBy', 'name email');
     
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Quotation not found for this company' 
-      });
-    }
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
     
-    // ✅ STEP 1.5: Save existing snapshots BEFORE any modifications
     const existingOpsApprovedBySnapshot = quotation.opsApprovedBySnapshot;
     const existingApprovedBySnapshot = quotation.approvedBySnapshot;
     const existingCreatedBySnapshot = quotation.createdBySnapshot;
     
-    console.log('📸 Preserved snapshots:', {
-      opsApprovedBySnapshot: existingOpsApprovedBySnapshot,
-      approvedBySnapshot: existingApprovedBySnapshot,
-      createdBySnapshot: existingCreatedBySnapshot
-    });
-    
-    const customer = await Customer.findOne({ 
-      _id: quotation.customerId, 
-      companyId 
-    }).lean();
-    
-    if (!customer) {
-      console.warn('⚠️ Customer not found for this company');
-      return res.status(404).json({ 
-        success: false,
-        message: 'Customer not found for this company' 
-      });
-    }
+    const customer = await Customer.findOne({ _id: quotation.customerId, companyId }).lean();
+    if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
 
     if (quotation.createdBy._id.toString() !== req.user.id) {
-      return res.status(403).json({ 
-        success: false,
-        message: 'Only the creator can mark this quotation as awarded' 
-      });
+      return res.status(403).json({ success: false, message: 'Only the creator can mark this quotation as awarded' });
     }
 
     if (quotation.status !== 'approved') {
-      return res.status(400).json({
-        success: false,
-        message: `Only admin-approved quotations can be awarded. Current status: ${quotation.status}`,
-      });
+      return res.status(400).json({ success: false, message: `Only admin-approved quotations can be awarded. Current status: ${quotation.status}` });
     }
 
     if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
@@ -1727,203 +1039,81 @@ exports.awardQuotation = async (req, res) => {
     const isPlaceOfSupplyUAE = UAE_EMIRATES.includes(customerPlaceOfSupply);
     const isPlaceOfSupplyGCC = GCC_COUNTRIES.includes(customerPlaceOfSupply);
     
-    // ========== COMPANY-SPECIFIC TAX IDs ==========
     const companyZohoId = quotation.companyId?.zohoOrganizationId;
-    console.log(">>>>>>>>>", quotation);
     let TAX_IDS = {};
      
-    if (companyZohoId === '870392017') { // Mega Repairing Machinery Equipment LLC
-      TAX_IDS = {
-        '0%': '5723933000000089262',
-        '5%': '5723933000000089256'
-      };
-    } else if (companyZohoId === '886656701') { // Megarme General Contracting Co LLC
-      TAX_IDS = {
-        '0%': '6201431000000108033',
-        '5%': '6201431000000108025'
-      };
-    } else if (companyZohoId === '916255903') { // G T G C TECHNICAL SERVICES L.L.C
-      TAX_IDS = {
-        '0%': '8731317000000093294',
-        '5%': '8731317000000093290'
-      };
+    if (companyZohoId === '870392017') {
+      TAX_IDS = { '0%': '5723933000000089262', '5%': '5723933000000089256' };
+    } else if (companyZohoId === '886656701') {
+      TAX_IDS = { '0%': '6201431000000108033', '5%': '6201431000000108025' };
+    } else if (companyZohoId === '916255903') {
+      TAX_IDS = { '0%': '8731317000000093294', '5%': '8731317000000093290' };
     } else {
-      // Default fallback tax IDs
-      TAX_IDS = {
-        '0%': '8731317000000093294',
-        '5%': '8731317000000093290'
-      };
+      TAX_IDS = { '0%': '8731317000000093294', '5%': '8731317000000093290' };
     }
     
-    console.log(`🏢 Company Zoho ID: ${companyZohoId}`);
-    console.log(`💰 Tax IDs for this company:`, TAX_IDS);
+    let taxRate = 0, taxId = TAX_IDS['0%'], taxTreatment = 'vat_not_registered', placeOfSupplyCode = 'AE';
     
-    let taxRate = 0;
-    let taxId = TAX_IDS['0%'];
-    let taxTreatment = 'vat_not_registered';
-    let placeOfSupplyCode = 'AE';
-    
-    // ============================================
-    // RULE 1: UAE VAT Registered (vat_registered)
-    // ============================================
     if (customerTaxTreatment === 'vat_registered') {
       if (isPlaceOfSupplyUAE) {
         taxRate = quotation.taxPercent || 5;
-        
-        if (taxRate === 0) {
-          taxId = TAX_IDS['0%'];
-        } else if (taxRate === 5) {
-          taxId = TAX_IDS['5%'];
-        } else {
-          taxId = TAX_IDS['5%'];
-          taxRate = 5;
-        }
-        
+        taxId = taxRate === 0 ? TAX_IDS['0%'] : TAX_IDS['5%'];
         taxTreatment = 'vat_registered';
-        
-        const emirateCodeMap = {
-          'Abu Dhabi': 'AB',
-          'Ajman': 'AJ',
-          'Dubai': 'DU',
-          'Fujairah': 'FU',
-          'Ras al-Khaimah': 'RA',
-          'Sharjah': 'SH',
-          'Umm al-Quwain': 'UM'
-        };
+        const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
         placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
-        
       } else if (isPlaceOfSupplyGCC) {
-        taxRate = 0;
-        taxId = TAX_IDS['0%'];
-        taxTreatment = 'vat_registered';
-        
-        const countryCodeMap = {
-          'Saudi Arabia': 'SA',
-          'Kuwait': 'KW',
-          'Qatar': 'QA',
-          'Bahrain': 'BH',
-          'Oman': 'OM'
-        };
+        taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'vat_registered';
+        const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
         placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
       }
-    }
-    
-    // ============================================
-    // RULE 2: GCC VAT Registered (gcc_vat_registered)
-    // ============================================
-    else if (customerTaxTreatment === 'gcc_vat_registered') {
+    } else if (customerTaxTreatment === 'gcc_vat_registered') {
       if (isPlaceOfSupplyUAE) {
-        taxRate = 5;
-        taxId = TAX_IDS['5%'];
-        taxTreatment = 'gcc_vat_registered';
-        
-        const emirateCodeMap = {
-          'Abu Dhabi': 'AB',
-          'Ajman': 'AJ',
-          'Dubai': 'DU',
-          'Fujairah': 'FU',
-          'Ras al-Khaimah': 'RA',
-          'Sharjah': 'SH',
-          'Umm al-Quwain': 'UM'
-        };
+        taxRate = 5; taxId = TAX_IDS['5%']; taxTreatment = 'gcc_vat_registered';
+        const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
         placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
-        
       } else if (isPlaceOfSupplyGCC) {
-        taxRate = 0;
-        taxId = TAX_IDS['0%'];
-        taxTreatment = 'gcc_vat_registered';
-        
-        const countryCodeMap = {
-          'Saudi Arabia': 'SA',
-          'Kuwait': 'KW',
-          'Qatar': 'QA',
-          'Bahrain': 'BH',
-          'Oman': 'OM'
-        };
+        taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'gcc_vat_registered';
+        const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
         placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
       }
-    }
-    
-    // ============================================
-    // RULE 3: Non-VAT Registered
-    // ============================================
-    else if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') {
-      taxRate = 0;
-      taxId = TAX_IDS['0%'];
-      taxTreatment = 'vat_not_registered';
-      
+    } else if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') {
+      taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'vat_not_registered';
       if (isPlaceOfSupplyUAE) {
-        const emirateCodeMap = {
-          'Abu Dhabi': 'AB',
-          'Ajman': 'AJ',
-          'Dubai': 'DU',
-          'Fujairah': 'FU',
-          'Ras al-Khaimah': 'RA',
-          'Sharjah': 'SH',
-          'Umm al-Quwain': 'UM'
-        };
+        const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
         placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
       } else {
-        const countryCodeMap = {
-          'Saudi Arabia': 'SA',
-          'Kuwait': 'KW',
-          'Qatar': 'QA',
-          'Bahrain': 'BH',
-          'Oman': 'OM'
-        };
+        const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
         placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
       }
     }
-
-    console.log(`📊 Tax settings: Rate=${taxRate}%, TaxId=${taxId}, Treatment=${taxTreatment}`);
 
     let zohoEstimate = null;
     
-    // STEP 5: If awarded, create estimate in Zoho
     if (awarded) {
       try {
-        // 5.1: Get customer Zoho ID
         let customerZohoId = customer?.zohoId;
+        if (!customerZohoId) throw new Error('Customer Zoho ID not found. Please sync customer with Zoho first.');
         
-        if (!customerZohoId) {
-          throw new Error('Customer Zoho ID not found. Please sync customer with Zoho first.');
-        }
-        
-        // 5.2: Validate all items have zohoItemId before proceeding
         const missingZohoIds = [];
-        
         for (let i = 0; i < quotation.items.length; i++) {
           const item = quotation.items[i];
-          
           if (!item.zohoItemId) {
-            const itemName = item.itemId?.name || `Item ${i + 1}`;
-            missingZohoIds.push({
-              index: i + 1,
-              name: itemName,
-              mongoId: item.itemId?._id
-            });
+            missingZohoIds.push({ index: i + 1, name: item.itemId?.name || `Item ${i + 1}` });
           }
         }
         
         if (missingZohoIds.length > 0) {
-          console.error('❌ Missing Zoho IDs for items:', missingZohoIds);
-          
           return res.status(400).json({
-            success: false,
-            message: `Cannot create estimate in Zoho. The following items are missing Zoho IDs:`,
-            missingItems: missingZohoIds.map(item => 
-              `${item.name} (Item #${item.index})`
-            ),
+            success: false, message: `Cannot create estimate in Zoho. The following items are missing Zoho IDs:`,
+            missingItems: missingZohoIds.map(item => `${item.name} (Item #${item.index})`),
             suggestion: 'Please sync these items with Zoho first or ensure they have valid Zoho IDs.'
           });
         }
         
-        // ========== DISCOUNT CONVERSION FOR VAT REGISTERED COMPANIES ==========
         const isVatRegistered = taxRate > 0 || taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered';
         const originalDiscountPercent = quotation.discountPercent || 0;
         let effectiveDiscountPercent = 0;
         let lineItemsWithDiscount = [];
-        
         const subtotal = quotation.subtotal || 0;
         
         for (let i = 0; i < quotation.items.length; i++) {
@@ -1934,96 +1124,48 @@ exports.awardQuotation = async (req, res) => {
           
           if (isVatRegistered && originalDiscountPercent > 0) {
             finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
-            itemDiscountPercent = 0;  
+            itemDiscountPercent = 0;
           } else if (!isVatRegistered && originalDiscountPercent > 0) {
             effectiveDiscountPercent = originalDiscountPercent;
           }
           
           const itemTotal = item.quantity * finalRate;
-          
           const lineItem = {
-            item_id: item.zohoItemId,
-            name: item.itemId?.name || `Item ${i + 1}`,
-            description: item.description || '',
-            quantity: item.quantity,
-            rate: finalRate,
-            discount: itemDiscountPercent,
-            discount_amount: 0,
-            item_total: itemTotal,
-            item_order: i + 1
+            item_id: item.zohoItemId, name: item.itemId?.name || `Item ${i + 1}`,
+            description: item.description || '', quantity: item.quantity, rate: finalRate,
+            discount: itemDiscountPercent, discount_amount: 0, item_total: itemTotal, item_order: i + 1
           };
-          
           if (taxRate > 0) {
-            lineItem.tax_id = taxId;
-            lineItem.tax_percentage = taxRate;
-            lineItem.tax_name = 'VAT';
-            lineItem.tax_type = 'tax';
+            lineItem.tax_id = taxId; lineItem.tax_percentage = taxRate; lineItem.tax_name = 'VAT'; lineItem.tax_type = 'tax';
           }
-          
           lineItemsWithDiscount.push(lineItem);
-          console.log(`✅ Added line item: ${item.itemId?.name} (Rate: ${finalRate}, Qty: ${item.quantity})`);
         }
         
-        // Recalculate totals after discount conversion
         const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
         const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
         const recalculatedDiscountAmount = isVatRegistered ? 0 : (subtotal * originalDiscountPercent / 100);
         const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
         
-        // 5.4: Prepare estimate data
         const estimateData = {
-          customer_id: customerZohoId,
-          reference_number: quotation.quotationNumber,
+          customer_id: customerZohoId, reference_number: quotation.quotationNumber,
           date: new Date(quotation.date).toISOString().split('T')[0],
           expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
-          exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
-          discount: effectiveDiscountPercent,  
-          is_discount_before_tax: false,
-          discount_type: 'entity_level',
-          is_inclusive_tax: false,
+          exchange_rate: quotation.currency?.exchangeRate?.rate || 1, discount: effectiveDiscountPercent,
+          is_discount_before_tax: false, discount_type: 'entity_level', is_inclusive_tax: false,
           custom_body: quotation.notes || '',
           custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
-          salesperson_name: quotation?.createdBy?.name || '',
-          notes: awardNote || '',
+          salesperson_name: quotation?.createdBy?.name || '', notes: awardNote || '',
           terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
-          line_items: lineItemsWithDiscount,
-          tax_treatment: taxTreatment,
-          place_of_supply: placeOfSupplyCode,
-          is_taxable: taxRate > 0,
-          total: recalculatedGrandTotal,
-          total_before_tax: recalculatedSubtotal,
-          tax_total: recalculatedTaxAmount,
-          discount_total: recalculatedDiscountAmount
+          line_items: lineItemsWithDiscount, tax_treatment: taxTreatment, place_of_supply: placeOfSupplyCode,
+          is_taxable: taxRate > 0, total: recalculatedGrandTotal, total_before_tax: recalculatedSubtotal,
+          tax_total: recalculatedTaxAmount, discount_total: recalculatedDiscountAmount
         };
         
-        if (taxRate > 0) {
-          estimateData.tax_id = taxId;
-        }
+        if (taxRate > 0) estimateData.tax_id = taxId;
         
-        console.log('📊 Estimate data prepared:', {
-          customerId: customerZohoId,
-          lineItemsCount: lineItemsWithDiscount.length,
-          total: recalculatedGrandTotal,
-          taxRate: taxRate,
-          taxId: taxId,
-          taxTreatment: taxTreatment,
-          discountAppliedToLineItems: isVatRegistered && originalDiscountPercent > 0,
-          allItemsHaveZohoId: true
-        });
-        
-        // 5.5: Create estimate in Zoho
         zohoEstimate = await zohoBooksService.createEstimate(estimateData);
+        if (!zohoEstimate.success) throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
         
-        if (!zohoEstimate.success) {
-          throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
-        }
-        
-        console.log('✅ Zoho estimate created:', {
-          estimateId: zohoEstimate.estimateId,
-          estimateNumber: zohoEstimate.estimateNumber
-        });
-        
-        // 5.6: Update quotation with Zoho details
         quotation.zohoEstimateId = zohoEstimate.estimateId;
         quotation.zohoEstimateNumber = zohoEstimate.estimateNumber;
         quotation.zohoEstimateUrl = zohoEstimate.estimateUrl;
@@ -2032,189 +1174,71 @@ exports.awardQuotation = async (req, res) => {
         
       } catch (zohoError) {
         console.error('❌ Zoho estimate creation error:', zohoError);
-        
-        return res.status(500).json({
-          success: false,
-          message: `Failed to create estimate in Zoho Books: ${zohoError.message}`,
-          error: zohoError.message
-        });
+        return res.status(500).json({ success: false, message: `Failed to create estimate in Zoho Books: ${zohoError.message}`, error: zohoError.message });
       }
     }
     
-    // ✅ STEP 6: Update quotation status - BUT PRESERVE SNAPSHOTS
     quotation.status = awarded ? 'awarded' : 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
     quotation.awardNote = awardNote?.trim() || '';
     
-    // ✅ STEP 7: RESTORE snapshots (in case anything modified them)
     quotation.opsApprovedBySnapshot = existingOpsApprovedBySnapshot;
     quotation.approvedBySnapshot = existingApprovedBySnapshot;
     quotation.createdBySnapshot = existingCreatedBySnapshot;
     
-    // ✅ STEP 8: Add awarded by snapshot (don't overwrite existing)
     quotation.awardedBySnapshot = {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      awardedAt: new Date(),
-      awarded: awarded,
-      awardNote: awardNote?.trim() || ''
+      name: req.user.name, email: req.user.email, role: req.user.role,
+      awardedAt: new Date(), awarded: awarded, awardNote: awardNote?.trim() || ''
     };
     
     await quotation.save();
     
-    console.log('✅ After award - snapshots preserved:', {
-      opsApprovedBySnapshot: quotation.opsApprovedBySnapshot,
-      approvedBySnapshot: quotation.approvedBySnapshot,
-      awardedBySnapshot: quotation.awardedBySnapshot
-    });
-    
-    // Optional: Send notification (if you still want it)
-    if (awarded) {
-      // NotificationService.quotationAwarded(
-      //   req.user._id, 
-      //   companyId, 
-      //   quotation
-      // );
-    }
-    
-    const updated = await Quotation.findOne({ _id: quotationId, companyId })
-      .populate('customerId')
-      .populate('companyId')
-      .lean();
+    const updated = await Quotation.findOne({ _id: quotationId, companyId }).populate('customerId').populate('companyId').lean();
     
     res.status(200).json({
       success: true,
-      message: awarded 
-        ? 'Quotation awarded and synced to Zoho Books successfully' 
-        : 'Quotation marked as not awarded',
-      quotation: updated,
-      zohoEstimate: zohoEstimate || null
+      message: awarded ? 'Quotation awarded and synced to Zoho Books successfully' : 'Quotation marked as not awarded',
+      quotation: updated, zohoEstimate: zohoEstimate || null
     });
     
   } catch (err) {
     console.error('❌ Award quotation error:', err);
-    
-    res.status(500).json({ 
-      success: false,
-      message: 'Error awarding quotation', 
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Error awarding quotation', error: err.message });
   }
 };
 
-function convertHtmlToPlainText(html) {
-  if (!html) return '';
-  
-  // Remove HTML tags
-  let text = html.replace(/<[^>]*>/g, ' ');
-  
-  // Decode HTML entities
-  text = text
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-  
-   text = text.replace(/\s+/g, ' ').trim();
-  
-   text = text.replace(/(\d+\.\d+)/g, '\n  $1');
-  
-   text = text.replace(/(\d+\.)(\s+)([^\d])/g, '\n$1 $3');
-  
-   text = text.replace(/(\d+\.\s+)(?!\d)/g, '\n$1');
-  
-   text = text.replace(/(\d+\.\s+[^\n]+?)(\n\s*\d+\.\d+)/g, '$1\n$2');
-  
-   text = text.replace(/\n{3,}/g, '\n\n');
-  text = text.trim();
-  
-  return text;
-}
-
-function cleanHtmlForZoho(html) {
-  if (!html) return '';
-  
-   let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
-  cleaned = cleaned.replace(/<img[^>]*>/gi, '');
-  
-   let text = convertHtmlToPlainText(cleaned);
-  
-   if (text.length > 9500) {
-    text = text.substring(0, 9500) + '... (truncated)';
-  }
-  
-  return text;
-}
-
-
-// ─────────────────────────────────────────────────────────────
-// DELETE QUOTATION  
-// ─────────────────────────────────────────────────────────────
 exports.deleteQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation)
-      return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     const isAdmin = req.user.role === 'admin';
     const isCreator = quotation.createdBy._id.toString() === req.user.id;
 
-    if (!isAdmin && !isCreator)
-      return res.status(403).json({ message: 'Not authorized to delete this quotation' });
-
+    if (!isAdmin && !isCreator) return res.status(403).json({ message: 'Not authorized to delete this quotation' });
     if (!isAdmin && !['pending', 'ops_rejected'].includes(quotation.status))
-      return res.status(400).json({ 
-        message: `Cannot delete a quotation with status: ${quotation.status}` 
-      });
+      return res.status(400).json({ message: `Cannot delete a quotation with status: ${quotation.status}` });
 
     const jobs = [];
-    
-    quotation.items?.forEach((item) =>
-      item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); })
-    );
-    
+    quotation.items?.forEach((item) => item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); }));
     if (quotation.termsImagePublicId) jobs.push(safeDelete(quotation.termsImagePublicId));
-    
-    quotation.internalDocuments?.forEach((doc) => {
-      if (doc.publicId) {
-        const resourceType = getResourceTypeFromMime(doc.fileType);
-        jobs.push(deleteFromCloudinary(doc.publicId, resourceType));
-      }
-    });
+    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromCloudinary(doc.publicId, getResourceTypeFromMime(doc.fileType))); } });
     
     await Promise.allSettled(jobs);
-
     await Quotation.findByIdAndDelete(req.params.id);
-    res.status(200).json({ 
-      success: true,
-      message: 'Quotation deleted successfully' 
-    });
-  } catch (err) {
     
-    res.status(500).json({ 
-      success: false,
-      message: 'Error deleting quotation', 
-      error: err.message 
-    });
+    res.status(200).json({ success: true, message: 'Quotation deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error deleting quotation', error: err.message });
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GENERATE PDF
-// ─────────────────────────────────────────────────────────────
-
- 
 exports.generatePDF = async (req, res) => {
   const { html, filename = 'quotation' } = req.body;
   const startTime = Date.now();
 
-  if (!html?.trim()) {
-    return res.status(400).json({ message: 'HTML content is required' });
-  }
+  if (!html?.trim()) return res.status(400).json({ message: 'HTML content is required' });
 
   const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
   let page = null;
@@ -2231,26 +1255,14 @@ exports.generatePDF = async (req, res) => {
     });
 
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 40000 });
+    await page.evaluate(() => Promise.all([...document.images].filter((img) => !img.complete).map((img) => new Promise((res) => { img.onload = res; img.onerror = res; })))).catch(() => {});
 
-    await page.evaluate(() =>
-      Promise.all(
-        [...document.images]
-          .filter((img) => !img.complete)
-          .map((img) => new Promise((res) => { img.onload = res; img.onerror = res; }))
-      )
-    ).catch(() => {});
-
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
-    });
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' } });
 
     await page.close();
     page = null;
 
-    if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-')
-      throw new Error('Puppeteer returned an invalid PDF buffer');
+    if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-') throw new Error('Puppeteer returned an invalid PDF buffer');
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`);
@@ -2260,506 +1272,45 @@ exports.generatePDF = async (req, res) => {
     
   } catch (err) {
     if (page) await page.close().catch(() => {});
-    res.status(500).json({ 
-      success: false,
-      message: 'Error generating PDF', 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// GET DASHBOARD STATS
-// ─────────────────────────────────────────────────────────────
 exports.getDashboardStats = async (req, res) => {
   try {
     const { companyId } = req.query;
     const matchStage = companyId ? { companyId } : {};
 
-    const [
-      total,
-      byStatus,
-      byCurrency,
-      byCompany,
-      totalValueAgg,
-      monthlyStats,
-    ] = await Promise.all([
+    const [total, byStatus, byCurrency, byCompany, totalValueAgg, monthlyStats] = await Promise.all([
       Quotation.countDocuments(matchStage),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { 
-          $group: { 
-            _id: '$status', 
-            count: { $sum: 1 } 
-          } 
-        }
-      ]),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { 
-          $group: { 
-            _id: '$currency.code', 
-            count: { $sum: 1 },
-            totalValue: { $sum: '$totalInBaseCurrency' }
-          } 
-        }
-      ]),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { 
-          $group: { 
-            _id: '$companyId', 
-            count: { $sum: 1 },
-            totalValue: { $sum: '$totalInBaseCurrency' }
-          } 
-        },
-        {
-          $lookup: {
-            from: 'companies',
-            localField: '_id',
-            foreignField: '_id',
-            as: 'company'
-          }
-        },
-        {
-          $project: {
-            company: { $arrayElemAt: ['$company', 0] },
-            count: 1,
-            totalValue: 1
-          }
-        }
-      ]),
-      
-      Quotation.aggregate([
-        { 
-          $match: { 
-            ...matchStage,
-            status: { $in: ['approved', 'awarded'] } 
-          } 
-        },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalInBaseCurrency' } 
-          } 
-        },
-      ]),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        {
-          $group: {
-            _id: { 
-              year: { $year: '$createdAt' }, 
-              month: { $month: '$createdAt' }
-            },
-            count: { $sum: 1 },
-            total: { $sum: '$totalInBaseCurrency' },
-          },
-        },
-        { $sort: { '_id.year': -1, '_id.month': -1 } },
-        { $limit: 12 },
-      ]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: '$currency.code', count: { $sum: 1 }, totalValue: { $sum: '$totalInBaseCurrency' } } }]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: '$companyId', count: { $sum: 1 }, totalValue: { $sum: '$totalInBaseCurrency' } } }, { $lookup: { from: 'companies', localField: '_id', foreignField: '_id', as: 'company' } }, { $project: { company: { $arrayElemAt: ['$company', 0] }, count: 1, totalValue: 1 } }]),
+      Quotation.aggregate([{ $match: { ...matchStage, status: { $in: ['approved', 'awarded'] } } }, { $group: { _id: null, total: { $sum: '$totalInBaseCurrency' } } }]),
+      Quotation.aggregate([{ $match: matchStage }, { $group: { _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }, count: { $sum: 1 }, total: { $sum: '$totalInBaseCurrency' } } }, { $sort: { '_id.year': -1, '_id.month': -1 } }, { $limit: 12 }]),
     ]);
 
-    const counts = {
-      total,
-      draft: 0,
-      pending: 0,
-      ops_approved: 0,
-      ops_rejected: 0,
-      approved: 0,
-      rejected: 0,
-      awarded: 0,
-      not_awarded: 0,
-      sent: 0,
-    };
+    const counts = { total, draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0, approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0 };
+    byStatus.forEach(item => { counts[item._id] = item.count; });
 
-    byStatus.forEach(item => {
-      counts[item._id] = item.count;
-    });
-
-    res.json({
-      success: true,
-      counts,
-      byCurrency,
-      byCompany,
-      totalApprovedValue: totalValueAgg[0]?.total || 0,
-      monthlyStats,
-    });
+    res.json({ success: true, counts, byCurrency, byCompany, totalApprovedValue: totalValueAgg[0]?.total || 0, monthlyStats });
   } catch (err) {
-     res.status(500).json({ 
-      success: false,
-      message: 'Error fetching dashboard stats', 
-      error: err.message 
-    });
-  }
-};
-
- 
-// =============================================================
-// INTERNAL DOCUMENT CRUD OPERATIONS
-// =============================================================
-
- 
-exports.addInternalDocuments = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { documents, descriptions } = req.body;
-
-    if (!documents || !documents.length) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'No documents provided' 
-      });
-    }
-
-    const quotation = await Quotation.findById(id);
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Check authorization (creator, ops, admin can add internal docs)
-    const isAdmin = req.user.role === 'admin';
-    const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation._id.toString() === req.user.id;
-
-    if (!isAdmin && !isOps && !isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to add documents to this quotation' 
-      });
-    }
-
-    // Upload internal documents
-    const processedDocuments = await uploadMultipleInternalDocuments(
-      documents,
-      quotation.quotationNumber,
-      req.user.id
-    );
-
-    // Add descriptions if provided
-    if (descriptions && descriptions.length) {
-      processedDocuments.forEach((doc, index) => {
-        if (descriptions[index]) {
-          doc.description = descriptions[index];
-        }
-      });
-    }
-
-    // Add to quotation
-    quotation.internalDocuments = [
-      ...(quotation.internalDocuments || []), 
-      ...processedDocuments
-    ];
-    await quotation.save();
-
-    res.status(200).json({
-      success: true,
-      message: `${processedDocuments.length} internal document(s) added successfully`,
-      documents: processedDocuments
-    });
-
-  } catch (err) {
-     res.status(500).json({ 
-      success: false,
-      message: 'Error adding internal documents', 
-      error: err.message 
-    });
-  }
-};
-
- 
-exports.getInternalDocuments = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const quotation = await Quotation.findById(id)
-      .select('internalDocuments quotationNumber company.code createdBy')
-      .lean();
-
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Check authorization (internal team only)
-    const isAdmin = req.user.role === 'admin';
-    const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
-
-    if (!isAdmin && !isOps && !isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to view internal documents' 
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      quotationNumber: quotation.quotationNumber,
-      companyCode: quotation.company?.code,
-      documents: quotation.internalDocuments || [],
-      count: quotation.internalDocuments?.length || 0
-    });
-
-  } catch (err) {
-     res.status(500).json({ 
-      success: false,
-      message: 'Error fetching internal documents', 
-      error: err.message 
-    });
-  }
-};
-
- 
-exports.getInternalDocumentById = async (req, res) => {
-  try {
-    const { id, docId } = req.params;
-
-    const quotation = await Quotation.findById(id)
-      .select('internalDocuments')
-      .lean();
-
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Check authorization (internal team only)
-    const isAdmin = req.user.role === 'admin';
-    const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
-
-    if (!isAdmin && !isOps && !isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to view internal documents' 
-      });
-    }
-
-    const document = quotation.internalDocuments?.find(
-      doc => doc._id.toString() === docId
-    );
-    
-    if (!document) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Document not found' 
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      document
-    });
-
-  } catch (err) {
-     res.status(500).json({ 
-      success: false,
-      message: 'Error fetching document', 
-      error: err.message 
-    });
-  }
-};
-
- 
-exports.updateInternalDocumentDescription = async (req, res) => {
-  try {
-    const { id, docId } = req.params;
-    const { description } = req.body;
-
-    const quotation = await Quotation.findById(id);
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Only creator can update internal document descriptions
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
-
-    if (!isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Only the creator can update internal document descriptions' 
-      });
-    }
-
-    // Find and update document
-    const document = quotation.internalDocuments?.id(docId);
-    if (!document) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Document not found' 
-      });
-    }
-
-    document.description = description || '';
-    await quotation.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Internal document description updated',
-      document
-    });
-
-  } catch (err) {
-     res.status(500).json({ 
-      success: false,
-      message: 'Error updating document description', 
-      error: err.message 
-    });
-  }
-};
-
- 
-exports.removeInternalDocument = async (req, res) => {
-  try {
-    const { id, docId } = req.params;
-
-    const quotation = await Quotation.findById(id);
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Only creator can remove internal documents
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
-
-    if (!isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Only the creator can remove internal documents' 
-      });
-    }
-
-    // Find the document
-    const document = quotation.internalDocuments?.id(docId);
-    if (!document) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Document not found' 
-      });
-    }
-
-    // Delete from Cloudinary
-    await deleteInternalDocument(document);
-
-    // Remove from array
-    quotation.internalDocuments.pull(docId);
-    await quotation.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Internal document removed successfully'
-    });
-
-  } catch (err) {
-     
-    res.status(500).json({ 
-      success: false,
-      message: 'Error removing internal document', 
-      error: err.message 
-    });
-  }
-};
-
- 
-exports.getInternalDocumentDownloadUrl = async (req, res) => {
-  try {
-    const { id, docId } = req.params;
-
-    const quotation = await Quotation.findById(id);
-    if (!quotation) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quotation not found' 
-      });
-    }
-
-    // Check authorization (internal team only)
-    const isAdmin = req.user.role === 'admin';
-    const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation._id.toString() === req.user.id;
-
-    if (!isAdmin && !isOps && !isCreator) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Not authorized to download internal documents' 
-      });
-    }
-
-    const document = quotation.internalDocuments?.id(docId);
-    if (!document) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Document not found' 
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      downloadUrl: document.fileUrl,
-      fileName: document.fileName,
-      fileType: document.fileType,
-      fileSize: document.fileSize,
-      uploadedAt: document.uploadedAt,
-      uploadedBy: document.uploadedBy
-    });
-
-  } catch (err) {
-    res.status(500).json({ 
-      success: false,
-      message: 'Error getting document URL', 
-      error: err.message 
-    });
+    res.status(500).json({ success: false, message: 'Error fetching dashboard stats', error: err.message });
   }
 };
 
 exports.exportQuotationsToExcel = async (req, res) => {
   try {
-    const {
-      status,
-      fromDate,
-      toDate,
-      companyId,
-      search,
-      startDate,
-      endDate,
-    } = req.query;
+    const { status, fromDate, toDate, companyId, search, startDate, endDate } = req.query;
 
-    // =========================================================
-    // BUILD QUERY - Handle "All Companies"
-    // =========================================================
     const query = {};
 
-    // ✅ Handle companyId - skip if 'all'
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-      // Validate ObjectId format
-      const mongoose = require('mongoose');
       if (!mongoose.Types.ObjectId.isValid(companyId)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid company ID format'
-        });
+        return res.status(400).json({ success: false, message: 'Invalid company ID format' });
       }
       query.companyId = companyId;
     }
-    // If companyId is 'all' or not provided, don't add company filter
 
     if (status) {
       if (status.includes(",")) {
@@ -2774,14 +1325,8 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     if (from || to) {
       query.createdAt = {};
-
-      if (from) {
-        query.createdAt.$gte = new Date(from);
-      }
-
-      if (to) {
-        query.createdAt.$lte = new Date(to);
-      }
+      if (from) query.createdAt.$gte = new Date(from);
+      if (to) query.createdAt.$lte = new Date(to);
     }
 
     if (search?.trim()) {
@@ -2794,9 +1339,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
       ];
     }
 
-    // =========================================================
-    // FETCH DATA
-    // =========================================================
     const quotations = await Quotation.find(query)
       .sort({ createdAt: -1 })
       .populate("createdBy", "name email")
@@ -2805,511 +1347,328 @@ exports.exportQuotationsToExcel = async (req, res) => {
       .lean();
 
     if (!quotations.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No quotations found",
-      });
+      return res.status(404).json({ success: false, message: "No quotations found" });
     }
 
-    // =========================================================
-    // SUMMARY
-    // =========================================================
-    const totalRevenue = quotations.reduce(
-      (sum, q) => sum + (q.totalInBaseCurrency || 0),
-      0
-    );
+    const totalRevenue = quotations.reduce((sum, q) => sum + (q.totalInBaseCurrency || 0), 0);
+    const approvedCount = quotations.filter((q) => ["approved", "ops_approved", "awarded"].includes(q.status)).length;
+    const pendingCount = quotations.filter((q) => ["pending", "pending_admin"].includes(q.status)).length;
+    const rejectedCount = quotations.filter((q) => ["rejected", "not_awarded"].includes(q.status)).length;
 
-    const approvedCount = quotations.filter((q) =>
-      ["approved", "ops_approved", "awarded"].includes(q.status)
-    ).length;
-
-    const pendingCount = quotations.filter((q) =>
-      ["pending", "pending_admin"].includes(q.status)
-    ).length;
-
-    const rejectedCount = quotations.filter((q) =>
-      ["rejected", "not_awarded"].includes(q.status)
-    ).length;
-
-    // =========================================================
-    // WORKBOOK
-    // =========================================================
     const workbook = new ExcelJS.Workbook();
-
     workbook.creator = "Quotation Management System";
     workbook.created = new Date();
 
     const worksheet = workbook.addWorksheet("Quotations", {
-      pageSetup: {
-        orientation: "landscape",
-        fitToPage: true,
-        fitToWidth: 1,
-        fitToHeight: 0,
-      },
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     });
 
-    // =========================================================
-    // TITLE
-    // =========================================================
     worksheet.mergeCells("A1:X1");
-
     const titleCell = worksheet.getCell("A1");
-
     titleCell.value = "QUOTATIONS REPORT";
-
-    titleCell.font = {
-      size: 20,
-      bold: true,
-      color: { argb: "FFFFFFFF" },
-    };
-
-    titleCell.alignment = {
-      horizontal: "center",
-      vertical: "middle",
-    };
-
-    titleCell.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF111827" },
-    };
-
+    titleCell.font = { size: 20, bold: true, color: { argb: "FFFFFFFF" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+    titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
     worksheet.getRow(1).height = 30;
 
-    // =========================================================
-    // REPORT INFO
-    // =========================================================
     worksheet.mergeCells("A2:D2");
-    worksheet.getCell("A2").value =
-      `Generated: ${new Date().toLocaleString()}`;
-
+    worksheet.getCell("A2").value = `Generated: ${new Date().toLocaleString()}`;
     worksheet.mergeCells("E2:H2");
-    worksheet.getCell("E2").value =
-      `Total Quotations: ${quotations.length}`;
-
+    worksheet.getCell("E2").value = `Total Quotations: ${quotations.length}`;
     worksheet.mergeCells("I2:L2");
-    worksheet.getCell("I2").value =
-      `Approved: ${approvedCount}`;
-
+    worksheet.getCell("I2").value = `Approved: ${approvedCount}`;
     worksheet.mergeCells("M2:P2");
-    worksheet.getCell("M2").value =
-      `Pending: ${pendingCount}`;
-
+    worksheet.getCell("M2").value = `Pending: ${pendingCount}`;
     worksheet.mergeCells("Q2:T2");
-    worksheet.getCell("Q2").value =
-      `Rejected: ${rejectedCount}`;
-
+    worksheet.getCell("Q2").value = `Rejected: ${rejectedCount}`;
     worksheet.mergeCells("U2:X2");
-    worksheet.getCell("U2").value =
-      `Revenue AED: ${totalRevenue.toLocaleString()}`;
+    worksheet.getCell("U2").value = `Revenue AED: ${totalRevenue.toLocaleString()}`;
 
-    [
-      "A2",
-      "E2",
-      "I2",
-      "M2",
-      "Q2",
-      "U2",
-    ].forEach((cell) => {
-      worksheet.getCell(cell).font = {
-        bold: true,
-        size: 10,
-      };
-
-      worksheet.getCell(cell).fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FFF3F4F6" },
-      };
-
-      worksheet.getCell(cell).border = {
-        top: { style: "thin", color: { argb: "FFE5E7EB" } },
-        left: { style: "thin", color: { argb: "FFE5E7EB" } },
-        bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
-        right: { style: "thin", color: { argb: "FFE5E7EB" } },
-      };
+    ["A2", "E2", "I2", "M2", "Q2", "U2"].forEach((cell) => {
+      worksheet.getCell(cell).font = { bold: true, size: 10 };
+      worksheet.getCell(cell).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+      worksheet.getCell(cell).border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     });
 
-    // =========================================================
-    // EMPTY ROW
-    // =========================================================
     worksheet.addRow([]);
 
-    // =========================================================
-    // COLUMNS
-    // =========================================================
     worksheet.columns = [
-      { key: "slNo", width: 10 },
-      { key: "quotationNumber", width: 25 },
-      { key: "company", width: 30 },
-      { key: "customerName", width: 30 },
-      { key: "customerEmail", width: 30 },
-      { key: "customerPhone", width: 20 },
-      { key: "contact", width: 25 },
-      { key: "projectName", width: 40 },
-      { key: "date", width: 15 },
-      { key: "expiryDate", width: 15 },
-      { key: "queryDate", width: 15 },
-      { key: "total", width: 18 },
-      { key: "currency", width: 12 },
-      { key: "totalInAED", width: 20 },
-      { key: "taxPercent", width: 12 },
-      { key: "discountPercent", width: 14 },
-      { key: "status", width: 18 },
-      { key: "createdBy", width: 25 },
-      { key: "createdAt", width: 22 },
-      { key: "itemsCount", width: 14 },
-      { key: "paymentTerms", width: 30 },
-      { key: "deliveryTerms", width: 30 },
-      { key: "tl", width: 15 },
-      { key: "trn", width: 20 },
+      { key: "slNo", width: 10 }, { key: "quotationNumber", width: 25 }, { key: "company", width: 30 },
+      { key: "customerName", width: 30 }, { key: "customerEmail", width: 30 }, { key: "customerPhone", width: 20 },
+      { key: "contact", width: 25 }, { key: "projectName", width: 40 }, { key: "date", width: 15 },
+      { key: "expiryDate", width: 15 }, { key: "queryDate", width: 15 }, { key: "total", width: 18 },
+      { key: "currency", width: 12 }, { key: "totalInAED", width: 20 }, { key: "taxPercent", width: 12 },
+      { key: "discountPercent", width: 14 }, { key: "status", width: 18 }, { key: "createdBy", width: 25 },
+      { key: "createdAt", width: 22 }, { key: "itemsCount", width: 14 }, { key: "paymentTerms", width: 30 },
+      { key: "deliveryTerms", width: 30 }, { key: "tl", width: 15 }, { key: "trn", width: 20 },
     ];
 
-    // =========================================================
-    // HEADER ROW
-    // =========================================================
     const headerRow = worksheet.addRow([
-      "SL No",
-      "Quotation Number",
-      "Company",
-      "Customer Name",
-      "Customer Email",
-      "Customer Phone",
-      "Contact Person",
-      "Project Name",
-      "Date",
-      "Expiry Date",
-      "Query Date",
-      "Total Amount",
-      "Currency",
-      "Total in AED",
-      "Tax %",
-      "Discount %",
-      "Status",
-      "Created By",
-      "Created At",
-      "Items Count",
-      "Payment Terms",
-      "Delivery Terms",
-      "TL",
-      "TRN",
+      "SL No", "Quotation Number", "Company", "Customer Name", "Customer Email", "Customer Phone",
+      "Contact Person", "Project Name", "Date", "Expiry Date", "Query Date", "Total Amount",
+      "Currency", "Total in AED", "Tax %", "Discount %", "Status", "Created By", "Created At",
+      "Items Count", "Payment Terms", "Delivery Terms", "TL", "TRN"
     ]);
 
     headerRow.height = 30;
-
     headerRow.eachCell((cell) => {
-      cell.font = {
-        bold: true,
-        size: 11,
-        color: { argb: "FFFFFFFF" },
-      };
-
-      cell.alignment = {
-        horizontal: "center",
-        vertical: "middle",
-        wrapText: true,
-      };
-
-      cell.fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FF2563EB" },
-      };
-
-      cell.border = {
-        top: { style: "thin", color: { argb: "FFFFFFFF" } },
-        left: { style: "thin", color: { argb: "FFFFFFFF" } },
-        bottom: { style: "thin", color: { argb: "FFFFFFFF" } },
-        right: { style: "thin", color: { argb: "FFFFFFFF" } },
-      };
+      cell.font = { bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+      cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     });
 
-    // =========================================================
-    // DATA ROWS
-    // =========================================================
     quotations.forEach((q, index) => {
       const row = worksheet.addRow({
         slNo: index + 1,
-
         quotationNumber: q.quotationNumber || "",
-
-        company:
-          q.companySnapshot?.name ||
-          q.companyId?.name ||
-          "",
-
-        customerName:
-          q.customerSnapshot?.name ||
-          q.customerId?.name ||
-          "",
-
-        customerEmail:
-          q.customerSnapshot?.email ||
-          q.customerId?.email ||
-          "",
-
-        customerPhone:
-          q.customerSnapshot?.phone ||
-          q.customerId?.phone ||
-          "",
-
+        company: q.companySnapshot?.name || q.companyId?.name || "",
+        customerName: q.customerSnapshot?.name || q.customerId?.name || "",
+        customerEmail: q.customerSnapshot?.email || q.customerId?.email || "",
+        customerPhone: q.customerSnapshot?.phone || q.customerId?.phone || "",
         contact: q.contact || "",
-
         projectName: q.projectName || "",
-
-        date: q.date
-          ? new Date(q.date).toLocaleDateString()
-          : "",
-
-        expiryDate: q.expiryDate
-          ? new Date(q.expiryDate).toLocaleDateString()
-          : "",
-
-        queryDate: q.queryDate
-          ? new Date(q.queryDate).toLocaleDateString()
-          : "",
-
+        date: q.date ? new Date(q.date).toLocaleDateString() : "",
+        expiryDate: q.expiryDate ? new Date(q.expiryDate).toLocaleDateString() : "",
+        queryDate: q.queryDate ? new Date(q.queryDate).toLocaleDateString() : "",
         total: q.total || 0,
-
         currency: q.currency?.code || "AED",
-
         totalInAED: q.totalInBaseCurrency || 0,
-
         taxPercent: q.taxPercent || 0,
-
         discountPercent: q.discountPercent || 0,
-
         status: q.status || "",
-
-        createdBy:
-          q.createdBy?.name ||
-          q.createdBySnapshot?.name ||
-          "",
-
-        createdAt: q.createdAt
-          ? new Date(q.createdAt).toLocaleString()
-          : "",
-
+        createdBy: q.createdBy?.name || q.createdBySnapshot?.name || "",
+        createdAt: q.createdAt ? new Date(q.createdAt).toLocaleString() : "",
         itemsCount: q.items?.length || 0,
-
         paymentTerms: q.paymentTerms || "",
-
         deliveryTerms: q.deliveryTerms || "",
-
         tl: q.tl || "",
-
         trn: q.trn || "",
       });
 
       row.height = 24;
-
       row.eachCell((cell) => {
-        cell.border = {
-          top: { style: "thin", color: { argb: "FFE5E7EB" } },
-          left: { style: "thin", color: { argb: "FFE5E7EB" } },
-          bottom: { style: "thin", color: { argb: "FFE5E7EB" } },
-          right: { style: "thin", color: { argb: "FFE5E7EB" } },
-        };
-
-        cell.alignment = {
-          vertical: "middle",
-          horizontal: "left",
-        };
+        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+        cell.alignment = { vertical: "middle", horizontal: "left" };
       });
 
-      // Zebra rows
       if (index % 2 === 0) {
-        row.eachCell((cell) => {
-          cell.fill = {
-            type: "pattern",
-            pattern: "solid",
-            fgColor: { argb: "FFF9FAFB" },
-          };
-        });
+        row.eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; });
       }
 
-      // Number formatting
       row.getCell("total").numFmt = '#,##0.00';
       row.getCell("totalInAED").numFmt = '"AED" #,##0.00';
 
-      // Status styling
       const statusCell = row.getCell("status");
-
-      if (
-        q.status === "approved" ||
-        q.status === "ops_approved"
-      ) {
-        statusCell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFD1FAE5" },
-        };
-
-        statusCell.font = {
-          bold: true,
-          color: { argb: "FF065F46" },
-        };
-      }
-      else if (
-        q.status === "pending" ||
-        q.status === "pending_admin"
-      ) {
-        statusCell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFEF3C7" },
-        };
-
-        statusCell.font = {
-          bold: true,
-          color: { argb: "FF92400E" },
-        };
-      }
-      else if (
-        q.status === "rejected" ||
-        q.status === "not_awarded"
-      ) {
-        statusCell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFFEE2E2" },
-        };
-
-        statusCell.font = {
-          bold: true,
-          color: { argb: "FF991B1B" },
-        };
-      }
-      else if (q.status === "awarded") {
-        statusCell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: "FFDBEAFE" },
-        };
-
-        statusCell.font = {
-          bold: true,
-          color: { argb: "FF1E40AF" },
-        };
+      if (q.status === "approved" || q.status === "ops_approved") {
+        statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+        statusCell.font = { bold: true, color: { argb: "FF065F46" } };
+      } else if (q.status === "pending" || q.status === "pending_admin") {
+        statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+        statusCell.font = { bold: true, color: { argb: "FF92400E" } };
+      } else if (q.status === "rejected" || q.status === "not_awarded") {
+        statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+        statusCell.font = { bold: true, color: { argb: "FF991B1B" } };
+      } else if (q.status === "awarded") {
+        statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDBEAFE" } };
+        statusCell.font = { bold: true, color: { argb: "FF1E40AF" } };
       }
     });
 
-    // =========================================================
-    // TOTAL ROW
-    // =========================================================
-    const totalRow = worksheet.addRow({
-      status: "TOTAL",
-      totalInAED: {
-        formula: `SUM(N5:N${quotations.length + 4})`,
-      },
-    });
-
+    const totalRow = worksheet.addRow({ status: "TOTAL", totalInAED: { formula: `SUM(N5:N${quotations.length + 4})` } });
     totalRow.height = 26;
-
-    totalRow.font = {
-      bold: true,
-    };
-
-    totalRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFE5E7EB" },
-    };
-
+    totalRow.font = { bold: true };
+    totalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
     totalRow.getCell("totalInAED").numFmt = '"AED" #,##0.00';
 
-    // =========================================================
-    // AUTO FILTER
-    // =========================================================
-    worksheet.autoFilter = {
-      from: "A4",
-      to: "X4",
-    };
+    worksheet.autoFilter = { from: "A4", to: "X4" };
+    worksheet.views = [{ state: "frozen", ySplit: 4 }];
 
-    // =========================================================
-    // FREEZE HEADER
-    // =========================================================
-    worksheet.views = [
-      {
-        state: "frozen",
-        ySplit: 4,
-      },
-    ];
-
-    // =========================================================
-    // ANALYTICS SHEET
-    // =========================================================
     const analyticsSheet = workbook.addWorksheet("Analytics");
-
-    analyticsSheet.columns = [
-      { header: "Metric", key: "metric", width: 35 },
-      { header: "Value", key: "value", width: 25 },
-    ];
-
-    analyticsSheet.getRow(1).font = {
-      bold: true,
-      color: { argb: "FFFFFFFF" },
-    };
-
-    analyticsSheet.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF111827" },
-    };
-
+    analyticsSheet.columns = [{ header: "Metric", key: "metric", width: 35 }, { header: "Value", key: "value", width: 25 }];
+    analyticsSheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    analyticsSheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
     analyticsSheet.addRows([
-      {
-        metric: "Total Quotations",
-        value: quotations.length,
-      },
-      {
-        metric: "Approved Quotations",
-        value: approvedCount,
-      },
-      {
-        metric: "Pending Quotations",
-        value: pendingCount,
-      },
-      {
-        metric: "Rejected Quotations",
-        value: rejectedCount,
-      },
-      {
-        metric: "Total Revenue (AED)",
-        value: totalRevenue,
-      },
+      { metric: "Total Quotations", value: quotations.length },
+      { metric: "Approved Quotations", value: approvedCount },
+      { metric: "Pending Quotations", value: pendingCount },
+      { metric: "Rejected Quotations", value: rejectedCount },
+      { metric: "Total Revenue (AED)", value: totalRevenue },
     ]);
-
     analyticsSheet.getColumn("value").numFmt = '#,##0.00';
 
-    // =========================================================
-    // EXPORT FILE
-    // =========================================================
     const buffer = await workbook.xlsx.writeBuffer();
-
     const fileName = `quotations_export_${new Date().toISOString().split("T")[0]}.xlsx`;
 
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=${fileName}`
-    );
-
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
     res.setHeader("Content-Length", buffer.length);
-
     return res.send(buffer);
 
   } catch (error) {
     console.error("Export error:", error);
+    return res.status(500).json({ success: false, message: "Error exporting quotations", error: error.message });
+  }
+};
 
-    return res.status(500).json({
-      success: false,
-      message: "Error exporting quotations",
-      error: error.message,
+// =============================================================
+// INTERNAL DOCUMENT CRUD OPERATIONS
+// =============================================================
+
+exports.addInternalDocuments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { documents, descriptions } = req.body;
+
+    if (!documents || !documents.length) {
+      return res.status(400).json({ success: false, message: 'No documents provided' });
+    }
+
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    const isCreator = quotation._id.toString() === req.user.id;
+
+    if (!isAdmin && !isOps && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Not authorized to add documents to this quotation' });
+    }
+
+    const processedDocuments = await uploadMultipleInternalDocuments(
+      documents,
+      quotation.quotationNumber,
+      req.user.id
+    );
+
+    if (descriptions && descriptions.length) {
+      processedDocuments.forEach((doc, index) => {
+        if (descriptions[index]) doc.description = descriptions[index];
+      });
+    }
+
+    quotation.internalDocuments = [...(quotation.internalDocuments || []), ...processedDocuments];
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: `${processedDocuments.length} internal document(s) added successfully`, documents: processedDocuments });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error adding internal documents', error: err.message });
+  }
+};
+
+exports.getInternalDocuments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const quotation = await Quotation.findById(id).select('internalDocuments quotationNumber company.code createdBy').lean();
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+
+    if (!isAdmin && !isOps && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
+    }
+
+    res.status(200).json({
+      success: true,
+      quotationNumber: quotation.quotationNumber,
+      companyCode: quotation.company?.code,
+      documents: quotation.internalDocuments || [],
+      count: quotation.internalDocuments?.length || 0
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error fetching internal documents', error: err.message });
+  }
+};
+
+exports.getInternalDocumentById = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const quotation = await Quotation.findById(id).select('internalDocuments').lean();
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+
+    if (!isAdmin && !isOps && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
+    }
+
+    const document = quotation.internalDocuments?.find(doc => doc._id.toString() === docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    res.status(200).json({ success: true, document });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error fetching document', error: err.message });
+  }
+};
+
+exports.updateInternalDocumentDescription = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const { description } = req.body;
+
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    if (!isCreator) return res.status(403).json({ success: false, message: 'Only the creator can update internal document descriptions' });
+
+    const document = quotation.internalDocuments?.id(docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    document.description = description || '';
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: 'Internal document description updated', document });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error updating document description', error: err.message });
+  }
+};
+
+exports.removeInternalDocument = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    if (!isCreator) return res.status(403).json({ success: false, message: 'Only the creator can remove internal documents' });
+
+    const document = quotation.internalDocuments?.id(docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    await deleteInternalDocument(document);
+    quotation.internalDocuments.pull(docId);
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: 'Internal document removed successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error removing internal document', error: err.message });
+  }
+};
+
+exports.getInternalDocumentDownloadUrl = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    const isCreator = quotation._id.toString() === req.user.id;
+
+    if (!isAdmin && !isOps && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Not authorized to download internal documents' });
+    }
+
+    const document = quotation.internalDocuments?.id(docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    res.status(200).json({ success: true, downloadUrl: document.fileUrl, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, uploadedAt: document.uploadedAt, uploadedBy: document.uploadedBy });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error getting document URL', error: err.message });
   }
 };

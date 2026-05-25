@@ -1,5 +1,6 @@
 const User = require('../models/user');
 const jwt = require('jsonwebtoken');
+const logger = require('../config/logger');
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -50,6 +51,13 @@ exports.register = async (req, res) => {
       role
     });
 
+    logger.info(`New user registered: ${email} (${role})`, {
+      userId: user._id,
+      email: user.email,
+      role: user.role,
+      ip: req.ip
+    });
+
     res.status(201).json({
       _id: user._id,
       name: user.name,
@@ -59,6 +67,10 @@ exports.register = async (req, res) => {
       token: generateToken(user._id)
     });
   } catch (error) {
+    logger.error(`Registration failed for ${req.body.email}`, {
+      error: error.message,
+      ip: req.ip
+    });
     res.status(500).json({ message: 'Error registering user', error: error.message });
   }
 };
@@ -72,15 +84,24 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email }).select('+password');
     
     if (!user || !(await user.comparePassword(password))) {
+      logger.warn(`Failed login attempt for ${email}`, { ip: req.ip });
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
     if (!user.isActive) {
+      logger.warn(`Deactivated account login attempt: ${email}`, { ip: req.ip });
       return res.status(401).json({ message: 'Account is deactivated. Contact admin.' });
     }
 
     user.lastLogin = new Date();
     await user.save({ validateBeforeSave: false });
+
+    logger.info(`User logged in: ${email} (${user.role})`, {
+      userId: user._id,
+      email: user.email,
+      role: user.role,
+      ip: req.ip
+    });
 
     res.json({
       _id: user._id,
@@ -91,6 +112,10 @@ exports.login = async (req, res) => {
       token: generateToken(user._id)
     });
   } catch (error) {
+    logger.error(`Login error for ${req.body.email}`, {
+      error: error.message,
+      ip: req.ip
+    });
     res.status(500).json({ message: 'Error logging in', error: error.message });
   }
 };
@@ -127,6 +152,12 @@ exports.resetPasswordWithToken = async (req, res) => {
     user.passwordResetExpires = undefined;
     await user.save();
 
+    logger.info(`Password reset completed for user: ${user.email}`, {
+      userId: user._id,
+      email: user.email,
+      ip: req.ip
+    });
+
     res.json({
       message: 'Password reset successfully',
       token: generateToken(user._id),
@@ -139,6 +170,7 @@ exports.resetPasswordWithToken = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`Password reset error`, { error: error.message, ip: req.ip });
     res.status(500).json({ message: 'Error resetting password', error: error.message });
   }
 };
@@ -182,6 +214,12 @@ exports.updateDetails = async (req, res) => {
       runValidators: true
     });
 
+    logger.info(`User profile updated: ${user.email}`, {
+      userId: user._id,
+      email: user.email,
+      updatedFields: Object.keys(fieldsToUpdate)
+    });
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: 'Error updating profile', error: error.message });
@@ -206,6 +244,11 @@ exports.updatePassword = async (req, res) => {
 
     user.password = newPassword;
     await user.save();
+
+    logger.info(`Password changed for user: ${user.email}`, {
+      userId: user._id,
+      email: user.email
+    });
 
     res.json({ message: 'Password updated successfully' });
   } catch (error) {
@@ -232,6 +275,11 @@ exports.forceChangePassword = async (req, res) => {
     user.password = newPassword;
     user.mustChangePassword = false;
     await user.save();
+
+    logger.info(`Force password change completed for user: ${user.email}`, {
+      userId: user._id,
+      email: user.email
+    });
 
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
@@ -289,6 +337,9 @@ exports.adminUpdateUser = async (req, res) => {
       return res.status(400).json({ message: 'Phone number already in use' });
     }
 
+    const oldRole = user.role;
+    const oldStatus = user.isActive;
+
     // Update fields
     if (name) user.name = name;
     if (email) user.email = email;
@@ -297,6 +348,16 @@ exports.adminUpdateUser = async (req, res) => {
     if (isActive !== undefined) user.isActive = isActive;
 
     await user.save();
+
+    logger.info(`User updated by admin: ${user.email}`, {
+      userId: user._id,
+      updatedBy: req.user.id,
+      changes: {
+        role: oldRole !== user.role ? { from: oldRole, to: user.role } : undefined,
+        status: oldStatus !== user.isActive ? { from: oldStatus, to: user.isActive } : undefined,
+        email: email !== user.email ? { from: user.email, to: email } : undefined
+      }
+    });
 
     res.json({
       message: 'User updated successfully',
@@ -310,6 +371,11 @@ exports.adminUpdateUser = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`Admin user update failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error updating user', error: error.message });
   }
 };
@@ -329,8 +395,21 @@ exports.deleteUser = async (req, res) => {
     }
 
     await user.deleteOne();
+    
+    logger.warn(`User deleted by admin: ${user.email}`, {
+      userId: user._id,
+      deletedBy: req.user.id,
+      userEmail: user.email,
+      userRole: user.role
+    });
+
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
+    logger.error(`User deletion failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error deleting user', error: error.message });
   }
 };
@@ -345,8 +424,16 @@ exports.toggleUserStatus = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const oldStatus = user.isActive;
     user.isActive = !user.isActive;
     await user.save();
+
+    logger.info(`User status toggled by admin: ${user.email}`, {
+      userId: user._id,
+      toggledBy: req.user.id,
+      oldStatus,
+      newStatus: user.isActive
+    });
 
     res.json({ 
       message: `User ${user.isActive ? 'activated' : 'deactivated'} successfully`,
@@ -359,6 +446,11 @@ exports.toggleUserStatus = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`User status toggle failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error toggling user status', error: error.message });
   }
 };
@@ -379,8 +471,16 @@ exports.changeUserRole = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const oldRole = user.role;
     user.role = role;
     await user.save();
+
+    logger.info(`User role changed by admin: ${user.email}`, {
+      userId: user._id,
+      changedBy: req.user.id,
+      oldRole,
+      newRole: role
+    });
 
     res.json({ 
       message: `User role changed to ${role}`,
@@ -393,6 +493,11 @@ exports.changeUserRole = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`Role change failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error changing user role', error: error.message });
   }
 };
@@ -417,6 +522,12 @@ exports.setUserPassword = async (req, res) => {
     user.passwordResetExpires = undefined;
     await user.save();
 
+    logger.info(`Password set by admin for user: ${user.email}`, {
+      userId: user._id,
+      setBy: req.user.id,
+      targetUser: user.email
+    });
+
     res.json({
       message: `Password updated for ${user.name}`,
       user: {
@@ -427,6 +538,11 @@ exports.setUserPassword = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`Admin password set failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error setting password', error: error.message });
   }
 };
@@ -449,6 +565,12 @@ exports.generateTemporaryPassword = async (req, res) => {
     user.passwordResetExpires = undefined;
     await user.save();
 
+    logger.info(`Temporary password generated for user: ${user.email}`, {
+      userId: user._id,
+      generatedBy: req.user.id,
+      targetUser: user.email
+    });
+
     res.json({
       message: `Temporary password generated for ${user.name}`,
       tempPassword,
@@ -460,6 +582,11 @@ exports.generateTemporaryPassword = async (req, res) => {
       }
     });
   } catch (error) {
+    logger.error(`Temp password generation failed`, {
+      error: error.message,
+      userId: req.params.id,
+      adminId: req.user.id
+    });
     res.status(500).json({ message: 'Error generating temp password', error: error.message });
   }
 };

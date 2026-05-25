@@ -162,11 +162,9 @@ const PDFOptionsDropdown = ({ onSelect, onClose, isExporting }) => {
         onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
         onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
       >
-        <span style={{ fontSize: '1.2rem' }}>💰</span>
-        <div>
+         <div>
           <div style={{ fontWeight: '600' }}>With Total Amount</div>
-          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Includes pricing and totals</div>
-        </div>
+         </div>
       </button>
       <button
         onClick={() => onSelect('without_total')}
@@ -174,11 +172,9 @@ const PDFOptionsDropdown = ({ onSelect, onClose, isExporting }) => {
         onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
         onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
       >
-        <span style={{ fontSize: '1.2rem' }}>📄</span>
-        <div>
+         <div>
           <div style={{ fontWeight: '600' }}>Without Total Amount</div>
-          <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Excludes pricing and totals</div>
-        </div>
+         </div>
       </button>
     </div>
   );

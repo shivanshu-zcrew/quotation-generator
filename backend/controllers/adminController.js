@@ -1,5 +1,8 @@
 const { Quotation } = require('../models/quotation');
 const mongoose = require('mongoose');
+const logger = require('../config/logger');
+const LoggerHelper = require('../utils/loggerHelper');
+const { Customer } = require('../models/customer');
 
 // ─────────────────────────────────────────────────────────────
 // Shared populate helper
@@ -7,7 +10,7 @@ const mongoose = require('mongoose');
 const fullPopulate = (q) =>
   q
     .populate('customerId', 'name email phone address')
-     .populate('createdBy', 'name email')
+    .populate('createdBy', 'name email')
     .populate('opsApprovedBy', 'name email')
     .populate('approvedBy', 'name email')
     .populate('awardedBy', 'name email');
@@ -51,21 +54,51 @@ const sanitizeQuotation = (q) => {
 // ═══════════════════════════════════════════════════════════════
 
 exports.getOpsPendingQuotations = async (req, res) => {
+  const startTime = Date.now();
   try {
+    logger.debug('Fetching ops pending quotations', {
+      userId: req.user?.id,
+      companyId: req.headers['x-company-id']
+    });
+
     const quotations = await fullPopulate(
       Quotation.find({ status: 'pending' }).sort({ createdAt: -1 })
     ).lean();
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logDBQuery('Quotation', 'find', { status: 'pending' }, duration);
+    logger.info(`Fetched ${sanitizedQuotations.length} pending quotations for ops`, {
+      count: sanitizedQuotations.length,
+      userId: req.user?.id,
+      duration: `${duration}ms`
+    });
+
     res.json(sanitizedQuotations);
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getOpsPendingQuotations', error, req);
+    logger.error('Error fetching ops pending quotations', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error fetching pending quotations', error: error.message });
   }
 };
 
 exports.getAllOpsQuotations = async (req, res) => {
+  const startTime = Date.now();
   try {
     const { status, search, fromDate, toDate } = req.query;
+    
+    logger.debug('Fetching all ops quotations with filters', {
+      filters: { status, search, fromDate, toDate },
+      userId: req.user?.id,
+      companyId: req.headers['x-company-id']
+    });
     
     const query = {
       status: { $in: ['pending', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] }
@@ -104,6 +137,15 @@ exports.getAllOpsQuotations = async (req, res) => {
       awarded: sanitizedQuotations.filter(q => q.status === 'awarded').length,
     };
     
+    const duration = Date.now() - startTime;
+    LoggerHelper.logDBQuery('Quotation', 'find with filters', query, duration);
+    logger.info(`Fetched ${sanitizedQuotations.length} quotations for ops`, {
+      count: sanitizedQuotations.length,
+      filters: { status, search, fromDate, toDate },
+      counts,
+      duration: `${duration}ms`
+    });
+    
     res.json({
       success: true,
       quotations: sanitizedQuotations,
@@ -111,25 +153,45 @@ exports.getAllOpsQuotations = async (req, res) => {
       total: sanitizedQuotations.length
     });
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getAllOpsQuotations', error, req);
+    logger.error('Error fetching ops quotations', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error fetching quotations', error: error.message });
   }
 };
 
 exports.opsApproveQuotation = async (req, res) => {
+  const startTime = Date.now();
   try {
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation) {
+      logger.warn(`Quotation not found for ops approval: ${req.params.id}`, {
+        quotationId: req.params.id,
+        userId: req.user?.id
+      });
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
 
     if (quotation.status !== 'pending') {
+      logger.warn(`Cannot approve quotation with status ${quotation.status}`, {
+        quotationId: quotation._id,
+        currentStatus: quotation.status,
+        userId: req.user?.id
+      });
       return res.status(400).json({ message: `Cannot approve. Current status: ${quotation.status}` });
     }
 
+    const oldStatus = quotation.status;
     quotation.status = 'ops_approved';
     quotation.opsApprovedBy = req.user.id;
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = '';
 
-    // ✅ Fix: Update opsApprovedBySnapshot properly
     quotation.opsApprovedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
@@ -140,6 +202,22 @@ exports.opsApproveQuotation = async (req, res) => {
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logOperation('Ops Approve Quotation', {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      oldStatus,
+      newStatus: 'ops_approved'
+    }, req);
+    
+    logger.info(`Quotation ${quotation.quotationNumber} approved by ops manager`, {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      userId: req.user?.id,
+      userName: req.user?.name,
+      duration: `${duration}ms`
+    });
 
     res.json({
       success: true,
@@ -147,24 +225,43 @@ exports.opsApproveQuotation = async (req, res) => {
       quotation: sanitizeQuotation(updated),
     });
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('opsApproveQuotation', error, req);
+    logger.error('Error in ops approval', {
+      error: error.message,
+      stack: error.stack,
+      quotationId: req.params.id,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error approving quotation', error: error.message });
   }
 };
 
 exports.opsRejectQuotation = async (req, res) => {
+  const startTime = Date.now();
   try {
     const { reason } = req.body;
-    if (!reason?.trim()) return res.status(400).json({ message: 'Rejection reason is required' });
+    if (!reason?.trim()) {
+      logger.warn('Ops rejection missing reason', { userId: req.user?.id });
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
 
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation) {
+      logger.warn(`Quotation not found for ops rejection: ${req.params.id}`, {
+        quotationId: req.params.id,
+        userId: req.user?.id
+      });
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
 
+    const oldStatus = quotation.status;
     quotation.status = 'ops_rejected';
     quotation.opsApprovedBy = req.user.id;
     quotation.opsApprovedAt = new Date();
     quotation.opsRejectionReason = reason.trim();
 
-    // ✅ Fix: Update opsApprovedBySnapshot properly for rejection
     quotation.opsApprovedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
@@ -175,6 +272,24 @@ exports.opsRejectQuotation = async (req, res) => {
     await quotation.save();
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logOperation('Ops Reject Quotation', {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      oldStatus,
+      newStatus: 'ops_rejected',
+      reason: reason.trim()
+    }, req);
+    
+    logger.warn(`Quotation ${quotation.quotationNumber} rejected by ops manager`, {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      reason: reason.trim(),
+      userId: req.user?.id,
+      userName: req.user?.name,
+      duration: `${duration}ms`
+    });
 
     res.json({
       success: true,
@@ -182,6 +297,15 @@ exports.opsRejectQuotation = async (req, res) => {
       quotation: sanitizeQuotation(updated),
     });
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('opsRejectQuotation', error, req);
+    logger.error('Error in ops rejection', {
+      error: error.message,
+      stack: error.stack,
+      quotationId: req.params.id,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error rejecting quotation', error: error.message });
   }
 };
@@ -191,32 +315,73 @@ exports.opsRejectQuotation = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 exports.getPendingQuotations = async (req, res) => {
+  const startTime = Date.now();
   try {
+    logger.debug('Fetching pending quotations for admin approval', {
+      userId: req.user?.id,
+      companyId: req.headers['x-company-id']
+    });
+
     const quotations = await fullPopulate(
       Quotation.find({ status: 'ops_approved' }).sort({ createdAt: -1 })
     ).lean();
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logDBQuery('Quotation', 'find', { status: 'ops_approved' }, duration);
+    logger.info(`Fetched ${sanitizedQuotations.length} quotations pending admin approval`, {
+      count: sanitizedQuotations.length,
+      userId: req.user?.id,
+      duration: `${duration}ms`
+    });
+
     res.json(sanitizedQuotations);
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getPendingQuotations', error, req);
+    logger.error('Error fetching pending quotations for admin', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error fetching pending quotations', error: error.message });
   }
 };
 
 exports.approveQuotation = async (req, res) => {
+  const startTime = Date.now();
   try {
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation) {
+      logger.warn(`Quotation not found for admin approval: ${req.params.id}`, {
+        quotationId: req.params.id,
+        userId: req.user?.id
+      });
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to approve quotation`, {
+        userId: req.user?.id,
+        userRole: req.user?.role,
+        quotationId: quotation._id
+      });
       return res.status(403).json({ message: 'Only admin can approve quotation' });
     }
 
     const allowedStatuses = ['ops_approved', 'pending_admin'];
     if (!allowedStatuses.includes(quotation.status)) {
+      logger.warn(`Cannot approve quotation with status ${quotation.status}`, {
+        quotationId: quotation._id,
+        currentStatus: quotation.status,
+        userId: req.user?.id
+      });
       return res.status(400).json({ message: `Quotation cannot be approved in current status: ${quotation.status}` });
     }
 
+    const oldStatus = quotation.status;
     quotation.status = 'approved';
     quotation.approvedBy = req.user.id;
     quotation.approvedAt = new Date();
@@ -232,6 +397,22 @@ exports.approveQuotation = async (req, res) => {
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const sanitized = sanitizeQuotation(updated);
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logOperation('Admin Approve Quotation', {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      oldStatus,
+      newStatus: 'approved'
+    }, req);
+    
+    logger.info(`Quotation ${quotation.quotationNumber} approved by admin`, {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      adminId: req.user?.id,
+      adminName: req.user?.name,
+      duration: `${duration}ms`
+    });
 
     res.json({
       success: true,
@@ -239,22 +420,47 @@ exports.approveQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('approveQuotation', error, req);
+    logger.error('Error in admin approval', {
+      error: error.message,
+      stack: error.stack,
+      quotationId: req.params.id,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error approving quotation', error: error.message });
   }
 };
 
 exports.rejectQuotation = async (req, res) => {
+  const startTime = Date.now();
   try {
     const { reason } = req.body;
-    if (!reason?.trim()) return res.status(400).json({ message: 'Rejection reason is required' });
+    if (!reason?.trim()) {
+      logger.warn('Admin rejection missing reason', { userId: req.user?.id });
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
 
     const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
+    if (!quotation) {
+      logger.warn(`Quotation not found for admin rejection: ${req.params.id}`, {
+        quotationId: req.params.id,
+        userId: req.user?.id
+      });
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
 
     if (!['pending', 'ops_approved', 'pending_admin'].includes(quotation.status)) {
+      logger.warn(`Cannot reject quotation with status ${quotation.status}`, {
+        quotationId: quotation._id,
+        currentStatus: quotation.status,
+        userId: req.user?.id
+      });
       return res.status(400).json({ message: `Quotation cannot be rejected. Current status: ${quotation.status}` });
     }
 
+    const oldStatus = quotation.status;
     quotation.status = 'rejected';
     quotation.rejectionReason = reason.trim();
     quotation.approvedBy = req.user.id;
@@ -271,6 +477,24 @@ exports.rejectQuotation = async (req, res) => {
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const sanitized = sanitizeQuotation(updated);
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logOperation('Admin Reject Quotation', {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      oldStatus,
+      newStatus: 'rejected',
+      reason: reason.trim()
+    }, req);
+    
+    logger.warn(`Quotation ${quotation.quotationNumber} rejected by admin`, {
+      quotationId: quotation._id,
+      quotationNumber: quotation.quotationNumber,
+      reason: reason.trim(),
+      adminId: req.user?.id,
+      adminName: req.user?.name,
+      duration: `${duration}ms`
+    });
 
     res.json({
       success: true,
@@ -278,6 +502,15 @@ exports.rejectQuotation = async (req, res) => {
       quotation: sanitized,
     });
   } catch (error) {
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('rejectQuotation', error, req);
+    logger.error('Error in admin rejection', {
+      error: error.message,
+      stack: error.stack,
+      quotationId: req.params.id,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ message: 'Error rejecting quotation', error: error.message });
   }
 };
@@ -289,6 +522,7 @@ exports.rejectQuotation = async (req, res) => {
 // @desc  Get all quotations with filters and pagination (admin)
 // @route GET /api/admin/quotations
 exports.getAllQuotationsAdmin = async (req, res) => {
+  const startTime = Date.now();
   try {
     const { 
       status, 
@@ -300,6 +534,11 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       limit = 20,
       search = ''
     } = req.query;
+
+    logger.debug('Fetching all quotations for admin', {
+      filters: { status, fromDate, toDate, userId, companyId, page, limit, search },
+      userId: req.user?.id
+    });
 
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
     const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -345,6 +584,18 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     const totalPages = Math.ceil(totalCount / parsedLimit);
+    const duration = Date.now() - startTime;
+    
+    LoggerHelper.logDBQuery('Quotation', 'admin find with pagination', query, duration);
+    logger.info(`Admin fetched ${sanitizedQuotations.length} quotations (page ${parsedPage}/${totalPages})`, {
+      totalCount,
+      page: parsedPage,
+      limit: parsedLimit,
+      totalPages,
+      filters: { status, userId, companyId, search },
+      duration: `${duration}ms`,
+      adminId: req.user?.id
+    });
     
     res.json({
       success: true,
@@ -361,7 +612,15 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       isAllCompanies: !companyId || companyId === 'all'
     });
   } catch (error) {
-    console.error('Get all quotations error:', error);
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getAllQuotationsAdmin', error, req);
+    logger.error('Error in admin get all quotations', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id,
+      query: req.query
+    });
     res.status(500).json({ 
       message: 'Error fetching quotations', 
       error: error.message 
@@ -376,9 +635,15 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 // @desc  Admin Dashboard Stats 
 // @route GET /api/admin/dashboard/stats
 exports.getAdminDashboardStats = async (req, res) => {
+  const startTime = Date.now();
   try {
     let { companyId } = req.query;
     let matchStage = {};
+    
+    logger.debug('Fetching admin dashboard stats', {
+      companyId,
+      userId: req.user?.id
+    });
     
     // Handle "All Companies" - don't filter by companyId
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
@@ -393,6 +658,7 @@ exports.getAdminDashboardStats = async (req, res) => {
       totalRevenue,
       awardedValue,
       conversionRateData,
+      totalCustomers  // ✅ Added total customers
     ] = await Promise.all([
       Quotation.countDocuments(matchStage),
       
@@ -452,6 +718,9 @@ exports.getAdminDashboardStats = async (req, res) => {
           rate: Math.round(rate * 100) / 100
         };
       })(),
+      
+      // ✅ Get total customers count
+      Customer.countDocuments(matchStage)
     ]);
 
     const counts = {
@@ -475,11 +744,25 @@ exports.getAdminDashboardStats = async (req, res) => {
 
     const totalRevenueValue = totalRevenue[0]?.total || 0;
     const awardedValueTotal = awardedValue[0]?.total || 0;
+    const duration = Date.now() - startTime;
+    
+    logger.info(`Admin dashboard stats fetched successfully`, {
+      totalQuotations,
+      totalCustomers,  // ✅ Added to log
+      actionRequired: counts.ops_approved,
+      totalRevenue: totalRevenueValue,
+      awardedValue: awardedValueTotal,
+      conversionRate: conversionRateData.rate,
+      companyId: companyId || 'all',
+      duration: `${duration}ms`,
+      adminId: req.user?.id
+    });
 
     res.json({
       success: true,
       stats: {
         totalQuotations: counts.total || 0,
+        totalCustomers: totalCustomers || 0,  // ✅ Added total customers
         actionRequired: counts.ops_approved || 0,
         approved: counts.approved || 0,
         awarded: counts.awarded || 0,
@@ -494,7 +777,15 @@ exports.getAdminDashboardStats = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Admin stats error:', err);
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getAdminDashboardStats', err, req);
+    logger.error('Error fetching admin dashboard stats', {
+      error: err.message,
+      stack: err.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id,
+      companyId: req.query.companyId
+    });
     res.status(500).json({ 
       success: false,
       message: 'Error fetching admin dashboard stats', 
@@ -506,6 +797,7 @@ exports.getAdminDashboardStats = async (req, res) => {
 // @desc  Ops Manager Dashboard Stats
 // @route GET /api/admin/ops-dashboard/stats
 exports.getOpsDashboardStats = async (req, res) => {
+  const startTime = Date.now();
   try {
     let { companyId } = req.query;
     let matchStage = {};
@@ -552,12 +844,28 @@ exports.getOpsDashboardStats = async (req, res) => {
       isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
     };
 
+    const duration = Date.now() - startTime;
+    
+    logger.info(`Ops dashboard stats fetched successfully`, {
+      ...stats,
+      companyId: companyId || 'all',
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
+
     res.json({
       success: true,
       stats
     });
   } catch (err) {
-    console.error('Ops stats error:', err);
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getOpsDashboardStats', err, req);
+    logger.error('Error fetching ops dashboard stats', {
+      error: err.message,
+      stack: err.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ 
       success: false,
       message: 'Error fetching ops dashboard stats', 
@@ -567,6 +875,7 @@ exports.getOpsDashboardStats = async (req, res) => {
 };
 
 exports.getUserQuotationStats = async (req, res) => {
+  const startTime = Date.now();
   try {
     let companyId = req.companyId || req.headers['x-company-id'];
     let matchStage = {};
@@ -578,6 +887,10 @@ exports.getUserQuotationStats = async (req, res) => {
     }
 
     if (req.user?.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to access user stats`, {
+        userId: req.user?.id,
+        userRole: req.user?.role
+      });
       return res.status(403).json({ message: 'Unauthorized to view user statistics' });
     }
 
@@ -660,6 +973,16 @@ exports.getUserQuotationStats = async (req, res) => {
 
     const totalQuotations = await Quotation.countDocuments(matchStage);
     const totalUsers = userStats.length;
+    const duration = Date.now() - startTime;
+    
+    logger.info(`User quotation stats fetched`, {
+      totalUsers,
+      totalQuotations,
+      averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0,
+      companyId: companyId || 'all',
+      duration: `${duration}ms`,
+      adminId: req.user?.id
+    });
 
     res.json({
       success: true,
@@ -673,7 +996,14 @@ exports.getUserQuotationStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error getting user quotation stats:', error);
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getUserQuotationStats', error, req);
+    logger.error('Error getting user quotation stats', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
     res.status(500).json({ 
       success: false, 
       message: 'Error fetching user statistics', 
@@ -683,15 +1013,25 @@ exports.getUserQuotationStats = async (req, res) => {
 };
 
 exports.getQuotationsByUser = async (req, res) => {
+  const startTime = Date.now();
   try {
     const { userId } = req.params;
     const companyId = req.companyId || req.headers['x-company-id'];
     
     if (!companyId) {
+      logger.warn('Company ID missing in getQuotationsByUser', {
+        userId: req.user?.id,
+        targetUserId: userId
+      });
       return res.status(400).json({ message: 'Company ID is required' });
     }
 
     if (req.user?.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to view user quotations`, {
+        userId: req.user?.id,
+        userRole: req.user?.role,
+        targetUserId: userId
+      });
       return res.status(403).json({ message: 'Unauthorized to view user quotations' });
     }
 
@@ -703,6 +1043,16 @@ exports.getQuotationsByUser = async (req, res) => {
       .populate('customerId', 'name')
       .lean();
 
+    const duration = Date.now() - startTime;
+    
+    logger.info(`Fetched ${quotations.length} quotations for user ${userId}`, {
+      targetUserId: userId,
+      count: quotations.length,
+      companyId,
+      duration: `${duration}ms`,
+      adminId: req.user?.id
+    });
+
     res.json({
       success: true,
       quotations,
@@ -710,7 +1060,15 @@ exports.getQuotationsByUser = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching user quotations:', error);
+    const duration = Date.now() - startTime;
+    LoggerHelper.logError('getQuotationsByUser', error, req);
+    logger.error('Error fetching user quotations', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id,
+      targetUserId: req.params.userId
+    });
     res.status(500).json({ 
       success: false, 
       message: 'Error fetching user quotations', 

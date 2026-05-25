@@ -4,6 +4,7 @@ const Company = require('../models/company');
 const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
 const zohoBooksService = require('../zoho/customerServices');
 const ItemSyncService = require('../utils/itemsSync');
+const logger = require('../config/logger');
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
@@ -99,9 +100,6 @@ function mapZohoItem(item) {
 // ─────────────────────────────────────────────────────────────────────────
 // GET ALL ITEMS WITH FILTERS
 // ─────────────────────────────────────────────────────────────────────────
-// controllers/itemController.js
-
-// controllers/itemController.js - Update getAllItems function
 
 exports.getAllItems = async (req, res) => {
   try {
@@ -118,7 +116,6 @@ exports.getAllItems = async (req, res) => {
     
     // For ALL COMPANIES, fetch items from all companies and combine
     if (isAllCompanies) {
-      // Get all active companies
       const companies = await Company.find({ isActive: true }).select('_id name code zohoOrganizationId');
       
       if (companies.length === 0) {
@@ -137,7 +134,6 @@ exports.getAllItems = async (req, res) => {
         });
       }
       
-      // Fetch items from all companies in parallel
       const allItemsPromises = companies.map(async (company) => {
         if (!company.zohoOrganizationId) {
           return { companyId: company._id, companyName: company.name, items: [], error: 'No Zoho Org ID' };
@@ -149,7 +145,7 @@ exports.getAllItems = async (req, res) => {
           const result = await ItemSyncService.getItems({
             companyId: company._id,
             page: 1,
-            limit: 1000, // Get more items per company for combined view
+            limit: 1000,
             search: search.trim(),
             forceRefresh: forceRefresh === 'true',
             product_type: product_type && product_type !== 'all' ? product_type : undefined
@@ -163,7 +159,11 @@ exports.getAllItems = async (req, res) => {
             count: result.success ? result.data.length : 0
           };
         } catch (error) {
-          console.error(`Error fetching items for company ${company.name}:`, error.message);
+          logger.error(`Error fetching items for company ${company.name}: ${error.message}`, {
+            companyId: company._id,
+            companyName: company.name,
+            error: error.message
+          });
           return {
             companyId: company._id,
             companyName: company.name,
@@ -175,13 +175,11 @@ exports.getAllItems = async (req, res) => {
       
       const results = await Promise.all(allItemsPromises);
       
-      // Combine all items
       let allItems = [];
       results.forEach(result => {
         allItems = allItems.concat(result.items);
       });
       
-      // Apply additional search filter if needed
       if (search && search.trim()) {
         const searchTerm = search.toLowerCase();
         allItems = allItems.filter(item => 
@@ -191,15 +189,12 @@ exports.getAllItems = async (req, res) => {
         );
       }
       
-      // Apply product_type filter if needed
       if (product_type && product_type !== 'all') {
         allItems = allItems.filter(item => item.product_type === product_type);
       }
       
-      // Sort items
       allItems.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       
-      // Pagination
       const parsedPage = Math.max(1, parseInt(page, 10) || 1);
       const parsedLimit = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
       const startIndex = (parsedPage - 1) * parsedLimit;
@@ -228,7 +223,6 @@ exports.getAllItems = async (req, res) => {
       });
     }
     
-    // Regular single company logic (existing code)
     const actualCompanyId = companyId;
     
     if (!actualCompanyId) {
@@ -288,7 +282,11 @@ exports.getAllItems = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error fetching items:', error);
+    logger.error(`Error fetching items: ${error.message}`, {
+      error: error.message,
+      stack: error.stack,
+      companyId: req.headers['x-company-id']
+    });
     res.status(500).json({
       success: false,
       message: 'Error fetching items',
@@ -332,7 +330,10 @@ exports.getItem = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error fetching item:', error);
+    logger.error(`Error fetching item ${req.params.id}: ${error.message}`, {
+      error: error.message,
+      itemId: req.params.id
+    });
     res.status(500).json({
       success: false,
       message: 'Error fetching item',
@@ -345,8 +346,8 @@ exports.getItem = async (req, res) => {
 // SYNC ITEMS FROM ZOHO
 // ───────────────────────────────────────────────────────────────────────── 
 exports.syncItems = async (req, res) => {
-  let companyId; // Declare outside try-catch
-  let result; // ✅ Declare result outside try-catch
+  let companyId;
+  let result;
   
   try {
     companyId = req.headers['x-company-id'] || req.body.companyId;
@@ -372,6 +373,10 @@ exports.syncItems = async (req, res) => {
     
     const syncStatus = getSyncStatusForCompany(companyId);
     if (syncStatus.isSyncing) {
+      logger.warn(`Item sync already in progress for company ${company.code}`, {
+        companyId,
+        companyCode: company.code
+      });
       return res.status(409).json({
         success: false,
         message: 'Sync already in progress. Please wait.',
@@ -381,7 +386,6 @@ exports.syncItems = async (req, res) => {
     
     setSyncStatusForCompany(companyId, { isSyncing: true });
     
-    // Initialize progress
     updateSyncProgress(companyId, {
       stage: 'starting',
       message: 'Starting sync...',
@@ -392,23 +396,25 @@ exports.syncItems = async (req, res) => {
       startTime: Date.now()
     });
     
-    // Send immediate response
+    logger.info(`Item sync started for company: ${company.code}`, {
+      companyId,
+      companyCode: company.code,
+      startedBy: req.user?.id
+    });
+    
     res.json({
       success: true,
       message: `Item sync started for company: ${company.name}`,
       status: 'started'
     });
     
-    // ✅ Perform sync in background - assign to the outer result variable
     result = await ItemSyncService.syncFromZoho(company, (progress) => {
       updateSyncProgress(companyId, progress);
     });
     
-    // Clear cache after sync
     clearCache(`zoho_items_${companyId}`);
     clearCache(`zoho_items_stats_${companyId}`);
     
-    // Update company's last sync time for incremental sync
     if (result && result.success && result.total > 0) {
       company.lastItemSyncAt = new Date();
       await company.save();
@@ -433,7 +439,17 @@ exports.syncItems = async (req, res) => {
       startTime: Date.now()
     });
     
-    // Clear progress after 15 seconds
+    logger.info(`Item sync completed for company: ${company.code}`, {
+      companyId,
+      companyCode: company.code,
+      totalItems: result?.total || 0,
+      created: result?.created || 0,
+      updated: result?.updated || 0,
+      deleted: result?.deleted || 0,
+      errors: result?.errors || 0,
+      duration: result?.duration
+    });
+    
     setTimeout(() => {
       const current = syncProgressMap.get(companyId);
       if (current?.stage === 'completed') {
@@ -442,7 +458,11 @@ exports.syncItems = async (req, res) => {
     }, 15000);
     
   } catch (error) {
-    console.error('❌ Error syncing items:', error);
+    logger.error(`Item sync error for company ${companyId}: ${error.message}`, {
+      error: error.message,
+      stack: error.stack,
+      companyId
+    });
     
     if (companyId) {
       setSyncStatusForCompany(companyId, {
@@ -457,7 +477,6 @@ exports.syncItems = async (req, res) => {
         startTime: Date.now()
       });
       
-      // Clear error progress after 10 seconds
       setTimeout(() => {
         syncProgressMap.delete(companyId);
       }, 10000);
@@ -482,7 +501,6 @@ exports.getSyncProgress = async (req, res) => {
     const progress = getSyncProgress(companyId);
     const syncStatus = getSyncStatusForCompany(companyId);
     
-    // Calculate estimated time remaining
     let estimatedRemaining = null;
     if (progress.stage === 'fetching' && progress.fetched > 0 && progress.total > 0 && progress.startTime) {
       const elapsed = (Date.now() - progress.startTime) / 1000;
@@ -492,15 +510,13 @@ exports.getSyncProgress = async (req, res) => {
       estimatedRemaining = Math.ceil(remainingSeconds);
     }
     
-    // Check if sync is actually still in progress
     const isActuallySyncing = syncStatus.isSyncing;
     const isCompleted = progress.stage === 'completed';
     const isError = progress.stage === 'error';
     
-    // Clear progress if completed/error and time has passed
     if (isCompleted || isError) {
       const progressAge = Date.now() - (progress.updatedAt || Date.now());
-      if (progressAge > 10000) { // Clear after 10 seconds
+      if (progressAge > 10000) {
         syncProgressMap.delete(companyId);
       }
     }
@@ -524,7 +540,7 @@ exports.getSyncProgress = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error getting sync progress:', error);
+    logger.error(`Error getting sync progress: ${error.message}`, { error: error.message });
     res.status(500).json({ 
       success: false, 
       error: error.message 
@@ -570,7 +586,7 @@ exports.getSyncStatus = async (req, res) => {
       companyId
     });
   } catch (error) {
-    console.error('❌ Error getting sync status:', error);
+    logger.error(`Error getting sync status: ${error.message}`, { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Error getting sync status',
@@ -673,7 +689,10 @@ exports.searchItems = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error searching items:', error);
+    logger.error(`Error searching items: ${error.message}`, {
+      error: error.message,
+      query: req.query.query
+    });
     res.status(500).json({
       success: false,
       message: 'Error searching items',
@@ -762,7 +781,7 @@ exports.getItemsStats = async (req, res) => {
         if (item.can_be_sold) stats.bySellable.sellable++;
         else stats.bySellable.notSellable++;
       } catch (error) {
-        console.warn('Error calculating stats for item:', error.message);
+        logger.warn(`Error calculating stats for item: ${error.message}`);
       }
     });
 
@@ -778,7 +797,7 @@ exports.getItemsStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error calculating statistics:', error);
+    logger.error(`Error calculating statistics: ${error.message}`, { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Error calculating statistics',
@@ -806,13 +825,19 @@ exports.clearItemsCache = async (req, res) => {
       totalCleared++;
     }
 
+    logger.info(`Items cache cleared for company: ${companyId || 'all'}`, {
+      companyId: companyId || 'all',
+      patterns: totalCleared,
+      clearedBy: req.user?.id
+    });
+
     res.status(200).json({
       success: true,
       message: `Cache cleared successfully (${totalCleared} patterns)`,
       companyId: companyId || 'all'
     });
   } catch (error) {
-    console.error('❌ Error clearing cache:', error);
+    logger.error(`Error clearing cache: ${error.message}`, { error: error.message });
     res.status(500).json({
       success: false,
       message: 'Error clearing cache',
@@ -825,6 +850,10 @@ exports.clearItemsCache = async (req, res) => {
 // DISABLED OPERATIONS
 // ─────────────────────────────────────────────────────────────────────────
 exports.createItem = (req, res) => {
+  logger.warn(`Create item attempted (disabled) by user: ${req.user?.id}`, {
+    userId: req.user?.id,
+    companyId: req.headers['x-company-id']
+  });
   res.status(501).json({
     success: false,
     message: 'Create operation is currently disabled. Items are managed in Zoho Books directly.',
@@ -833,6 +862,10 @@ exports.createItem = (req, res) => {
 };
 
 exports.updateItem = (req, res) => {
+  logger.warn(`Update item attempted (disabled) by user: ${req.user?.id}`, {
+    userId: req.user?.id,
+    itemId: req.params.id
+  });
   res.status(501).json({
     success: false,
     message: 'Update operation is currently disabled. Items are managed in Zoho Books directly.',
@@ -841,6 +874,10 @@ exports.updateItem = (req, res) => {
 };
 
 exports.deleteItem = (req, res) => {
+  logger.warn(`Delete item attempted (disabled) by user: ${req.user?.id}`, {
+    userId: req.user?.id,
+    itemId: req.params.id
+  });
   res.status(501).json({
     success: false,
     message: 'Delete operation is currently disabled. Items are managed in Zoho Books directly.',

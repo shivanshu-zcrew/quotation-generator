@@ -370,8 +370,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     return `<tr>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${index + 1}</td>
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
-        <div style="font-weight:600;font-size:11px;">${item.name}</div>
-        ${item.description ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;line-height:1.3;">${item.description}</div>` : ''}
+        ${item.description ? `<div style="font-size:11px;margin-top:3px;line-height:1.3;">${item.description}</div>` : ''}
         ${imgs.length ? `<div style="margin-top:6px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
           ${imgs.map(src => `<div style="width:100%;height:150px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;">
             <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />

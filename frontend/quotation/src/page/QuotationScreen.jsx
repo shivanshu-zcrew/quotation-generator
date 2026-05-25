@@ -1,4 +1,4 @@
-// screens/QuotationScreen.jsx (Complete with AddItemModal)
+// screens/QuotationScreen.jsx (Complete with AddItemModal - UPDATED with All Companies validation)
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
@@ -16,6 +16,7 @@ import ItemModal from "../components/AddItemModal";
 const PRIMARY = "#0f172a";
 const STEP = { SELECTION: 1, TEMPLATE: 2 };
 const TOAST_DURATION = 3000;
+const ALL_COMPANIES_ID = 'all'; // Add this constant
 
 // Helper functions
 const getDefaultQueryDate = () => {
@@ -61,7 +62,6 @@ const Toast = ({ message, type = "success", onClose }) => {
     <div style={{ 
       position: "fixed", 
       bottom: 24, 
-      right: 24, 
       zIndex: 1000, 
       animation: "qs-slideIn 0.3s ease",
       left: isMobile ? 16 : 'auto',
@@ -506,6 +506,7 @@ export default function QuotationScreen({ onBack }) {
   const [isMobile, setIsMobile] = useState(false);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
+  
   // --------------------------------------------------------------------------
   // Responsive Detection
   // --------------------------------------------------------------------------
@@ -527,7 +528,15 @@ export default function QuotationScreen({ onBack }) {
     selectedItems.reduce((sum, item) => sum + (item.quantity || 0) * (item.unitPrice || 0), 0), 
     [selectedItems]
   );
-  const canProceed = !isCustomersActuallyLoading && selectedCustomer && selectedItems.length > 0;
+  
+  // Check if "All Companies" is selected
+  const isAllCompaniesSelected = selectedCompany === ALL_COMPANIES_ID;
+  
+  // Update canProceed to include validation for All Companies
+  const canProceed = !isCustomersActuallyLoading && 
+                     selectedCustomer && 
+                     selectedItems.length > 0 && 
+                     !isAllCompaniesSelected; // Add this condition
 
   // --------------------------------------------------------------------------
   // Effects
@@ -587,12 +596,11 @@ export default function QuotationScreen({ onBack }) {
     setEditingItem(null);
   }, [showToast]);
   
-   const handleOpenEditModal = useCallback((item) => {
+  const handleOpenEditModal = useCallback((item) => {
     setEditingItem(item);
     setIsAddItemModalOpen(true);
   }, []);
   
-
   const handleSyncCustomers = useCallback(async (result) => {
     if (result?.success) {
       await refreshCustomers(selectedCompany);
@@ -603,12 +611,29 @@ export default function QuotationScreen({ onBack }) {
   }, [selectedCompany, refreshCustomers, showToast]);
 
   const handleProceedToTemplate = useCallback(() => {
-    if (!selectedCompany) return showToast("Please select a company", "error");
-    if (!selectedCustomer) return showToast("Please select a customer", "error");
-    if (selectedItems.length === 0) return showToast("Please add at least one item", "error");
+    // Validation: Check if "All Companies" is selected
+    if (isAllCompaniesSelected) {
+      showToast("Please select a specific company, not 'All Companies', to create a quotation", "error");
+      return;
+    }
+    
+    if (!selectedCompany) {
+      showToast("Please select a company", "error");
+      return;
+    }
+    
+    if (!selectedCustomer) {
+      showToast("Please select a customer", "error");
+      return;
+    }
+    
+    if (selectedItems.length === 0) {
+      showToast("Please add at least one item", "error");
+      return;
+    }
 
     setStep(STEP.TEMPLATE);
-  }, [selectedCompany, selectedCustomer, selectedItems, showToast]);
+  }, [selectedCompany, selectedCustomer, selectedItems, showToast, isAllCompaniesSelected]);
 
   const handleBack = useCallback(() => {
     step === STEP.TEMPLATE ? setStep(STEP.SELECTION) : onBack?.();
@@ -708,6 +733,25 @@ export default function QuotationScreen({ onBack }) {
           </p>
         </div>
 
+        {/* Warning Banner for All Companies Selection */}
+        {isAllCompaniesSelected && (
+          <div style={{ 
+            display: "flex", 
+            alignItems: "center", 
+            gap: "0.75rem", 
+            padding: "0.75rem 1rem", 
+            background: "#fef3c7", 
+            border: "1px solid #fde68a", 
+            borderRadius: 12, 
+            marginBottom: "1rem"
+          }}>
+            <AlertCircle size={18} color="#d97706" />
+            <span style={{ fontSize: "clamp(0.75rem, 3.5vw, 0.813rem)", color: "#92400e", fontWeight: 500 }}>
+              Please select a specific company to create a quotation. "All Companies" view is for admin reference only.
+            </span>
+          </div>
+        )}
+
         {/* Main Card */}
         <div style={{ 
           background: "white", 
@@ -740,6 +784,7 @@ export default function QuotationScreen({ onBack }) {
                 companyId={selectedCompany}
                 onSyncComplete={handleSyncCustomers}
                 autoLoad={true}
+                disabled={isAllCompaniesSelected} // Disable customer selection when All Companies is selected
               />
             </div>
 
@@ -757,6 +802,9 @@ export default function QuotationScreen({ onBack }) {
             )}
 
             {!isCustomersActuallyLoading && selectedCustomer && <CustomerCard customer={selectedCustomer} />}
+            
+            {/* Disabled customer message when All Companies is selected */}
+             
           </div>
           
           <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
@@ -775,46 +823,55 @@ export default function QuotationScreen({ onBack }) {
                 marginBottom: "0.75rem" 
               }}>
                 {selectedItems.map((item, index) => (
-  <ManualItemRow 
-    key={item.id} 
-    item={item} 
-    index={index} 
-    onUpdate={handleItemChange} 
-    onRemove={handleRemoveItem}
-    onEdit={handleOpenEditModal}  
-    selectedCurrency={selectedCurrency} 
-  />
-))}
+                  <ManualItemRow 
+                    key={item.id} 
+                    item={item} 
+                    index={index} 
+                    onUpdate={handleItemChange} 
+                    onRemove={handleRemoveItem}
+                    onEdit={handleOpenEditModal}  
+                    selectedCurrency={selectedCurrency} 
+                  />
+                ))}
               </div>
             )}
 
             <button
               onClick={() => setIsAddItemModalOpen(true)}
+              disabled={isAllCompaniesSelected} // Disable when All Companies is selected
               style={{
                 marginTop: "0.75rem",
                 width: "100%",
                 padding: isMobile ? "0.65rem" : "0.75rem",
-                background: "#eff1ff",
-                color: "#6366f1",
-                border: "1.5px dashed #c7d2fe",
+                background: isAllCompaniesSelected ? "#f1f5f9" : "#eff1ff",
+                color: isAllCompaniesSelected ? "#94a3b8" : "#6366f1",
+                border: isAllCompaniesSelected ? "1.5px solid #e2e8f0" : "1.5px dashed #c7d2fe",
                 borderRadius: 14,
                 fontSize: "clamp(0.813rem, 4vw, 0.875rem)",
                 fontWeight: 600,
-                cursor: "pointer",
+                cursor: isAllCompaniesSelected ? "not-allowed" : "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 gap: "0.5rem",
                 transition: "all 0.2s",
+                opacity: isAllCompaniesSelected ? 0.6 : 1
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#e0e7ff";
+                if (!isAllCompaniesSelected) {
+                  e.currentTarget.style.background = "#e0e7ff";
+                }
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#eff1ff";
+                if (!isAllCompaniesSelected) {
+                  e.currentTarget.style.background = "#eff1ff";
+                }
               }}
             >
-              <Plus size={16} /> {selectedItems.length > 0 ? (isMobile ? "Add Another Item" : "Add Another Item") : (isMobile ? "Add Item" : "Add Item")}
+              <Plus size={16} /> 
+              {isAllCompaniesSelected 
+                ? "Select a company to add items" 
+                : (selectedItems.length > 0 ? "Add Another Item" : "Add Item")}
             </button>
           </div>
 
@@ -980,6 +1037,8 @@ export default function QuotationScreen({ onBack }) {
               >
                 {isCustomersActuallyLoading ? (
                   <><Loader2 size={15} style={{ animation: "qs-spin 0.9s linear infinite" }} /> Loading…</>
+                ) : isAllCompaniesSelected ? (
+                  <>Select a Company <ArrowRight size={17} /></>
                 ) : (
                   <>Continue <ArrowRight size={17} /></>
                 )}
@@ -989,17 +1048,17 @@ export default function QuotationScreen({ onBack }) {
         </div>
       </div>
       
-       <ItemModal
-  isOpen={isAddItemModalOpen}
-  onClose={() => {
-    setIsAddItemModalOpen(false);
-    setEditingItem(null);
-  }}
-  onAddItem={handleAddManualItem}
-  onEditItem={handleEditItem}
-  editingItem={editingItem}
-  selectedCurrency={selectedCurrency}
-/>
+      <ItemModal
+        isOpen={isAddItemModalOpen}
+        onClose={() => {
+          setIsAddItemModalOpen(false);
+          setEditingItem(null);
+        }}
+        onAddItem={handleAddManualItem}
+        onEditItem={handleEditItem}
+        editingItem={editingItem}
+        selectedCurrency={selectedCurrency}
+      />
 
       {/* Toast Notifications */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

@@ -4,12 +4,17 @@ const { Quotation } = require('../models/quotation');
 const { Customer } = require('../models/customer');
 const Item = require('../models/items');
 const User = require('../models/user');
+const logger = require('../config/logger');
 
 // ===========================================================
 // Helper function for error handling
 // ===========================================================
 const handleError = (res, error, message = 'Server error') => {
-  console.error('Company controller error:', error);
+  logger.error(`${message}: ${error.message}`, {
+    error: error.message,
+    stack: error.stack,
+    endpoint: 'companyController'
+  });
   res.status(500).json({ 
     success: false, 
     message, 
@@ -281,6 +286,10 @@ exports.createCompany = async (req, res) => {
     } = req.body;
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to create company`, {
+        userId: req.user.id,
+        userRole: req.user.role
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Only admins can create companies' 
@@ -350,6 +359,15 @@ exports.createCompany = async (req, res) => {
       isActive: true
     });
 
+    logger.info(`Company created: ${company.code} - ${company.name}`, {
+      companyId: company._id,
+      companyCode: company.code,
+      companyName: company.name,
+      zohoOrganizationId,
+      createdBy: req.user.id,
+      adminEmail: req.user.email
+    });
+
     res.status(201).json({
       success: true,
       message: 'Company created successfully',
@@ -379,6 +397,10 @@ exports.updateCompany = async (req, res) => {
     const updates = req.body;
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to update company`, {
+        userId: req.user.id,
+        companyId: id
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Only admins can update companies' 
@@ -392,6 +414,13 @@ exports.updateCompany = async (req, res) => {
         message: 'Company not found' 
       });
     }
+
+    const oldValues = {
+      name: company.name,
+      code: company.code,
+      isActive: company.isActive,
+      zohoOrganizationId: company.zohoOrganizationId
+    };
 
     if (updates.name) {
       updates.slug = generateSlug(updates.name);
@@ -431,6 +460,19 @@ exports.updateCompany = async (req, res) => {
       { new: true, runValidators: true }
     );
 
+    logger.info(`Company updated: ${company.code}`, {
+      companyId: id,
+      companyCode: company.code,
+      changes: {
+        name: oldValues.name !== updatedCompany.name ? { from: oldValues.name, to: updatedCompany.name } : undefined,
+        code: oldValues.code !== updatedCompany.code ? { from: oldValues.code, to: updatedCompany.code } : undefined,
+        zohoOrgId: oldValues.zohoOrganizationId !== updatedCompany.zohoOrganizationId ? 
+          { from: oldValues.zohoOrganizationId, to: updatedCompany.zohoOrganizationId } : undefined
+      },
+      updatedBy: req.user.id,
+      adminEmail: req.user.email
+    });
+
     res.json({
       success: true,
       message: 'Company updated successfully',
@@ -451,6 +493,10 @@ exports.deleteCompany = async (req, res) => {
     const { id } = req.params;
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to delete company`, {
+        userId: req.user.id,
+        companyId: id
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Only admins can delete companies' 
@@ -477,6 +523,13 @@ exports.deleteCompany = async (req, res) => {
       company.updatedBy = req.user.id;
       await company.save();
       
+      logger.warn(`Company deactivated (has dependent data): ${company.code}`, {
+        companyId: id,
+        companyCode: company.code,
+        dependentData: { quotationCount, customerCount, itemCount, userCount },
+      deactivatedBy: req.user.id
+      });
+      
       return res.json({
         success: true,
         message: `Company deactivated (has dependent data: ${quotationCount} quotations, ${customerCount} customers, ${itemCount} items, ${userCount} users)`,
@@ -486,6 +539,13 @@ exports.deleteCompany = async (req, res) => {
 
     await Company.findByIdAndDelete(id);
     
+    logger.warn(`Company permanently deleted: ${company.code}`, {
+      companyId: id,
+      companyCode: company.code,
+      companyName: company.name,
+      deletedBy: req.user.id
+    });
+
     res.json({
       success: true,
       message: 'Company permanently deleted'
@@ -505,6 +565,10 @@ exports.toggleCompanyStatus = async (req, res) => {
     const { id } = req.params;
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to toggle company status`, {
+        userId: req.user.id,
+        companyId: id
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Only admins can toggle company status' 
@@ -519,9 +583,18 @@ exports.toggleCompanyStatus = async (req, res) => {
       });
     }
 
+    const oldStatus = company.isActive;
     company.isActive = !company.isActive;
     company.updatedBy = req.user.id;
     await company.save();
+
+    logger.info(`Company status toggled: ${company.code}`, {
+      companyId: id,
+      companyCode: company.code,
+      oldStatus,
+      newStatus: company.isActive,
+      toggledBy: req.user.id
+    });
 
     res.json({
       success: true,
@@ -543,6 +616,9 @@ exports.bulkImportCompanies = async (req, res) => {
     const { companies } = req.body;
 
     if (req.user.role !== 'admin') {
+      logger.warn(`Non-admin user attempted bulk import`, {
+        userId: req.user.id
+      });
       return res.status(403).json({ 
         success: false, 
         message: 'Only admins can bulk import companies' 
@@ -590,6 +666,14 @@ exports.bulkImportCompanies = async (req, res) => {
         });
       }
     }
+
+    logger.info(`Bulk import completed: ${results.successful.length} successful, ${results.failed.length} failed`, {
+      successfulCount: results.successful.length,
+      failedCount: results.failed.length,
+      successfulCompanies: results.successful.map(c => c.code),
+      failedCompanies: results.failed.map(f => ({ code: f.code, error: f.error })),
+      importedBy: req.user.id
+    });
 
     res.json({
       success: true,

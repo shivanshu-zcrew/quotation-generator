@@ -6,6 +6,8 @@ const { GCC_COUNTRIES } = require('../models/constants');
 const Quotation = require('../models/quotation').Quotation;
 const ExcelJS = require('exceljs');
 const mongoose = require('mongoose');
+const logger = require('../config/logger');
+
 // Destructure constants
 const {
   GCC_COUNTRY_NAMES,
@@ -75,7 +77,7 @@ class SyncStateManager {
 
   requestCancel(companyId) {
     this.cancelMap.set(companyId, true);
-    console.log(`🚫 Cancellation requested for company ${companyId}`);
+    logger.info(`Customer sync cancellation requested for company ${companyId}`);
   }
 
   isCancelRequested(companyId) {
@@ -160,7 +162,6 @@ const validateTaxData = (taxTreatment, taxRegistrationNumber, placeOfSupply) => 
 const buildContactPersons = (name, email, phone, notes, contactPersons = [], mainContactSalutation = 'Mr.') => {
   const allContactPersons = [];
 
-  
   allContactPersons.push({
     salutation: mainContactSalutation,
     firstName: name.trim(),
@@ -172,10 +173,8 @@ const buildContactPersons = (name, email, phone, notes, contactPersons = [], mai
     department: '',
     isPrimaryContact: true,
     notes: notes ? notes.trim() : ''
-    // ❌ NO zohoContactPersonId here - let Zoho create it
   });
 
-  
   for (const cp of contactPersons) {
     if (cp.firstName?.trim()) {
       allContactPersons.push({
@@ -189,7 +188,6 @@ const buildContactPersons = (name, email, phone, notes, contactPersons = [], mai
         department: cp.department?.trim() || '',
         isPrimaryContact: false,
         notes: cp.notes?.trim() || ''
-        // ❌ NO zohoContactPersonId here - let Zoho create it
       });
     }
   }
@@ -205,7 +203,6 @@ const buildUpdateData = (body, existingCustomer) => {
     placeOfSupply, defaultCurrency, contactPersons, mainContactSalutation
   } = body;
 
-  // Basic fields
   if (name !== undefined) updateData.name = name.trim().toUpperCase();
   if (email !== undefined) updateData.email = email.trim().toLowerCase();
   if (phone !== undefined) updateData.phone = phone.trim();
@@ -217,7 +214,6 @@ const buildUpdateData = (body, existingCustomer) => {
   if (website !== undefined) updateData.website = website?.trim() || '';
   if (notes !== undefined) updateData.notes = notes?.trim() || '';
 
-  // Tax fields
   if (taxTreatment !== undefined || taxRegistrationNumber !== undefined || placeOfSupply !== undefined) {
     const newTax = taxTreatment ?? existingCustomer.taxTreatment;
     const newTRN = taxRegistrationNumber ?? existingCustomer.taxRegistrationNumber;
@@ -230,12 +226,10 @@ const buildUpdateData = (body, existingCustomer) => {
       : '';
   }
 
-  // Currency
   if (defaultCurrency !== undefined) {
     updateData.defaultCurrency = buildCurrencyObject(defaultCurrency);
   }
 
-  // Contact persons
   if (contactPersons !== undefined && Array.isArray(contactPersons)) {
     updateData.contactPersons = buildContactPersons(
       name || existingCustomer.name,
@@ -267,15 +261,14 @@ const sendErrorResponse = (res, statusCode, message, error = null) => {
   return res.status(statusCode).json(response);
 };
 
- 
 const getCompanyFromRequest = async (req) => {
-   let companyId = null;
+  let companyId = null;
   
-   if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
     companyId = req.body.companyId;
   }
   
-   if (!companyId) {
+  if (!companyId) {
     companyId = req.headers['x-company-id'] || req.query.companyId;
   } 
   if (!companyId) {
@@ -311,23 +304,19 @@ exports.createCustomer = async (req, res) => {
       defaultCurrency = 'AED', contactPersons = [], mainContactSalutation = 'Mr.'
     } = req.body;
 
-    // ✅ STEP 1: Get and validate company
     const { companyId, company } = await getCompanyFromRequest(req);
     if (!companyId) return sendErrorResponse(res, 400, 'Company ID is required');
     if (!company) return sendErrorResponse(res, 404, 'Company not found');
     
-    // ✅ STEP 2: Validate basic customer data
     if (!name?.trim() || name.trim().length < 3) {
       return sendErrorResponse(res, 400, 'Customer name must be at least 3 characters');
     }
 
-    // ✅ STEP 3: Validate tax data
     const taxErrors = validateTaxData(taxTreatment, taxRegistrationNumber, placeOfSupply);
     if (taxErrors.length > 0) {
       return sendErrorResponse(res, 400, taxErrors[0]);
     }
 
-    // ✅ STEP 4: Check if TRN already exists in database (only for existing customers, skip for new ones)
     if (taxRegistrationNumber && taxRegistrationNumber.trim()) {
       const existingCustomer = await Customer.findOne({
         companyId: company._id,
@@ -339,7 +328,6 @@ exports.createCustomer = async (req, res) => {
       }
     }
 
-    // ✅ STEP 5: Prepare customer data (but don't save yet)
     const allContactPersons = buildContactPersons(name, email, phone, notes, contactPersons, mainContactSalutation);
 
     const customerData = {
@@ -361,9 +349,7 @@ exports.createCustomer = async (req, res) => {
       contactPersons: allContactPersons
     };
 
-    // ✅ STEP 6: Create in Zoho FIRST
     let zohoResult = null;
-    let zohoError = null;
 
     if (company.zohoOrganizationId) {
       try {
@@ -385,26 +371,26 @@ exports.createCustomer = async (req, res) => {
         });
 
         if (!zohoResult.success) {
-          zohoError = zohoResult.error || 'Unknown Zoho error';
-          throw new Error(`Zoho creation failed: ${zohoError}`);
+          throw new Error(`Zoho creation failed: ${zohoResult.error || 'Unknown error'}`);
         }
       } catch (zohoErr) {
-        console.error('❌ Zoho creation error:', zohoErr.message);
+        logger.error(`Zoho customer creation failed: ${zohoErr.message}`, {
+          companyId: company._id,
+          customerName: name,
+          error: zohoErr.message
+        });
         return sendErrorResponse(res, 400, `Failed to create customer in Zoho Books: ${zohoErr.message}`, zohoErr);
       }
     }
 
-    // ✅ STEP 7: Only after successful Zoho creation, save to database
     const customer = new Customer(customerData);
     const savedCustomer = await customer.save();
 
-    // ✅ STEP 8: Update Zoho ID in database (if Zoho sync was successful)
     if (zohoResult && zohoResult.success && zohoResult.zohoId) {
       savedCustomer.zohoId = zohoResult.zohoId;
       savedCustomer.zohoSynced = true;
       savedCustomer.zohoSyncDate = new Date();
 
-      // Update contact person Zoho IDs
       if (zohoResult.contact?.contact_persons) {
         zohoResult.contact.contact_persons.forEach((zp, i) => {
           if (savedCustomer.contactPersons[i]) {
@@ -417,9 +403,16 @@ exports.createCustomer = async (req, res) => {
     }
 
     let customerObj = savedCustomer.getFormattedData?.() || savedCustomer.toObject();
-
-    // ✅ STEP 9: Clear cache and return response
     await clearCustomerCache(company._id);
+
+    logger.info(`Customer created: ${savedCustomer.name} (${savedCustomer.email})`, {
+      customerId: savedCustomer._id,
+      customerName: savedCustomer.name,
+      companyId: company._id,
+      companyCode: company.code,
+      zohoSynced: !!savedCustomer.zohoId,
+      createdBy: req.user?.id
+    });
 
     res.status(201).json({
       success: true,
@@ -429,17 +422,11 @@ exports.createCustomer = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Create Customer Error:', error);
-    
-    if (error.message?.includes('Zoho') && error.savedToDB) {
-      try {
-        await Customer.findByIdAndDelete(error.savedCustomerId);
-        console.log('🗑️ Rolled back DB customer due to Zoho failure');
-      } catch (rollbackErr) {
-        console.error('Rollback failed:', rollbackErr);
-      }
-    }
-    
+    logger.error(`Create customer error: ${error.message}`, {
+      error: error.message,
+      stack: error.stack,
+      customerName: req.body?.name
+    });
     sendErrorResponse(res, 500, 'Error creating customer', error);
   }
 };
@@ -456,7 +443,7 @@ exports.updateCustomer = async (req, res) => {
     if (!company) return sendErrorResponse(res, 404, 'Company not found');
 
     const updateData = buildUpdateData(req.body, customer);
-const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumber;
+    const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumber;
     const newTaxTreatment = updateData.taxTreatment || customer.taxTreatment;
     
     if (newTRN && newTRN.trim() && newTaxTreatment.includes('vat_registered')) {
@@ -471,7 +458,6 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
       }
     }
 
-    // Validate tax data if being updated
     if (updateData.taxTreatment !== undefined || updateData.placeOfSupply !== undefined) {
       const taxErrors = validateTaxData(
         updateData.taxTreatment || customer.taxTreatment,
@@ -483,6 +469,12 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
       }
     }
 
+    const oldCustomerData = {
+      name: customer.name,
+      email: customer.email,
+      taxTreatment: customer.taxTreatment
+    };
+
     const updatedCustomer = await Customer.findByIdAndUpdate(
       id,
       updateData,
@@ -491,7 +483,6 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
 
     if (!updatedCustomer) return sendErrorResponse(res, 404, 'Customer not found');
 
-    // Zoho sync - Now throws error on failure
     if (updatedCustomer.zohoId && company.zohoOrganizationId) {
       try {
         zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
@@ -511,30 +502,20 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
           contactPersons: updatedCustomer.contactPersons || []
         });
 
-        // Check if Zoho update was successful
         if (!zohoResult.success) {
-          // Rollback: Revert local database changes
           await Customer.findByIdAndUpdate(id, customer.toObject(), { runValidators: false });
-          
-          // Clear cache
           await clearCustomerCache(customer.companyId);
-          
-          // Throw error with Zoho failure details
           throw new Error(`Zoho update failed: ${zohoResult.error || 'Unknown error'}`);
         }
 
-        // Update contact person IDs from Zoho response
         if (zohoResult.success && zohoResult.contact?.contact_persons) {
           const zohoPersons = zohoResult.contact.contact_persons;
           
-          // Clear existing IDs first to avoid duplicates
           for (let i = 0; i < updatedCustomer.contactPersons.length; i++) {
             updatedCustomer.contactPersons[i].zohoContactPersonId = null;
           }
           
-          // Map Zoho contacts back to MongoDB by matching email or name
           for (const zohoPerson of zohoPersons) {
-            // Find matching MongoDB contact person
             const matchingIndex = updatedCustomer.contactPersons.findIndex(mongoPerson => 
               (mongoPerson.email && zohoPerson.email && 
                mongoPerson.email.toLowerCase() === zohoPerson.email.toLowerCase()) ||
@@ -543,7 +524,6 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
             
             if (matchingIndex !== -1) {
               updatedCustomer.contactPersons[matchingIndex].zohoContactPersonId = zohoPerson.contact_person_id;
-              console.log(`✅ Linked contact: ${zohoPerson.first_name} with ID: ${zohoPerson.contact_person_id}`);
             }
           }
           
@@ -551,15 +531,13 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
         }
         
       } catch (zohoErr) {
-        console.error('❌ Zoho Update Error:', zohoErr.message);
+        logger.error(`Zoho customer update failed: ${zohoErr.message}`, {
+          customerId: id,
+          customerName: customer.name,
+          companyId: company._id,
+          error: zohoErr.message
+        });
         
-        // Revert local database changes
-        await Customer.findByIdAndUpdate(id, customer.toObject(), { runValidators: false });
-        
-        // Clear cache
-        await clearCustomerCache(customer.companyId);
-        
-        // Return error response
         return res.status(400).json({
           success: false,
           message: 'Failed to update customer in Zoho Books',
@@ -570,8 +548,20 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
       }
     }
 
-    // Clear cache only on successful update
     await clearCustomerCache(customer.companyId);
+
+    logger.info(`Customer updated: ${updatedCustomer.name}`, {
+      customerId: id,
+      customerName: updatedCustomer.name,
+      companyId: customer.companyId,
+      changes: {
+        name: oldCustomerData.name !== updatedCustomer.name ? { from: oldCustomerData.name, to: updatedCustomer.name } : undefined,
+        email: oldCustomerData.email !== updatedCustomer.email ? { from: oldCustomerData.email, to: updatedCustomer.email } : undefined,
+        taxTreatment: oldCustomerData.taxTreatment !== updatedCustomer.taxTreatment ? 
+          { from: oldCustomerData.taxTreatment, to: updatedCustomer.taxTreatment } : undefined
+      },
+      updatedBy: req.user?.id
+    });
 
     res.status(200).json({
       success: true,
@@ -580,7 +570,10 @@ const newTRN = updateData.taxRegistrationNumber || customer.taxRegistrationNumbe
     });
 
   } catch (error) {
-    console.error('Update Customer Error:', error);
+    logger.error(`Update customer error: ${error.message}`, {
+      error: error.message,
+      customerId: req.params.id
+    });
     sendErrorResponse(res, 500, 'Error updating customer', error);
   }
 };
@@ -595,13 +588,17 @@ exports.deleteCustomer = async (req, res) => {
     const customer = await Customer.findOne({ _id: id, companyId });
     if (!customer) return sendErrorResponse(res, 404, 'Customer not found');
 
-    // Check for associated quotations
     const quotationCount = await Quotation.countDocuments({ customerId: id, companyId });
     if (quotationCount > 0) {
+      logger.warn(`Cannot delete customer with associated quotations`, {
+        customerId: id,
+        customerName: customer.name,
+        quotationCount,
+        companyId
+      });
       return sendErrorResponse(res, 400, `Cannot delete customer: ${quotationCount} associated quotation(s) exist`);
     }
 
-    // Delete from Zoho if present
     if (customer.zohoId) {
       const company = await Company.findById(companyId);
       if (!company?.zohoOrganizationId) {
@@ -619,6 +616,16 @@ exports.deleteCustomer = async (req, res) => {
     await Customer.deleteOne({ _id: id, companyId });
     await clearCustomerCache(companyId);
 
+    logger.warn(`Customer deleted: ${customer.name} (${customer.email})`, {
+      customerId: id,
+      customerName: customer.name,
+      customerEmail: customer.email,
+      companyId,
+      hadQuotations: quotationCount > 0,
+      zohoId: customer.zohoId,
+      deletedBy: req.user?.id
+    });
+
     res.status(200).json({
       success: true,
       message: customer.zohoId ? 'Customer deleted from both local and Zoho Books' : 'Customer deleted successfully',
@@ -626,7 +633,10 @@ exports.deleteCustomer = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Delete Customer Error:', error);
+    logger.error(`Delete customer error: ${error.message}`, {
+      error: error.message,
+      customerId: req.params.id
+    });
     sendErrorResponse(res, 500, 'Error deleting customer', error);
   }
 };
@@ -638,7 +648,6 @@ exports.deleteCustomer = async (req, res) => {
 const buildCustomerQuery = (companyId, filters) => {
   const query = {};
   
-  // Only add companyId if it's not null/undefined (for single company)
   if (companyId && companyId !== 'all') {
     query.companyId = companyId;
   }
@@ -648,21 +657,15 @@ const buildCustomerQuery = (companyId, filters) => {
     zohoSyncStatus, search
   } = filters;
 
-  // Status filter
   if (status === 'active') query.isActive = true;
   else if (status === 'inactive') query.isActive = false;
 
-  // Tax status filter
   if (taxStatus && taxStatus !== 'all') query.taxTreatment = taxStatus;
-
-  // Place of supply filter
   if (placeOfSupply && placeOfSupply !== 'all') query.placeOfSupply = placeOfSupply;
 
-  // TRN filter
   if (hasTRN === 'yes') query.taxRegistrationNumber = { $gt: '' };
   else if (hasTRN === 'no') query.$or = [{ taxRegistrationNumber: '' }, { taxRegistrationNumber: { $exists: false } }, { taxRegistrationNumber: null }];
 
-  // Zoho sync status
   if (zohoSyncStatus === 'synced') {
     query.zohoSynced = true;
     query.zohoId = { $exists: true, $ne: null };
@@ -670,7 +673,6 @@ const buildCustomerQuery = (companyId, filters) => {
     query.$or = [{ zohoSynced: { $ne: true } }, { zohoId: { $exists: false } }, { zohoId: null }];
   }
 
-  // Search filter
   if (search?.trim()) {
     const searchRegex = { $regex: search.trim(), $options: 'i' };
     const searchConditions = [
@@ -688,9 +690,6 @@ const buildCustomerQuery = (companyId, filters) => {
 
   return query;
 };
-
-
-// controllers/customerController.js - Fix getAllCustomers
 
 exports.getAllCustomers = async (req, res) => {
   try {
@@ -712,8 +711,6 @@ exports.getAllCustomers = async (req, res) => {
     } = req.query;
 
     let companyId = req.headers['x-company-id'] || req.query.companyId;
-    
-    // Check if "All Companies" is selected
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
     
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
@@ -727,7 +724,6 @@ exports.getAllCustomers = async (req, res) => {
     let query = {};
     
     if (isAllCompanies) {
-      // For all companies - don't filter by companyId
       if (search && search.trim()) {
         const searchRegex = new RegExp(search.trim(), 'i');
         query.$or = [
@@ -766,18 +762,15 @@ exports.getAllCustomers = async (req, res) => {
         ];
       }
     } else {
-      // Single company - use existing logic
       query = buildCustomerQuery(companyId, { 
         status, taxStatus, placeOfSupply, hasTRN, zohoSyncStatus, search 
       });
     }
 
-    // Handle quotation-based filters
     const hasQuotationFilters = minQuotations !== null || maxQuotations !== null ||
       minTotalValue !== null || maxTotalValue !== null;
 
     if (hasQuotationFilters) {
-      // For all companies, don't filter by companyId
       const quotationMatchStage = isAllCompanies ? {} : { companyId };
       
       const statsResults = await Quotation.aggregate([
@@ -863,11 +856,10 @@ exports.getAllCustomers = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get Customers Error:', error);
+    logger.error(`Get customers error: ${error.message}`, { error: error.message });
     sendErrorResponse(res, 500, 'Error fetching customers', error);
   }
 };
- 
 
 exports.getCustomer = async (req, res) => {
   try {
@@ -922,13 +914,9 @@ exports.searchCustomers = async (req, res) => {
 // STATISTICS & UTILITY ENDPOINTS
 // ─────────────────────────────────────────────────────────────────────────
 
-// controllers/customerController.js - Fix getCustomerStats
-
 exports.getCustomerStats = async (req, res) => {
   try {
     let companyId = req.headers['x-company-id'] || req.query.companyId;
-    
-    // Check if "All Companies" is selected
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
     
     const { status = 'all', taxStatus = 'all', placeOfSupply = 'all', hasTRN = 'all', search = '' } = req.query;
@@ -936,7 +924,6 @@ exports.getCustomerStats = async (req, res) => {
     let query = {};
     
     if (isAllCompanies) {
-      // For all companies - don't filter by companyId
       if (search) {
         query.$or = [
           { name: new RegExp(search, 'i') },
@@ -958,7 +945,6 @@ exports.getCustomerStats = async (req, res) => {
         ];
       }
     } else {
-      // Single company - use existing logic
       query = buildCustomerQuery(companyId, { status, taxStatus, placeOfSupply, hasTRN, search });
     }
 
@@ -983,7 +969,7 @@ exports.getCustomerStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Stats Error:', error);
+    logger.error(`Get customer stats error: ${error.message}`, { error: error.message });
     sendErrorResponse(res, 500, 'Error calculating statistics', error);
   }
 };
@@ -1080,6 +1066,13 @@ exports.syncCustomerWithZoho = async (req, res) => {
       customer.zohoSyncError = undefined;
       await customer.save();
 
+      logger.info(`Customer synced with Zoho: ${customer.name}`, {
+        customerId: customer._id,
+        customerName: customer.name,
+        companyId: company._id,
+        action: customer.zohoId ? 'update' : 'create'
+      });
+
       return res.status(200).json({
         success: true,
         message: 'Customer synced with Zoho successfully',
@@ -1094,6 +1087,10 @@ exports.syncCustomerWithZoho = async (req, res) => {
     return sendErrorResponse(res, 400, 'Failed to sync with Zoho', { error: result?.error });
 
   } catch (error) {
+    logger.error(`Sync customer with Zoho error: ${error.message}`, {
+      error: error.message,
+      customerId: req.params.id
+    });
     sendErrorResponse(res, 500, 'Error syncing customer', error);
   }
 };
@@ -1121,19 +1118,21 @@ exports.syncFromZoho = async (req, res) => {
       stage: 'starting', message: 'Starting customer sync...', fetched: 0, total: 0, startTime: Date.now()
     });
 
-    // Send immediate response
     res.status(202).json({
       success: true, message: `Customer sync started for ${company.name}`, status: 'started'
     });
 
-    // Run sync in background
+    logger.info(`Customer sync started from Zoho for company: ${company.code}`, {
+      companyId: company._id,
+      companyCode: company.code,
+      startedBy: req.user?.id
+    });
+
     const result = await zohoBooksService.syncContactsToDatabase(
       company, !req.query.fullSync, null,
       (progress) => syncManager.setProgress(companyId, progress),
       { isCancelRequested: () => syncManager.isCancelRequested(companyId) }
     );
-
- 
 
     const wasCancelled = result?.message === 'Sync cancelled by user' || result?.cancelled === true;
 
@@ -1149,10 +1148,30 @@ exports.syncFromZoho = async (req, res) => {
       created: result?.created || 0, updated: result?.updated || 0, errors: result?.errors || 0, duration: result?.duration
     });
 
+    if (!wasCancelled && result) {
+      logger.info(`Customer sync completed for company: ${company.code}`, {
+        companyId: company._id,
+        companyCode: company.code,
+        created: result?.created || 0,
+        updated: result?.updated || 0,
+        errors: result?.errors || 0,
+        total: result?.totalFromZoho || 0,
+        duration: result?.duration
+      });
+    } else if (wasCancelled) {
+      logger.warn(`Customer sync cancelled for company: ${company.code}`, {
+        companyId: company._id,
+        companyCode: company.code
+      });
+    }
+
     setTimeout(() => syncManager.clearSyncState(companyId), 15000);
 
   } catch (error) {
-    console.error('Customer Sync Error:', error);
+    logger.error(`Customer sync from Zoho error: ${error.message}`, {
+      error: error.message,
+      companyId
+    });
     if (companyId) {
       syncManager.setSyncing(companyId, false);
       syncManager.setProgress(companyId, { stage: 'error', message: `Sync failed: ${error.message}`, error: error.message });
@@ -1177,6 +1196,8 @@ exports.cancelCustomerSync = async (req, res) => {
     syncManager.requestCancel(companyId);
     syncManager.setSyncing(companyId, false);
     syncManager.setProgress(companyId, { stage: 'cancelled', message: 'Sync cancelled by user', startTime: Date.now() });
+
+    logger.info(`Customer sync cancelled for company: ${companyId}`, { companyId });
 
     res.json({ success: true, message: 'Sync cancelled successfully' });
 
@@ -1298,18 +1319,26 @@ exports.forceSyncCustomer = async (req, res) => {
 
     await clearCustomerCache(customer.companyId);
 
+    logger.info(`Customer force synced from Zoho: ${customer.name}`, {
+      customerId: id,
+      customerName: customer.name,
+      companyId: company._id
+    });
+
     res.status(200).json({
       success: true, message: 'Customer force synced successfully',
       data: updatedCustomer.getFormattedData()
     });
 
   } catch (error) {
+    logger.error(`Force sync customer error: ${error.message}`, {
+      error: error.message,
+      customerId: req.params.id
+    });
     sendErrorResponse(res, 500, 'Error force syncing customer', error);
   }
 };
 
- 
-// Helper function to calculate place-based statistics
 const calculatePlaceStats = (customers) => {
   const stats = {
     uae: {},
@@ -1317,12 +1346,10 @@ const calculatePlaceStats = (customers) => {
     other: []
   };
 
-  // Initialize UAE emirates counts
   UAE_EMIRATES.forEach(emirate => {
     stats.uae[emirate] = 0;
   });
 
-  // Initialize GCC countries counts
   GCC_COUNTRIES.forEach(country => {
     stats.gcc[country.name] = 0;
   });
@@ -1352,25 +1379,20 @@ const calculatePlaceStats = (customers) => {
   return stats;
 };
 
-// Helper to get country from place of supply
 const getCountryFromPlace = (place) => {
   if (UAE_EMIRATES.includes(place)) return 'UAE';
   if (GCC_COUNTRY_NAMES.includes(place)) return place;
   return 'Other';
 };
 
-// Helper to get tax treatment label
 const getTaxTreatmentLabel = (taxTreatment) => {
   const treatment = TAX_TREATMENTS.find(t => t.value === taxTreatment);
   return treatment ? treatment.label : taxTreatment;
 };
 
-// Main export function using ExcelJS
 exports.exportCustomers = async (req, res) => {
   try {
     let companyId = req.headers['x-company-id'] || req.query.companyId;
-    
-    // Check if "All Companies" is selected
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
     
     if (!companyId && !isAllCompanies) {
@@ -1385,11 +1407,9 @@ exports.exportCustomers = async (req, res) => {
       search = ''
     } = req.query;
 
-    // Build query (companyId will be null for all companies)
     const effectiveCompanyId = isAllCompanies ? null : companyId;
     const query = buildCustomerQuery(effectiveCompanyId, { status, taxStatus, placeOfSupply, search });
 
-    // Fetch all customers (no pagination for export)
     const customers = await Customer.find(query)
       .sort({ name: 1 })
       .lean();
@@ -1401,10 +1421,8 @@ exports.exportCustomers = async (req, res) => {
       });
     }
 
-    // Calculate place-based statistics
     const placeStats = calculatePlaceStats(customers);
 
-    // Prepare data for export (same as before)
     const exportData = customers.map(customer => ({
       'Name': customer.name,
       'Email': customer.email || '',
@@ -1442,7 +1460,13 @@ exports.exportCustomers = async (req, res) => {
       customers: exportData
     };
 
-    // Handle different export formats
+    logger.info(`Customers exported: ${customers.length} records`, {
+      companyId: isAllCompanies ? 'ALL' : companyId,
+      format,
+      recordCount: customers.length,
+      exportedBy: req.user?.id
+    });
+
     if (format === 'csv') {
       return exportToCSV(responseData, res);
     } else {
@@ -1450,30 +1474,25 @@ exports.exportCustomers = async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Export Customers Error:', error);
+    logger.error(`Export customers error: ${error.message}`, { error: error.message });
     sendErrorResponse(res, 500, 'Error exporting customers', error);
   }
 };
 
-// Export to Excel using ExcelJS
 const exportToExcelJS = async (data, res) => {
   const { summary, placeStats, customers } = data;
   
-  // Create workbook
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Customer Management System';
   workbook.created = new Date();
   
-  // Add summary sheet
   const summarySheet = workbook.addWorksheet('Summary', {
     properties: { tabColor: { argb: 'FF4CAF50' } }
   });
   
-  // Style for summary sheet
   summarySheet.getColumn('A').width = 30;
   summarySheet.getColumn('B').width = 20;
   
-  // Title
   summarySheet.mergeCells('A1:B1');
   const titleCell = summarySheet.getCell('A1');
   titleCell.value = 'CUSTOMER EXPORT REPORT';
@@ -1484,7 +1503,6 @@ const exportToExcelJS = async (data, res) => {
   summarySheet.addRow(['Generated on:', new Date().toLocaleString()]);
   summarySheet.addRow([]);
   
-  // Summary section
   summarySheet.addRow(['=== SUMMARY ===']).font = { bold: true, size: 12 };
   summarySheet.addRow(['Total Customers', summary.totalCustomers]);
   summarySheet.addRow(['Active Customers', summary.activeCustomers]);
@@ -1495,14 +1513,12 @@ const exportToExcelJS = async (data, res) => {
   summarySheet.addRow(['Unsynced to Zoho', summary.unsyncedToZoho]);
   summarySheet.addRow([]);
   
-  // Apply styles to summary numbers
   for (let i = 8; i <= 14; i++) {
     const row = summarySheet.getRow(i);
     row.getCell(2).alignment = { horizontal: 'right' };
     row.getCell(2).font = { bold: true };
   }
   
-  // UAE Statistics
   summarySheet.addRow(['=== PLACE STATISTICS ===']).font = { bold: true, size: 12 };
   summarySheet.addRow(['UAE EMIRATES']).font = { italic: true };
   
@@ -1514,7 +1530,6 @@ const exportToExcelJS = async (data, res) => {
   summarySheet.addRow(['Total UAE Customers', placeStats.uae.total]).font = { bold: true };
   summarySheet.addRow([]);
   
-  // GCC Statistics
   summarySheet.addRow(['GCC COUNTRIES']).font = { italic: true };
   for (const [country, count] of Object.entries(placeStats.gcc)) {
     if (country !== 'total') {
@@ -1524,7 +1539,6 @@ const exportToExcelJS = async (data, res) => {
   summarySheet.addRow(['Total GCC Customers', placeStats.gcc.total]).font = { bold: true };
   summarySheet.addRow([]);
   
-  // Other places
   if (placeStats.other.length > 0) {
     summarySheet.addRow(['OTHER PLACES']).font = { italic: true };
     summarySheet.addRow(['Customer Name', 'Place of Supply', 'Email', 'Phone']);
@@ -1534,7 +1548,6 @@ const exportToExcelJS = async (data, res) => {
     summarySheet.addRow([]);
   }
   
-  // Style the summary sheet
   summarySheet.eachRow((row, rowNumber) => {
     row.eachCell((cell) => {
       cell.border = {
@@ -1546,16 +1559,13 @@ const exportToExcelJS = async (data, res) => {
     });
   });
   
-  // Add customer details sheet
   const customerSheet = workbook.addWorksheet('Customer Details', {
     properties: { tabColor: { argb: 'FF2196F3' } }
   });
   
-  // Add headers
   const headers = Object.keys(customers[0] || {});
   const headerRow = customerSheet.addRow(headers);
   
-  // Style header row
   headerRow.eachCell((cell) => {
     cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     cell.fill = {
@@ -1572,11 +1582,9 @@ const exportToExcelJS = async (data, res) => {
     };
   });
   
-  // Add data rows
   customers.forEach(customer => {
     const row = customerSheet.addRow(Object.values(customer));
     
-    // Style each cell
     row.eachCell((cell) => {
       cell.border = {
         top: { style: 'thin' },
@@ -1588,7 +1596,6 @@ const exportToExcelJS = async (data, res) => {
     });
   });
   
-  // Auto-fit columns
   customerSheet.columns.forEach(column => {
     let maxLength = 0;
     column.eachCell({ includeEmpty: true }, (cell) => {
@@ -1600,17 +1607,14 @@ const exportToExcelJS = async (data, res) => {
     column.width = Math.min(maxLength + 2, 50);
   });
   
-  // Freeze header row
   customerSheet.views = [
     { state: 'frozen', ySplit: 1 }
   ];
   
-  // Add a sheet with chart for visual statistics
   const chartSheet = workbook.addWorksheet('Visual Statistics', {
     properties: { tabColor: { argb: 'FFFF9800' } }
   });
   
-  // Add UAE chart data
   chartSheet.addRow(['UAE Emirates Distribution']).font = { bold: true, size: 14 };
   chartSheet.addRow([]);
   
@@ -1620,7 +1624,6 @@ const exportToExcelJS = async (data, res) => {
   
   chartSheet.addRows([['Emirate', 'Number of Customers'], ...uaeData]);
   
-  // Add GCC chart data
   chartSheet.addRow([]);
   chartSheet.addRow(['GCC Countries Distribution']).font = { bold: true, size: 14 };
   chartSheet.addRow([]);
@@ -1631,12 +1634,10 @@ const exportToExcelJS = async (data, res) => {
   
   chartSheet.addRows([['Country', 'Number of Customers'], ...gccData]);
   
-  // Auto-fit chart sheet columns
   chartSheet.columns.forEach(column => {
     column.width = 25;
   });
   
-  // Set response headers
   const filename = `customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
   
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -1647,18 +1648,15 @@ const exportToExcelJS = async (data, res) => {
     gccTotal: placeStats.gcc.total 
   }));
   
-  // Write to response
   await workbook.xlsx.write(res);
   res.end();
 };
 
-// Export to CSV fallback
 const exportToCSV = (data, res) => {
   const { summary, placeStats, customers } = data;
   
   let csvRows = [];
   
-  // Add summary section
   csvRows.push(['="CUSTOMER EXPORT REPORT"']);
   csvRows.push(['="Generated on: ' + new Date().toLocaleString() + '"']);
   csvRows.push([]);
@@ -1726,19 +1724,15 @@ const exportToCSV = (data, res) => {
   res.status(200).send(csvContent);
 };
 
-// Get customer place statistics (without full export)
 exports.getCustomerPlaceStats = async (req, res) => {
   try {
     let companyId = req.headers['x-company-id'] || req.query.companyId;
-    
-    // Check if "All Companies" is selected
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
     
     if (!companyId && !isAllCompanies) {
       return sendErrorResponse(res, 400, 'Company ID is required');
     }
 
-    // Build query (companyId will be null for all companies)
     const effectiveCompanyId = isAllCompanies ? null : companyId;
     let query = {};
     
@@ -1749,7 +1743,6 @@ exports.getCustomerPlaceStats = async (req, res) => {
     const customers = await Customer.find(query).lean();
     const placeStats = calculatePlaceStats(customers);
 
-    // Get breakdown by tax treatment per place
     const taxBreakdown = {};
     const allPlaces = [...UAE_EMIRATES, ...GCC_COUNTRY_NAMES];
     
@@ -1762,7 +1755,6 @@ exports.getCustomerPlaceStats = async (req, res) => {
       };
     });
 
-    // Get chart data for easy visualization
     const chartData = {
       uae: Object.entries(placeStats.uae)
         .filter(([key]) => key !== 'total')
@@ -1791,13 +1783,11 @@ exports.getCustomerPlaceStats = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get Place Stats Error:', error);
+    logger.error(`Get place stats error: ${error.message}`, { error: error.message });
     sendErrorResponse(res, 500, 'Error fetching place statistics', error);
   }
 };
 
-
-// Export constants and sync manager (for testing)
 exports.constants = {
   GCC_COUNTRIES: GCC_COUNTRY_NAMES, UAE_EMIRATES,
   TAX_TREATMENTS, TAX_TREATMENT_VALUES,

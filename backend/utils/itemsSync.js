@@ -3,6 +3,7 @@ const Item = require('../models/items');
 const Company = require('../models/company');
 const zohoBooksService = require('../zoho/customerServices');
 const Redis = require('../config/redisService');
+const logger = require('../config/logger');
 
 class ItemSyncService {
   
@@ -64,242 +65,264 @@ class ItemSyncService {
     const zohoResult = await this.fetchFromZoho({ ...options, company });
     
     if (zohoResult.success && zohoResult.data.length > 0) {
-      this.syncFromZoho(company).catch(console.error);
+      this.syncFromZoho(company).catch(err => 
+        logger.error(`Background sync failed for ${company.code}: ${err.message}`)
+      );
     }
     
     return zohoResult;
   }
   
- 
-static async syncFromZoho(company, onProgress = null) {
-  if (!company) {
-    throw new Error('Company is required for sync');
-  }
-  
-  const startTime = Date.now();
-  
-  try {
-    console.log(`\n🔄 Starting item sync for company: ${company.name} (${company.code})`);
-    
-    if (onProgress) {
-      onProgress({
-        stage: 'fetching',
-        message: 'Connecting to Zoho...',
-        fetched: 0,
-        total: 0,
-        page: 0,
-        totalPages: 0,
-        startTime: startTime
-      });
+  static async syncFromZoho(company, onProgress = null) {
+    if (!company) {
+      throw new Error('Company is required for sync');
     }
     
-    zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+    const startTime = Date.now();
     
-    // Fetch ALL items from Zoho (including status filter)
-    let allZohoItems = [];
-    let page = 1;
-    let hasMore = true;
-    let totalPages = 0;
-    
-    while (hasMore && page <= 50) {
+    try {
+      logger.info(`Starting item sync for company: ${company.name} (${company.code})`, {
+        companyId: company._id,
+        companyCode: company.code
+      });
+      
       if (onProgress) {
         onProgress({
           stage: 'fetching',
-          message: `Fetching page ${page}...`,
-          fetched: allZohoItems.length,
+          message: 'Connecting to Zoho...',
+          fetched: 0,
           total: 0,
-          page: page,
-          totalPages: totalPages,
+          page: 0,
+          totalPages: 0,
           startTime: startTime
         });
       }
       
-      // ✅ Fetch items with status filter to get all items (active + inactive)
-      const result = await zohoBooksService._request('GET', `/items?page=${page}&per_page=200&filter_by=Status.All`);
+      zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
       
-      if (result.success && result.data?.items) {
-        const items = result.data.items;
-        allZohoItems = [...allZohoItems, ...items];
+      // Fetch ALL items from Zoho (including status filter)
+      let allZohoItems = [];
+      let page = 1;
+      let hasMore = true;
+      let totalPages = 0;
+      
+      while (hasMore && page <= 50) {
+        if (onProgress) {
+          onProgress({
+            stage: 'fetching',
+            message: `Fetching page ${page}...`,
+            fetched: allZohoItems.length,
+            total: 0,
+            page: page,
+            totalPages: totalPages,
+            startTime: startTime
+          });
+        }
         
-        const pageContext = result.data.page_context || {};
-        totalPages = pageContext.total_pages || 0;
-        hasMore = pageContext.has_more_page === true;
+        const result = await zohoBooksService._request('GET', `/items?page=${page}&per_page=200&filter_by=Status.All`);
         
-        console.log(`📥 Page ${page}: ${items.length} items (Total: ${allZohoItems.length})`);
-        
-        page++;
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } else {
-        hasMore = false;
+        if (result.success && result.data?.items) {
+          const items = result.data.items;
+          allZohoItems = [...allZohoItems, ...items];
+          
+          const pageContext = result.data.page_context || {};
+          totalPages = pageContext.total_pages || 0;
+          hasMore = pageContext.has_more_page === true;
+          
+          page++;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } else {
+          hasMore = false;
+        }
       }
-    }
-    
-    console.log(`✅ Fetched ${allZohoItems.length} items from Zoho for ${company.name}`);
-    
-    // ✅ Extract Zoho IDs from fetched items
-    const zohoItemIds = new Set(allZohoItems.map(item => item.item_id));
-    
-    if (onProgress) {
-      onProgress({
-        stage: 'saving',
-        message: `Processing ${allZohoItems.length} items...`,
-        fetched: allZohoItems.length,
-        total: allZohoItems.length,
-        startTime: startTime
+      
+      logger.info(`Fetched ${allZohoItems.length} items from Zoho for ${company.name}`, {
+        companyId: company._id,
+        companyCode: company.code,
+        totalItems: allZohoItems.length
       });
-    }
-    
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
-    let errors = 0;
-    
-    const batchSize = 100;
-    const totalBatches = Math.ceil(allZohoItems.length / batchSize);
-    
-    // ✅ Process Zoho items (create/update)
-    for (let i = 0; i < allZohoItems.length; i += batchSize) {
-      const batch = allZohoItems.slice(i, i + batchSize);
-      const processed = Math.min(i + batchSize, allZohoItems.length);
-      const currentBatch = Math.floor(i / batchSize) + 1;
+      
+      const zohoItemIds = new Set(allZohoItems.map(item => item.item_id));
       
       if (onProgress) {
         onProgress({
           stage: 'saving',
-          message: `Processing batch ${currentBatch}/${totalBatches} (${processed}/${allZohoItems.length} items)...`,
-          fetched: processed,
+          message: `Processing ${allZohoItems.length} items...`,
+          fetched: allZohoItems.length,
           total: allZohoItems.length,
-          processed: processed,
-          batch: currentBatch,
-          totalBatches: totalBatches,
           startTime: startTime
         });
       }
       
-      await Promise.all(batch.map(async (zohoItem) => {
-        try {
-          const existingItem = await Item.findOne({ 
-            companyId: company._id,
-            zohoId: zohoItem.item_id 
+      let created = 0;
+      let updated = 0;
+      let deleted = 0;
+      let errors = 0;
+      
+      const batchSize = 100;
+      const totalBatches = Math.ceil(allZohoItems.length / batchSize);
+      
+      // Process Zoho items (create/update)
+      for (let i = 0; i < allZohoItems.length; i += batchSize) {
+        const batch = allZohoItems.slice(i, i + batchSize);
+        const processed = Math.min(i + batchSize, allZohoItems.length);
+        const currentBatch = Math.floor(i / batchSize) + 1;
+        
+        if (onProgress) {
+          onProgress({
+            stage: 'saving',
+            message: `Processing batch ${currentBatch}/${totalBatches} (${processed}/${allZohoItems.length} items)...`,
+            fetched: processed,
+            total: allZohoItems.length,
+            processed: processed,
+            batch: currentBatch,
+            totalBatches: totalBatches,
+            startTime: startTime
           });
-          
-          const itemData = {
-            companyId: company._id,
-            zohoId: zohoItem.item_id,
-            name: zohoItem.name || 'Unknown',
-            price: parseFloat(zohoItem.rate) || 0,
-            description: zohoItem.description || '',
-            sku: zohoItem.sku || '',
-            unit: zohoItem.unit || '',
-            product_type: zohoItem.product_type || 'goods',
-            tax_percentage: parseFloat(zohoItem.tax_percentage) || 0,
-            status: zohoItem.status || 'active',
-            is_taxable: zohoItem.is_taxable !== false,
-            can_be_sold: zohoItem.can_be_sold !== false,
-            lastSyncedAt: new Date(),
-            zohoData: zohoItem,
-            isActive: zohoItem.status === 'active'
-          };
-          
-          await Item.findOneAndUpdate(
-            { companyId: company._id, zohoId: zohoItem.item_id },
-            itemData,
-            { upsert: true, new: true }
-          );
-          
-          if (!existingItem) created++;
-          else updated++;
-        } catch (itemError) {
-          console.error(`Error processing item ${zohoItem.item_id}:`, itemError.message);
-          errors++;
         }
-      }));
+        
+        await Promise.all(batch.map(async (zohoItem) => {
+          try {
+            const existingItem = await Item.findOne({ 
+              companyId: company._id,
+              zohoId: zohoItem.item_id 
+            });
+            
+            const itemData = {
+              companyId: company._id,
+              zohoId: zohoItem.item_id,
+              name: zohoItem.name || 'Unknown',
+              price: parseFloat(zohoItem.rate) || 0,
+              description: zohoItem.description || '',
+              sku: zohoItem.sku || '',
+              unit: zohoItem.unit || '',
+              product_type: zohoItem.product_type || 'goods',
+              tax_percentage: parseFloat(zohoItem.tax_percentage) || 0,
+              status: zohoItem.status || 'active',
+              is_taxable: zohoItem.is_taxable !== false,
+              can_be_sold: zohoItem.can_be_sold !== false,
+              lastSyncedAt: new Date(),
+              zohoData: zohoItem,
+              isActive: zohoItem.status === 'active'
+            };
+            
+            await Item.findOneAndUpdate(
+              { companyId: company._id, zohoId: zohoItem.item_id },
+              itemData,
+              { upsert: true, new: true }
+            );
+            
+            if (!existingItem) created++;
+            else updated++;
+          } catch (itemError) {
+            logger.error(`Error processing item ${zohoItem.item_id}: ${itemError.message}`, {
+              itemId: zohoItem.item_id,
+              companyId: company._id,
+              error: itemError.message
+            });
+            errors++;
+          }
+        }));
+      }
       
-      console.log(`   Batch ${currentBatch}/${totalBatches}: Processed ${processed}/${allZohoItems.length} items`);
-    }
-    
-    // ✅ DELETE items that exist in DB but NOT in Zoho
-    if (onProgress) {
-      onProgress({
-        stage: 'deleting',
-        message: 'Checking for deleted items...',
-        fetched: allZohoItems.length,
+      // DELETE items that exist in DB but NOT in Zoho
+      if (onProgress) {
+        onProgress({
+          stage: 'deleting',
+          message: 'Checking for deleted items...',
+          fetched: allZohoItems.length,
+          total: allZohoItems.length,
+          startTime: startTime
+        });
+      }
+      
+      const dbItems = await Item.find({ 
+        companyId: company._id,
+        zohoId: { $nin: Array.from(zohoItemIds) }
+      });
+      
+      if (dbItems.length > 0) {
+        logger.warn(`Found ${dbItems.length} items to delete for company ${company.code}`, {
+          companyId: company._id,
+          companyCode: company.code,
+          itemsToDelete: dbItems.length
+        });
+        
+        const deletePromises = dbItems.map(async (item) => {
+          try {
+            await Item.deleteOne({ _id: item._id });
+            deleted++;
+          } catch (deleteError) {
+            logger.error(`Error deleting ${item.name}: ${deleteError.message}`, {
+              itemId: item._id,
+              itemName: item.name,
+              error: deleteError.message
+            });
+            errors++;
+          }
+        });
+        
+        await Promise.all(deletePromises);
+      }
+      
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      
+      logger.info(`Item sync completed for ${company.name}: Created: ${created}, Updated: ${updated}, Deleted: ${deleted}, Errors: ${errors}, Duration: ${duration}s`, {
+        companyId: company._id,
+        companyCode: company.code,
+        created,
+        updated,
+        deleted,
+        errors,
+        totalItems: allZohoItems.length,
+        duration: `${duration}s`
+      });
+      
+      if (onProgress) {
+        onProgress({
+          stage: 'completed',
+          message: `Sync completed! ${created} new, ${updated} updated, ${deleted} deleted`,
+          fetched: allZohoItems.length,
+          total: allZohoItems.length,
+          created: created,
+          updated: updated,
+          deleted: deleted,
+          errors: errors,
+          duration: duration,
+          startTime: startTime
+        });
+      }
+      
+      return { 
+        success: true, 
+        created, 
+        updated, 
+        deleted,
+        errors,
         total: allZohoItems.length,
-        startTime: startTime
-      });
-    }
-    
-    // Find items in DB that are not in Zoho
-    const dbItems = await Item.find({ 
-      companyId: company._id,
-      zohoId: { $nin: Array.from(zohoItemIds) }
-    });
-    
-    if (dbItems.length > 0) {
-      console.log(`🗑️ Found ${dbItems.length} items to delete (exist in DB but not in Zoho)`);
+        duration: `${duration}s`,
+        companyId: company._id
+      };
       
-      const deletePromises = dbItems.map(async (item) => {
-        try {
-          await Item.deleteOne({ _id: item._id });
-          console.log(`   Deleted: ${item.name} (${item.zohoId})`);
-          deleted++;
-        } catch (deleteError) {
-          console.error(`   Error deleting ${item.name}:`, deleteError.message);
-          errors++;
-        }
-      });
-      
-      await Promise.all(deletePromises);
-      console.log(`✅ Deleted ${deleted} items that no longer exist in Zoho`);
-    } else {
-      console.log('✅ No items to delete - DB is in sync with Zoho');
-    }
-    
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    
-    console.log(`✅ Item sync completed for ${company.name}:`);
-    console.log(`   Created: ${created}, Updated: ${updated}, Deleted: ${deleted}, Errors: ${errors}`);
-    console.log(`   Duration: ${duration}s`);
-    
-    if (onProgress) {
-      onProgress({
-        stage: 'completed',
-        message: `Sync completed! ${created} new, ${updated} updated, ${deleted} deleted`,
-        fetched: allZohoItems.length,
-        total: allZohoItems.length,
-        created: created,
-        updated: updated,
-        deleted: deleted,
-        errors: errors,
-        duration: duration,
-        startTime: startTime
-      });
-    }
-    
-    return { 
-      success: true, 
-      created, 
-      updated, 
-      deleted,
-      errors,
-      total: allZohoItems.length,
-      duration: `${duration}s`,
-      companyId: company._id
-    };
-    
-  } catch (error) {
-    console.error(`❌ Error syncing items for ${company.name}:`, error);
-    if (onProgress) {
-      onProgress({
-        stage: 'error',
-        message: `Sync failed: ${error.message}`,
+    } catch (error) {
+      logger.error(`Error syncing items for ${company.name}: ${error.message}`, {
+        companyId: company._id,
+        companyCode: company.code,
         error: error.message,
-        startTime: startTime
+        stack: error.stack
       });
+      
+      if (onProgress) {
+        onProgress({
+          stage: 'error',
+          message: `Sync failed: ${error.message}`,
+          error: error.message,
+          startTime: startTime
+        });
+      }
+      return { success: false, error: error.message };
     }
-    return { success: false, error: error.message };
   }
-}
   
   static async fetchFromZoho(options = {}) {
     const { company, search = '', page = 1, limit = 50, product_type } = options;
@@ -349,6 +372,13 @@ static async syncFromZoho(company, onProgress = null) {
       const start = (page - 1) * limit;
       const paginatedItems = items.slice(start, start + limit);
       
+      logger.debug(`Fetched ${items.length} items from Zoho API for company ${company.code}`, {
+        companyId: company._id,
+        totalItems: items.length,
+        page,
+        limit
+      });
+      
       return {
         success: true,
         data: paginatedItems,
@@ -364,7 +394,10 @@ static async syncFromZoho(company, onProgress = null) {
       };
       
     } catch (error) {
-      console.error('Error fetching from Zoho:', error);
+      logger.error(`Error fetching from Zoho for ${company.code}: ${error.message}`, {
+        companyId: company._id,
+        error: error.message
+      });
       return {
         success: false,
         error: error.message,
@@ -398,7 +431,13 @@ static async syncFromZoho(company, onProgress = null) {
         zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
         const zohoResult = await zohoBooksService.getItem(identifier);
         if (zohoResult.success && zohoResult.item) {
-          this.syncFromZoho(company).catch(console.error);
+          logger.info(`Item fetched from Zoho API for ${company.code}`, {
+            itemId: identifier,
+            companyId: company._id
+          });
+          this.syncFromZoho(company).catch(err => 
+            logger.error(`Background sync failed after item fetch: ${err.message}`)
+          );
           return {
             _id: zohoResult.item.item_id,
             zohoId: zohoResult.item.item_id,
@@ -457,7 +496,10 @@ static async syncFromZoho(company, onProgress = null) {
   
   static async clearCompanyItems(companyId) {
     const result = await Item.deleteMany({ companyId });
-    console.log(`🗑️ Cleared ${result.deletedCount} items for company ${companyId}`);
+    logger.info(`Cleared ${result.deletedCount} items for company ${companyId}`, {
+      companyId,
+      deletedCount: result.deletedCount
+    });
     return result;
   }
 }

@@ -1,6 +1,7 @@
 const { ExchangeRate } = require('../models/quotation');
 const ExchangeRateService = require('../utils/exchangeRateService.js');
 const axios = require('axios');
+const logger = require('../config/logger');
 
 class ExchangeRateController {
   
@@ -23,9 +24,11 @@ class ExchangeRateController {
         
         // Save to database for future use (don't await to not block response)
         ExchangeRate.create({ baseCurrency: base, rates, fetchedAt })
-          .catch(err => console.error('Failed to cache rates:', err.message));
+          .catch(err => logger.warn(`Failed to cache exchange rates for ${base}: ${err.message}`));
           
       } catch (apiError) {
+        logger.warn(`API rate fetch failed for ${base}, trying cache: ${apiError.message}`);
+        
         const cached = await ExchangeRate.findOne({ baseCurrency: base })
           .sort({ fetchedAt: -1 })
           .lean();
@@ -34,9 +37,11 @@ class ExchangeRateController {
           rates = cached.rates;
           fetchedAt = cached.fetchedAt;
           source = 'cache';
+          logger.info(`Using cached exchange rates for ${base} (${Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000 / 60)} min old)`);
         } else {
           rates = ExchangeRateService.getFallbackRates(base);
           source = 'fallback';
+          logger.warn(`Using fallback rates for ${base} - no cache available`);
         }
       }
 
@@ -52,7 +57,10 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('Get rates error:', error);
+      logger.error(`Get rates error for ${req.query.base || 'AED'}: ${error.message}`, {
+        error: error.message,
+        base: req.query.base
+      });
       res.status(503).json({
         success: false,
         message: 'Unable to fetch exchange rates',
@@ -105,11 +113,16 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('Convert error:', error);
+      logger.error(`Convert error: ${error.message}`, {
+        error: error.message,
+        amount: req.body.amount,
+        from: req.body.from,
+        to: req.body.to
+      });
       res.status(503).json({
         success: false,
         message: 'Unable to convert currency',
-        result: amount,
+        result: req.body.amount,
         rate: 1,
         error: error.message
       });
@@ -140,6 +153,10 @@ class ExchangeRateController {
   static async refreshRates(req, res) {
     try {
       if (req.user?.role !== 'admin') {
+        logger.warn(`Unauthorized refresh rates attempt by user: ${req.user?.id}`, {
+          userId: req.user?.id,
+          userRole: req.user?.role
+        });
         return res.status(403).json({ 
           success: false, 
           message: 'Admin access required' 
@@ -147,6 +164,13 @@ class ExchangeRateController {
       }
 
       const { base = 'AED' } = req.body;
+      
+      logger.info(`Manual rate refresh requested for ${base} by admin`, {
+        base,
+        adminId: req.user.id,
+        adminEmail: req.user.email
+      });
+      
       const rates = await ExchangeRateService.forceRefresh(base);
       
       // Clean up old records (keep last 100)
@@ -156,7 +180,14 @@ class ExchangeRateController {
           .sort({ fetchedAt: 1 })
           .limit(count - 100);
         await Promise.all(oldest.map(doc => doc.deleteOne()));
+        logger.info(`Cleaned up ${oldest.length} old exchange rate records for ${base}`);
       }
+
+      logger.info(`Exchange rates refreshed successfully for ${base}`, {
+        base,
+        rateCount: Object.keys(rates).length,
+        adminId: req.user.id
+      });
 
       res.json({ 
         success: true, 
@@ -166,7 +197,11 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('Refresh error:', error);
+      logger.error(`Refresh rates error: ${error.message}`, {
+        error: error.message,
+        base: req.body.base,
+        adminId: req.user?.id
+      });
       res.status(500).json({ 
         success: false, 
         message: 'Error refreshing rates', 
@@ -180,6 +215,9 @@ class ExchangeRateController {
       const status = {};
       const currencies = ExchangeRateService.SUPPORTED_CURRENCIES.slice(0, 7); // First 7 for status check
       
+      let cachedCount = 0;
+      let freshCount = 0;
+      
       for (const currency of currencies) {
         const latest = await ExchangeRate.findOne({ baseCurrency: currency })
           .sort({ fetchedAt: -1 })
@@ -187,11 +225,15 @@ class ExchangeRateController {
         
         if (latest) {
           const age = Math.floor((Date.now() - new Date(latest.fetchedAt).getTime()) / 1000);
+          const isFresh = age < 3600;
+          cachedCount++;
+          if (isFresh) freshCount++;
+          
           status[currency] = {
             available: true,
             fetchedAt: latest.fetchedAt,
             age: `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m`,
-            isFresh: age < 3600
+            isFresh
           };
         } else {
           status[currency] = { available: false };
@@ -208,6 +250,15 @@ class ExchangeRateController {
         apiStatus = 'available';
       } catch (error) {
         apiStatus = error.code === 'ECONNABORTED' ? 'timeout' : 'unavailable';
+        logger.warn(`Exchange rate API status check failed: ${apiStatus}`, {
+          error: error.message,
+          code: error.code
+        });
+      }
+
+      // Log status summary periodically (not on every request - this is just for info)
+      if (process.env.NODE_ENV === 'development') {
+        logger.debug(`Exchange rate status: API=${apiStatus}, Cache=${cachedCount}/${currencies.length}, Fresh=${freshCount}`);
       }
 
       res.json({
@@ -219,7 +270,9 @@ class ExchangeRateController {
       });
 
     } catch (error) {
-      console.error('Status error:', error);
+      logger.error(`Status check error: ${error.message}`, {
+        error: error.message
+      });
       res.status(500).json({ 
         success: false, 
         message: 'Error checking status', 

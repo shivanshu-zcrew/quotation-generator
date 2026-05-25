@@ -1,6 +1,6 @@
 // components/mobile/MobileQuotationLayout.jsx
 import React, { useState, useCallback, useEffect } from 'react';
-import { Plus, Trash2, Upload, FileText, Download, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Trash2, Upload, FileText, Download, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import ValidatedInput from './ValidatedInput';
 import TermsEditor, { TermsViewer } from './TermsCondition';
 import Snackbar from './Snackbar';
@@ -14,25 +14,39 @@ import headerImage from '../assets/header.png';
 // ============================================================
 // Mobile Field Component (Updated with read-only support)
 // ============================================================
-const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false }) => (
+const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false }) => (
   <div style={styles.fieldCard}>
     <label style={styles.fieldLabel}>
-      {label}
+      {label}{required && ' *'}
       {isReadOnly && isEditing && (
         <span style={{ marginLeft: '8px', fontSize: '10px', color: '#6b7280' }}>🔒 Auto-filled</span>
       )}
     </label>
     {isEditing && !isReadOnly ? (
-      <input
-        type={type}
-        value={value || ''}
-        onChange={(e) => onChange(field, e.target.value)}
-        style={{
-          ...inputStyle,
-          borderColor: error ? '#dc2626' : undefined,
-          backgroundColor: error ? '#fef2f2' : undefined,
-        }}
-      />
+      type === 'textarea' ? (
+        <textarea
+          value={value || ''}
+          onChange={(e) => onChange(field, e.target.value)}
+          rows={3}
+          style={{
+            ...inputStyle,
+            borderColor: error ? '#dc2626' : undefined,
+            backgroundColor: error ? '#fef2f2' : undefined,
+            resize: 'vertical',
+          }}
+        />
+      ) : (
+        <input
+          type={type}
+          value={value || ''}
+          onChange={(e) => onChange(field, e.target.value)}
+          style={{
+            ...inputStyle,
+            borderColor: error ? '#dc2626' : undefined,
+            backgroundColor: error ? '#fef2f2' : undefined,
+          }}
+        />
+      )
     ) : (
       <div style={{
         ...styles.fieldValue,
@@ -41,17 +55,21 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
         {type === 'date' ? fmtDate(value) : (value || 'N/A')}
       </div>
     )}
-    {error && <div style={styles.fieldError}>{error}</div>}
+    {error && (
+      <div style={styles.fieldError}>
+        <AlertCircle size={10} /> {error}
+      </div>
+    )}
   </div>
 );
 
 // ============================================================
-// Mobile Item Card Component (Keep as is)
+// Mobile Item Card Component (Updated with search support)
 // ============================================================
 const MobileItemCard = ({ 
   item, index, isEditing, onUpdate, onRemove, onAddImages,
   newImages, onRemoveNewImage, onRemoveExistingImage,
-  availableItems, fieldErrors, showLocalSnack 
+  availableItems, fieldErrors, showLocalSnack, currency 
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [showImageUpload, setShowImageUpload] = useState(false);
@@ -71,7 +89,48 @@ const MobileItemCard = ({
     onUpdate(item.id, field, value);
   };
 
+  const handleCatalogSelect = (e) => {
+    const selectedId = e.target.value;
+    if (!selectedId) return;
+    
+    const selectedCatalogItem = availableItems.find(itm => itm._id === selectedId);
+    if (selectedCatalogItem) {
+      onUpdate(item.id, 'itemId', selectedId);
+      onUpdate(item.id, 'name', selectedCatalogItem.name);
+      onUpdate(item.id, 'description', selectedCatalogItem.description || '');
+      onUpdate(item.id, 'unitPrice', selectedCatalogItem.unitPrice || 0);
+    }
+  };
+
   const total = (Number(item.quantity || 0) * Number(item.unitPrice || 0)).toFixed(2);
+
+  const renderItemImages = () => {
+    if (!item.imagePaths?.length && !newImages[item.id]?.length) return null;
+    
+    return (
+      <div style={styles.imageSection}>
+        <label style={styles.itemLabel}>Images</label>
+        <div style={styles.imageGrid}>
+          {item.imagePaths?.map((path, idx) => (
+            <div key={`existing-${idx}`} style={styles.imageContainer}>
+              <img src={path} alt="" style={styles.itemImage} />
+              {isEditing && onRemoveExistingImage && (
+                <button onClick={() => onRemoveExistingImage(item.id, idx)} style={styles.removeImgBtnStyle}>×</button>
+              )}
+            </div>
+          ))}
+          {newImages[item.id]?.map((src, idx) => (
+            <div key={`new-${idx}`} style={{ ...styles.imageContainer, borderColor: '#86efac', borderWidth: '2px' }}>
+              <img src={src} alt="" style={styles.itemImage} />
+              {isEditing && onRemoveNewImage && (
+                <button onClick={() => onRemoveNewImage(item.id, idx)} style={styles.removeImgBtnStyle}>×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div style={styles.itemCard}>
@@ -86,22 +145,40 @@ const MobileItemCard = ({
       
       {expanded && (
         <div style={styles.itemCardBody}>
-          {/* Item Selection */}
-          {isEditing && (
+          {/* Catalog Selection */}
+          {isEditing && availableItems.length > 0 && (
             <div style={styles.itemField}>
-              <label style={styles.itemLabel}>Select Item</label>
+              <label style={styles.itemLabel}>Select from Catalog</label>
               <select
                 value={item.itemId || ''}
-                onChange={(e) => onUpdate(item.id, 'itemId', e.target.value)}
+                onChange={handleCatalogSelect}
                 style={inputStyle}
               >
                 <option value="">— Select Item —</option>
                 {availableItems.map((itm) => (
-                  <option key={itm._id} value={itm._id}>{itm.name}</option>
+                  <option key={itm._id} value={itm._id}>
+                    {itm.name} - {currency} {Number(itm.unitPrice || 0).toFixed(2)}
+                  </option>
                 ))}
               </select>
             </div>
           )}
+          
+          {/* Item Name */}
+          <div style={styles.itemField}>
+            <label style={styles.itemLabel}>Item Name</label>
+            {isEditing ? (
+              <input
+                type="text"
+                value={item.name || ''}
+                onChange={(e) => onUpdate(item.id, 'name', e.target.value)}
+                placeholder="Item name..."
+                style={inputStyle}
+              />
+            ) : (
+              <div style={styles.itemDescription}>{item.name || '—'}</div>
+            )}
+          </div>
           
           {/* Description */}
           <div style={styles.itemField}>
@@ -141,7 +218,7 @@ const MobileItemCard = ({
               )}
             </div>
             <div style={{ flex: 1 }}>
-              <label style={styles.itemLabel}>Unit Price</label>
+              <label style={styles.itemLabel}>Unit Price ({currency})</label>
               {isEditing ? (
                 <ValidatedInput
                   type="number"
@@ -164,34 +241,12 @@ const MobileItemCard = ({
           
           {/* Amount */}
           <div style={styles.amountRow}>
-            <label style={styles.itemLabel}>Amount</label>
+            <label style={styles.itemLabel}>Amount ({currency})</label>
             <div style={styles.amountValue}>{total}</div>
           </div>
           
           {/* Images */}
-          {(item.imagePaths?.length > 0 || newImages[item.id]?.length > 0) && (
-            <div style={styles.imageSection}>
-              <label style={styles.itemLabel}>Images</label>
-              <div style={styles.imageGrid}>
-                {item.imagePaths?.map((path, idx) => (
-                  <div key={idx} style={styles.imageContainer}>
-                    <img src={path} alt="" style={styles.itemImage} />
-                    {isEditing && onRemoveExistingImage && (
-                      <button onClick={() => onRemoveExistingImage(item.id, idx)} style={styles.removeImgBtnStyle}>×</button>
-                    )}
-                  </div>
-                ))}
-                {newImages[item.id]?.map((src, idx) => (
-                  <div key={idx} style={{ ...styles.imageContainer, borderColor: '#86efac' }}>
-                    <img src={src} alt="" style={styles.itemImage} />
-                    {isEditing && onRemoveNewImage && (
-                      <button onClick={() => onRemoveNewImage(item.id, idx)} style={styles.removeImgBtnStyle}>×</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {renderItemImages()}
           
           {/* Image Upload */}
           {isEditing && (
@@ -234,11 +289,12 @@ const MobileItemCard = ({
 };
 
 // ============================================================
-// Mobile Document Section Component (Keep as is)
+// Mobile Document Section Component (Updated)
 // ============================================================
-const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEditing, formatFileSize, getFileIcon }) => {
+const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPreview, isEditing, formatFileSize, getFileIcon }) => {
   const [expanded, setExpanded] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [docDescriptions, setDocDescriptions] = useState({});
   const [uploading, setUploading] = useState(false);
 
   const handleFileSelect = (e) => {
@@ -248,14 +304,25 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEd
 
   const removeFile = (index) => {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+    setDocDescriptions(prev => {
+      const newDesc = { ...prev };
+      delete newDesc[prev[index]?.name];
+      return newDesc;
+    });
   };
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) return;
     setUploading(true);
-    await onUpload(selectedFiles, []);
+    const descriptions = selectedFiles.map(file => docDescriptions[file.name] || '');
+    await onUpload(selectedFiles, descriptions);
     setSelectedFiles([]);
+    setDocDescriptions({});
     setUploading(false);
+  };
+
+  const handleDescriptionChange = (fileName, value) => {
+    setDocDescriptions(prev => ({ ...prev, [fileName]: value }));
   };
 
   return (
@@ -263,7 +330,8 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEd
       <div style={styles.docHeader} onClick={() => setExpanded(!expanded)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <FileText size={18} />
-          <span style={styles.docTitle}>Documents ({documents.length})</span>
+          <span style={styles.docTitle}>Internal Documents ({documents.length})</span>
+          <span style={styles.internalBadge}>Internal only</span>
         </div>
         {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </div>
@@ -274,39 +342,59 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEd
             <div style={{ marginBottom: '1rem' }}>
               <input type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} id="mobile-doc-upload" />
               <label htmlFor="mobile-doc-upload" style={styles.uploadBtn}>
-                <Upload size={14} /> Select Files
+                <Upload size={14} /> Select Documents
               </label>
+              <p style={styles.uploadHint}>PDF, DOC, XLS, Images, TXT, ZIP (Max 10MB each)</p>
             </div>
           )}
           
           {selectedFiles.length > 0 && (
             <div style={styles.selectedFiles}>
+              <h4 style={styles.selectedFilesTitle}>Files ready to upload:</h4>
               {selectedFiles.map((file, idx) => (
                 <div key={idx} style={styles.selectedFile}>
-                  <span>{file.name}</span>
+                  <div style={styles.selectedFileInfo}>
+                    <span style={styles.selectedFileName}>{file.name}</span>
+                    <input
+                      type="text"
+                      placeholder="Description (optional)"
+                      value={docDescriptions[file.name] || ''}
+                      onChange={(e) => handleDescriptionChange(file.name, e.target.value)}
+                      style={styles.fileDescInput}
+                    />
+                  </div>
                   <button onClick={() => removeFile(idx)} style={styles.removeBtn}>✕</button>
                 </div>
               ))}
               <button onClick={handleUpload} disabled={uploading} style={styles.uploadConfirm}>
-                Upload {selectedFiles.length} file(s)
+                {uploading ? 'Uploading...' : `Upload ${selectedFiles.length} File(s)`}
               </button>
             </div>
           )}
           
           {documents.length === 0 ? (
-            <div style={styles.emptyDocs}>No documents</div>
+            <div style={styles.emptyDocs}>
+              <FileText size={24} color="#d1d5db" style={{ marginBottom: '0.5rem' }} />
+              <p>No internal documents</p>
+              {isEditing && <p style={{ fontSize: '0.7rem' }}>Upload documents for internal team reference</p>}
+            </div>
           ) : (
             documents.map(doc => (
-              <div key={doc._id} style={styles.docItem}>
+              <div key={doc._id || doc.id} style={styles.docItem}>
                 <div style={styles.docIcon}>{getFileIcon?.(doc.fileType) || '📎'}</div>
                 <div style={styles.docInfo}>
                   <div style={styles.docName}>{doc.fileName}</div>
                   {doc.description && <div style={styles.docDesc}>{doc.description}</div>}
+                  <div style={styles.docDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
                 </div>
                 <div style={styles.docActions}>
-                  <button onClick={() => onDownload(doc._id)} style={styles.docAction}>📥</button>
+                  {(doc.fileType?.startsWith('image/') || doc.fileData?.startsWith('data:image')) ? (
+                    <button onClick={() => onPreview?.(doc._id || doc.id)} style={styles.docAction}>👁️</button>
+                  ) : (
+                    <button onClick={() => onDownload(doc._id || doc.id)} style={styles.docAction}>📥</button>
+                  )}
                   {isEditing && (
-                    <button onClick={() => onDelete(doc._id)} style={{ ...styles.docAction, color: '#dc2626' }}>🗑️</button>
+                    <button onClick={() => onDelete(doc._id || doc.id)} style={{ ...styles.docAction, color: '#dc2626' }}>🗑️</button>
                   )}
                 </div>
               </div>
@@ -319,7 +407,7 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, isEd
 };
 
 // ============================================================
-// Main Mobile Quotation Layout Component (UPDATED)
+// Main Mobile Quotation Layout Component (UPDATED with all features)
 // ============================================================
 const MobileQuotationLayout = ({
   isEditing,
@@ -350,6 +438,7 @@ const MobileQuotationLayout = ({
   onDocumentUpload,
   onDocumentDelete,
   onDocumentDownload,
+  onDocumentPreview,
   formatFileSize,
   getFileIcon,
   companyName,
@@ -359,34 +448,25 @@ const MobileQuotationLayout = ({
   taxPresets = [],
   defaultTaxValue = '0',
   handleTaxChange,
+  termsImages = [],
+  onTermsImagesUpload,
+  onRemoveTermsImage,
+  hideSnack,
+  companyPhone = '',
+  companyEmail = '',
+  companyTradeLicense = '',
+  companyTaxRegistration = '',
+  selectedCurrency = 'AED'
 }) => {
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
   
   // Get current user from store
   const currentUser = useAppStore((state) => state.user);
 
-  // Auto-populate sales info from logged-in user
-  useEffect(() => {
-    console.log('Mobile - Auto-populate check:', { isEditing, currentUser });
-    
-    if (isEditing && currentUser) {
-      // Auto-populate Sales Email ONLY if it's empty
-      if (!quotationData.salesManagerEmail && currentUser.email) {
-        console.log('Mobile - Setting sales email to:', currentUser.email);
-        onDataChange('salesManagerEmail', currentUser.email);
-      }
-      
-      // Auto-populate Sales Contact ONLY if it's empty
-      if (!quotationData.ourContact && currentUser.name) {
-        console.log('Mobile - Setting sales contact to:', currentUser.name);
-        onDataChange('ourContact', currentUser.name);
-      }
-    }
-  }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, onDataChange]);
-
   const showLocalSnack = (message, type = 'error') => {
     setSnackbar({ show: true, message, type });
     setTimeout(() => setSnackbar({ show: false, message: '', type: 'error' }), 3000);
+    if (hideSnack) hideSnack();
   };
 
   const handleFieldChange = (field, value) => {
@@ -400,27 +480,55 @@ const MobileQuotationLayout = ({
     }
   };
 
-  // Updated field definitions with correct field names
+  // Updated field definitions with all required fields
   const LEFT_FIELDS = [
-    ['Project Name', 'projectName', 'text'],
-    ['Customer', 'customer', 'text'],
-    ['Contact', 'contact', 'text'],
-    ['Date', 'date', 'date'],
-    ['Expiry Date', 'expiryDate', 'date'],
+    { label: 'Project Name', field: 'projectName', type: 'text', required: true },
+    { label: 'Scope of Work', field: 'scopeOfWork', type: 'textarea', required: false },
+    { label: 'Company Name', field: 'customer', type: 'text', required: true },
+    { label: 'Contact Name', field: 'customerName', type: 'text', required: true },
+    { label: 'Phone', field: 'customerPhone', type: 'text', required: true },
+    { label: 'Email', field: 'customerEmail', type: 'email', required: true },
+    { label: 'Designation', field: 'customerDesignation', type: 'text', required: false },
+    { label: 'Trade License Number', field: 'customerTradeLicenseNumber', type: 'text', required: false },
+    { label: 'Tax Registration Number', field: 'customerTaxRegistrationNumber', type: 'text', required: false },
   ];
 
-  // Updated RIGHT_FIELDS with correct field names and read-only config
   const RIGHT_FIELDS = [
-    ['Sales Email', 'salesManagerEmail', 'text', true], // Read-only
-    ['Sales Contact', 'ourContact', 'text', true], // Read-only
-    ['Payment', 'paymentTerms', 'text', false],
-    ['Delivery', 'deliveryTerms', 'text', false],
-    ['TL', 'tl', 'text', false],
-    ['TRN', 'trn', 'text', false],
+    { label: 'Name', field: 'ourFocalPoint', type: 'text', required: true, isReadOnly: false },
+    { label: 'Phone', field: 'ourContact', type: 'text', required: false, isReadOnly: true },
+    { label: 'Email', field: 'salesManagerEmail', type: 'email', required: false, isReadOnly: true },
+    { label: 'Designation', field: 'ourFocalPointDesignation', type: 'text', required: false, isReadOnly: false },
+    { label: 'Trade License Number', field: 'companyTradeLicense', type: 'text', required: false, isReadOnly: true },
+    { label: 'Tax Registration Number', field: 'companyTaxRegistration', type: 'text', required: false, isReadOnly: true },
+    { label: 'Date', field: 'date', type: 'date', required: true, isReadOnly: false },
+    { label: 'Expiry Date', field: 'expiryDate', type: 'date', required: true, isReadOnly: false },
   ];
 
-  // Read-only fields array
-  const READONLY_FIELDS = ['customer', 'salesManagerEmail', 'ourContact'];
+  // Get field values with fallbacks
+  const getFieldValue = (field) => {
+    if (field === 'companyTradeLicense') return companyTradeLicense || quotationData.companyTradeLicense;
+    if (field === 'companyTaxRegistration') return companyTaxRegistration || quotationData.companyTaxRegistration;
+    if (field === 'ourContact') return quotationData.ourContact || companyPhone;
+    if (field === 'salesManagerEmail') return quotationData.salesManagerEmail || companyEmail;
+    return quotationData[field];
+  };
+
+  // Auto-populate sales info from logged-in user
+  useEffect(() => {
+    if (isEditing && currentUser) {
+      if (!quotationData.salesManagerEmail && currentUser.email) {
+        onDataChange('salesManagerEmail', currentUser.email);
+      }
+      if (!quotationData.ourContact && (currentUser.phone || currentUser.name)) {
+        onDataChange('ourContact', currentUser.phone || currentUser.name);
+      }
+      if (!quotationData.ourFocalPoint && currentUser.name) {
+        onDataChange('ourFocalPoint', currentUser.name);
+      }
+    }
+  }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, quotationData.ourFocalPoint, onDataChange]);
+
+  const displayCurrency = selectedCurrency || quotationData.currency?.code || 'AED';
 
   return (
     <div style={styles.container}>
@@ -441,7 +549,10 @@ const MobileQuotationLayout = ({
               value={quotationData.expiryDate || ''}
               min={quotationData.date || ''}
               onChange={(e) => handleFieldChange('expiryDate', e.target.value)}
-              style={inputStyle}
+              style={{
+                ...inputStyle,
+                borderColor: headerErrors.expiryDate ? '#dc2626' : undefined,
+              }}
             />
           ) : (
             <span style={styles.expiryDate}>{fmtDate(quotationData.expiryDate)}</span>
@@ -450,40 +561,42 @@ const MobileQuotationLayout = ({
         </div>
       </div>
 
-      {/* Form Fields - Split into two columns for better mobile layout */}
+      {/* Form Fields - Two Columns */}
       <div style={styles.fieldsSection}>
-        {/* Left Column Fields */}
+        {/* Left Column - Customer Details */}
         <div style={styles.column}>
-          <h4 style={styles.columnTitle}>Quotation Details</h4>
-          {LEFT_FIELDS.map(([label, field, type]) => (
+          <h4 style={styles.columnTitle}>Customer Details</h4>
+          {LEFT_FIELDS.map(({ label, field, type, required }) => (
             <MobileField
               key={field}
               label={label}
               field={field}
               type={type}
-              value={quotationData[field]}
+              value={getFieldValue(field)}
               isEditing={isEditing}
               onChange={handleFieldChange}
               error={headerErrors[field]}
-              isReadOnly={READONLY_FIELDS.includes(field)}
+              isReadOnly={false}
+              required={required}
             />
           ))}
         </div>
         
-        {/* Right Column Fields */}
+        {/* Right Column - Company & Dates */}
         <div style={styles.column}>
-          <h4 style={styles.columnTitle}>Sales & Payment Info</h4>
-          {RIGHT_FIELDS.map(([label, field, type, isReadOnly]) => (
+          <h4 style={styles.columnTitle}>Company Details</h4>
+          {RIGHT_FIELDS.map(({ label, field, type, required, isReadOnly }) => (
             <MobileField
               key={field}
               label={label}
               field={field}
               type={type}
-              value={quotationData[field]}
+              value={getFieldValue(field)}
               isEditing={isEditing}
               onChange={handleFieldChange}
               error={headerErrors[field]}
-              isReadOnly={isReadOnly || READONLY_FIELDS.includes(field)}
+              isReadOnly={isReadOnly}
+              required={required}
             />
           ))}
         </div>
@@ -491,7 +604,7 @@ const MobileQuotationLayout = ({
 
       {/* Items Section */}
       <div style={styles.itemsSection}>
-        <h3 style={styles.sectionTitle}>Items</h3>
+        <h3 style={styles.sectionTitle}>Items Detail</h3>
         {quotationItems.map((item, index) => (
           <MobileItemCard
             key={item.id}
@@ -507,11 +620,12 @@ const MobileQuotationLayout = ({
             availableItems={availableItems}
             fieldErrors={fieldErrors}
             showLocalSnack={showLocalSnack}
+            currency={displayCurrency}
           />
         ))}
         {isEditing && (
           <button onClick={onAddItem} style={styles.addItemBtn}>
-            <Plus size={16} /> Add Item
+            <Plus size={16} /> Add More Items
           </button>
         )}
       </div>
@@ -519,7 +633,7 @@ const MobileQuotationLayout = ({
       {/* Totals */}
       <div style={styles.totalsSection}>
         <div style={styles.totalRow}>
-          <span>Subtotal</span>
+          <span>Subtotal ({displayCurrency})</span>
           <span>{subtotal.toFixed(2)}</span>
         </div>
         {showTaxSection && (
@@ -535,7 +649,7 @@ const MobileQuotationLayout = ({
           </div>
         )}
         <div style={styles.grandTotalRow}>
-          <span>Grand Total</span>
+          <span>Grand Total ({displayCurrency})</span>
           <span>{grandTotal.toFixed(2)}</span>
         </div>
       </div>
@@ -544,40 +658,97 @@ const MobileQuotationLayout = ({
       {isEditing && showTaxSection && (
         <div style={styles.taxEditSection}>
           <h4 style={styles.taxTitle}>Tax & Discount</h4>
-          <select
-            onChange={handleTaxChange}
-            value={quotationData.tax?.toString() ?? defaultTaxValue}
-            style={inputStyle}
-          >
-            {taxPresets.map(preset => (
-              <option key={preset.value} value={preset.value}>{preset.label}</option>
-            ))}
-          </select>
-          <ValidatedInput
-            type="number"
-            value={quotationData.discount}
-            onChange={(val) => onDataChange('discount', val === '' ? 0 : parseFloat(val) || 0)}
-            validator={validatePercentage}
-            placeholder="Discount %"
-            style={{ ...inputStyle, marginTop: '0.5rem' }}
-            min="0"
-            max="100"
-          />
+          <div style={styles.taxGrid}>
+            <div>
+              <label style={styles.inputLabel}>VAT (%)</label>
+              <select
+                onChange={handleTaxChange}
+                value={quotationData.tax?.toString() ?? defaultTaxValue}
+                style={inputStyle}
+              >
+                {taxPresets.map(preset => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={styles.inputLabel}>Discount (%)</label>
+              <ValidatedInput
+                type="number"
+                value={quotationData.discount}
+                onChange={(val) => onDataChange('discount', val === '' ? 0 : parseFloat(val) || 0)}
+                validator={validatePercentage}
+                placeholder="Discount %"
+                style={inputStyle}
+                min="0"
+                max="100"
+                step="0.01"
+              />
+            </div>
+          </div>
+          {headerErrors.tax && <div style={styles.fieldError}>⚠ {headerErrors.tax}</div>}
+          {headerErrors.discount && <div style={styles.fieldError}>⚠ {headerErrors.discount}</div>}
         </div>
       )}
 
       {/* Amount in Words */}
       <div style={styles.amountWords}>
-        <strong>Amount in words:</strong> {amountInWords}
+        <strong>Amount in words: </strong>
+        <span>{amountInWords}</span>
       </div>
 
-      {/* Terms & Conditions */}
+      {/* Remark Section */}
+      {isEditing ? (
+        <div style={styles.remarkSection}>
+          <div style={styles.remarkHeader}>
+            <FileText size={18} />
+            <h4 style={styles.remarkTitle}>Remark</h4>
+            <span style={styles.internalBadge}>Additional notes</span>
+          </div>
+          <textarea
+            value={quotationData.remark || ''}
+            onChange={(e) => handleFieldChange('remark', e.target.value)}
+            placeholder="Add any additional remarks or notes about this quotation..."
+            rows={3}
+            style={{
+              ...inputStyle,
+              resize: 'vertical',
+              width: '100%',
+            }}
+          />
+        </div>
+      ) : (
+        quotationData.remark && (
+          <div style={styles.remarkSection}>
+            <div style={styles.remarkHeader}>
+              <FileText size={18} />
+              <h4 style={styles.remarkTitle}>Remark</h4>
+            </div>
+            <div style={styles.remarkContent}>
+              {quotationData.remark}
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Terms & Conditions with Images */}
       <div style={styles.termsSection}>
         <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
         {isEditing ? (
-          <TermsEditor sections={tcSections} onChange={onTcChange} />
+          <TermsEditor 
+            sections={tcSections} 
+            onChange={onTcChange}
+            termsImages={termsImages}
+            onTermsImagesUpload={onTermsImagesUpload}
+            onRemoveTermsImage={onRemoveTermsImage}
+          />
         ) : (
-          <TermsViewer sections={tcSections} />
+          <TermsViewer 
+            sections={tcSections} 
+            termsImages={termsImages}
+          />
         )}
       </div>
 
@@ -587,6 +758,7 @@ const MobileQuotationLayout = ({
         onUpload={onDocumentUpload}
         onDelete={onDocumentDelete}
         onDownload={onDocumentDownload}
+        onPreview={onDocumentPreview}
         isEditing={isEditing}
         formatFileSize={formatFileSize}
         getFileIcon={getFileIcon}
@@ -594,8 +766,8 @@ const MobileQuotationLayout = ({
 
       {/* Signature */}
       <div style={styles.signature}>
-        <p>Sincerely,</p>
-        <p style={{ marginTop: '2rem' }}>{companyName}</p>
+        <p style={{ margin: 0, fontWeight: '600' }}>Sincerely,</p>
+        <p style={{ marginTop: '2rem', fontWeight: '600' }}>{companyName}</p>
       </div>
 
       {/* Action Bar */}
@@ -610,7 +782,7 @@ const MobileQuotationLayout = ({
 };
 
 // ============================================================
-// Styles (Keep your existing styles)
+// Styles (Updated with new styles)
 // ============================================================
 const styles = {
   container: {
@@ -703,6 +875,9 @@ const styles = {
     fontSize: '0.65rem',
     color: '#dc2626',
     marginTop: '0.25rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.25rem',
   },
   itemsSection: {
     marginBottom: '1.5rem',
@@ -892,6 +1067,18 @@ const styles = {
     marginBottom: '0.5rem',
     color: '#0369a1',
   },
+  taxGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '0.75rem',
+  },
+  inputLabel: {
+    display: 'block',
+    fontSize: '0.7rem',
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: '0.25rem',
+  },
   amountWords: {
     padding: '0.75rem',
     backgroundColor: '#f8fafc',
@@ -899,8 +1086,42 @@ const styles = {
     fontSize: '0.75rem',
     marginBottom: '1rem',
   },
+  remarkSection: {
+    marginBottom: '1rem',
+    backgroundColor: '#f8fafc',
+    borderRadius: '0.5rem',
+    padding: '0.75rem',
+    border: '1px solid #e2e8f0',
+  },
+  remarkHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    marginBottom: '0.75rem',
+  },
+  remarkTitle: {
+    fontSize: '0.8rem',
+    fontWeight: '600',
+    margin: 0,
+    color: '#1f2937',
+  },
+  remarkContent: {
+    fontSize: '0.875rem',
+    color: '#1f2937',
+    lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
   termsSection: {
     marginBottom: '1rem',
+  },
+  internalBadge: {
+    fontSize: '0.6rem',
+    color: '#6b7280',
+    backgroundColor: '#e2e8f0',
+    padding: '0.2rem 0.4rem',
+    borderRadius: '999px',
+    marginLeft: 'auto',
   },
   docSection: {
     border: '1px solid #e5e7eb',
@@ -936,8 +1157,20 @@ const styles = {
     cursor: 'pointer',
     border: 'none',
   },
+  uploadHint: {
+    fontSize: '0.65rem',
+    color: '#6b7280',
+    marginTop: '0.5rem',
+    marginBottom: 0,
+  },
   selectedFiles: {
     marginTop: '0.75rem',
+  },
+  selectedFilesTitle: {
+    fontSize: '0.7rem',
+    fontWeight: '600',
+    marginBottom: '0.5rem',
+    color: '#374151',
   },
   selectedFile: {
     display: 'flex',
@@ -947,7 +1180,23 @@ const styles = {
     backgroundColor: '#f3f4f6',
     borderRadius: '0.375rem',
     marginBottom: '0.5rem',
-    fontSize: '0.75rem',
+    gap: '0.5rem',
+  },
+  selectedFileInfo: {
+    flex: 1,
+  },
+  selectedFileName: {
+    fontSize: '0.7rem',
+    fontWeight: '500',
+    display: 'block',
+    marginBottom: '0.25rem',
+  },
+  fileDescInput: {
+    width: '100%',
+    padding: '0.25rem 0.5rem',
+    border: '1px solid #e2e8f0',
+    borderRadius: '0.25rem',
+    fontSize: '0.7rem',
   },
   removeBtn: {
     background: 'none',
@@ -955,6 +1204,7 @@ const styles = {
     cursor: 'pointer',
     color: '#ef4444',
     fontSize: '1rem',
+    padding: '0.25rem',
   },
   uploadConfirm: {
     marginTop: '0.5rem',
@@ -972,6 +1222,10 @@ const styles = {
     padding: '1rem',
     color: '#9ca3af',
     fontSize: '0.75rem',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '0.25rem',
   },
   docItem: {
     display: 'flex',
@@ -993,6 +1247,11 @@ const styles = {
   docDesc: {
     fontSize: '0.65rem',
     color: '#6b7280',
+  },
+  docDate: {
+    fontSize: '0.6rem',
+    color: '#9ca3af',
+    marginTop: '0.2rem',
   },
   docActions: {
     display: 'flex',
