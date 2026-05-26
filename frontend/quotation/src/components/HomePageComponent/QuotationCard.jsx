@@ -108,7 +108,7 @@ const QuotationCard = React.memo(({
             size="small" 
           />
         )} */}
-        <ActionBtn 
+        {/* <ActionBtn 
           bg={isExporting ? '#f1f5f9' : '#f0fdf4'} 
           color={isExporting ? '#94a3b8' : '#166534'} 
           onClick={() => !isExporting && onDownload(quotation)} 
@@ -116,7 +116,7 @@ const QuotationCard = React.memo(({
           icon={isExporting ? Loader : Download} 
           label={isExporting ? '…' : 'PDF'} 
           size="small" 
-        />
+        /> */}
         {canAward && (
           <ActionBtn bg="#d1fae5" color="#065f46" onClick={() => onAward(quotation)} icon={Award} label="Outcome" size="small" />
         )}

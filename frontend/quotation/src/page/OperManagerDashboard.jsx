@@ -245,7 +245,7 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
         <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        <ActionBtn 
+        {/* <ActionBtn 
           bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
           color={isDownloading ? '#94a3b8' : '#166534'} 
           onClick={() => !isDownloading && onDownload(quotation)} 
@@ -253,7 +253,7 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
           icon={isDownloading ? RefreshCw : Download} 
           label={isDownloading ? '…' : 'PDF'} 
           size="small" 
-        />
+        /> */}
         {canAct && (
           <>
             <ActionBtn 
@@ -951,7 +951,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                           <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
                             icon={Eye} label="View" title="View quotation" size="small"/>
                           
-                          <ActionBtn
+                          {/* <ActionBtn
                             bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
                             color={isDownloading ? '#94a3b8' : '#166534'}
                             onClick={() => !isDownloading && handleDownload(q)} 
@@ -960,7 +960,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                             label={isDownloading ? '…' : 'PDF'} 
                             title="Download PDF"
                             size="small"
-                          />
+                          /> */}
                           
                           {canAct && (
                             <>

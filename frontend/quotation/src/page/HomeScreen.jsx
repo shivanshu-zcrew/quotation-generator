@@ -1991,7 +1991,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                         label="View"
                                         title="View quotation"
                                       />
-                                      <ActionBtn
+                                      {/* <ActionBtn
                                         bg={isExp ? "#f1f5f9" : "#f0fdf4"}
                                         color={isExp ? "#94a3b8" : "#166534"}
                                         onClick={() =>
@@ -2001,7 +2001,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                         icon={isExp ? Loader : Download}
                                         label={isExp ? "…" : "PDF"}
                                         title="Download PDF"
-                                      />
+                                      /> */}
                                       {canAward && (
                                         <ActionBtn
                                           bg="#d1fae5"

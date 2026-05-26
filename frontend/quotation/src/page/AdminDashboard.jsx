@@ -199,10 +199,10 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
         <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} 
           icon={Eye} label="View" size="small"/>
         
-        <ActionBtn bg={isExporting ? '#f1f5f9' : '#f0fdf4'} color={isExporting ? '#94a3b8' : '#166534'}
+        {/* <ActionBtn bg={isExporting ? '#f1f5f9' : '#f0fdf4'} color={isExporting ? '#94a3b8' : '#166534'}
           onClick={() => !isExporting && onDownload(quotation)} disabled={isExporting}
           icon={isExporting ? RefreshCw : Download} label={isExporting ? '…' : 'PDF'} size="small"/>
-        
+         */}
         {canAward && (
           <ActionBtn 
             bg="#e9d5ff" 
@@ -1000,9 +1000,9 @@ const tabCounts = useMemo(() => {
             <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
               icon={Eye} label="View" title="View quotation" size="small"/>
             
-            <ActionBtn bg={isExp ? '#f1f5f9' : '#f0fdf4'} color={isExp ? '#94a3b8' : '#166534'}
+            {/* <ActionBtn bg={isExp ? '#f1f5f9' : '#f0fdf4'} color={isExp ? '#94a3b8' : '#166534'}
               onClick={() => !isExp && handleDownload(q)} disabled={isExp}
-              icon={isExp ? RefreshCw : Download} label={isExp ? '…' : 'PDF'} title="Download PDF" size="small"/>
+              icon={isExp ? RefreshCw : Download} label={isExp ? '…' : 'PDF'} title="Download PDF" size="small"/> */}
             {canAward && (
               <ActionBtn 
                 bg="#e9d5ff" 
