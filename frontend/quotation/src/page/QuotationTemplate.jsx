@@ -900,9 +900,9 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           <div style={styles.headerActions}>
             <ActionButton onClick={() => setIsEditing(!isEditing)} disabled={false} 
               bgColor={isEditing ? "#ef4444" : "#f59e0b"} icon={isEditing ? <Save size={18} /> : <Edit2 size={18} />} label={isEditing ? "Done" : "Edit"} />
-            <ActionButton onClick={handleExportPDF} disabled={isExporting || hasAnyError} 
+            {/* <ActionButton onClick={handleExportPDF} disabled={isExporting || hasAnyError} 
               bgColor="#0369a1" icon={isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={18} />} 
-              label={isExporting ? "Generating…" : "Download PDF"} loading={isExporting} />
+              label={isExporting ? "Generating…" : "Download PDF"} loading={isExporting} /> */}
             <ActionButton onClick={onBack} bgColor="#6b7280" icon={<ArrowLeft size={18} />} label="Back" />
           </div>
         </div>

@@ -352,8 +352,9 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   }, [isMobile]);
  
   const safeQ = companyQuotations || [];
-  const isInitialLoading = !quotationsInitialized || quotationsLoading;
-  const isRefreshing = quotationsInitialized && quotationsLoading; 
+  const hasData = safeQ.length > 0;
+    const isInitialLoading = (!quotationsInitialized || quotationsLoading) && !hasData;
+  const isRefreshing = quotationsInitialized && quotationsLoading && hasData;
   const showEmptyState = quotationsInitialized && !quotationsLoading && safeQ.length === 0;
 
   const addToast = useCallback((message, type = "info") => {

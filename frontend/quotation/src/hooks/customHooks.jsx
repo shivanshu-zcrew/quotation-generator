@@ -94,11 +94,9 @@ export const useUserRole = () => {
   }), [user]);
 };
 
-// Updated to use company filtering
 export const useCustomersList = () => {
   const customers = useAppStore((state) => state.customers);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
-  // Filter customers by selected company
   const filteredCustomers = useMemo(() => {
     if (!selectedCompany) return customers;
     return customers.filter(c => c.companyId === selectedCompany || c.companyId?._id === selectedCompany);
@@ -106,11 +104,9 @@ export const useCustomersList = () => {
   return filteredCustomers;
 };
 
-// Updated to use company filtering
 export const useItemsList = () => {
   const items = useAppStore((state) => state.items);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
-  // Filter items by selected company
   const filteredItems = useMemo(() => {
     if (!selectedCompany) return items;
     return items.filter(i => i.companyId === selectedCompany || i.companyId?._id === selectedCompany);
@@ -130,7 +126,6 @@ export const useAdminStats = () => {
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const refresh = useCallback(() => fetchAdminStats(selectedCompany), [fetchAdminStats, selectedCompany]);
 
-  // Get raw values
   const rawTotalCustomers = adminStats?.stats?.totalCustomers || 0;
   const rawTotalQuotations = adminStats?.stats?.totalQuotations || 0;
   const rawTotalRevenue = adminStats?.stats?.totalRevenue || 0;
@@ -140,12 +135,10 @@ export const useAdminStats = () => {
     stats: adminStats,
     loading: statsLoading,
     refresh,
-    // Raw values
     rawTotalCustomers,
     rawTotalQuotations,
     rawTotalRevenue,
     rawAwardedValue,
-    // Quotation stats
     totalQuotations: rawTotalQuotations,
     actionRequired: adminStats?.stats?.actionRequired || 0,
     approved: adminStats?.stats?.approved || 0,
@@ -159,9 +152,7 @@ export const useAdminStats = () => {
     statusCounts: adminStats?.stats?.statusCounts || {},
     totalApprovedValue: rawTotalRevenue,
     totalAwardedValue: rawAwardedValue,
-    // Customer stats
     totalCustomers: rawTotalCustomers,
-    // Formatted versions for display
     formattedTotalCustomers: formatLargeNumber(rawTotalCustomers),
     formattedTotalRevenue: formatCurrency(rawTotalRevenue, 'AED'),
     formattedAwardedValue: formatCurrency(rawAwardedValue, 'AED'),
@@ -169,31 +160,56 @@ export const useAdminStats = () => {
   };
 };
 
+// ✅ Updated useOpsStats with tabCounts
 export const useOpsStats = () => {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const addToast = useToast().addToast;
+  
   const fetchStats = useCallback(async () => {
     setLoading(true);
     try {
       const params = selectedCompany ? { companyId: selectedCompany } : {};
       const response = await opsAPI.getOpsStats(params);
-      setStats(response.data.stats);
+      const statsData = response.data.stats;
+      setStats(statsData);
     } catch (error) {
-      addToast('Failed to load stats', 'error');
+      console.error('Error fetching ops stats:', error);
+      addToast?.('Failed to load stats', 'error');
     } finally {
       setLoading(false);
     }
   }, [selectedCompany, addToast]);
-  useEffect(() => { fetchStats(); }, [fetchStats]);
+  
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
+  
+  // ✅ Return tabCounts from stats
+  const tabCounts = stats?.tabCounts || {
+    all: stats?.totalQuotations || 0,
+    pending: stats?.pendingReview || 0,
+    ops_approved: stats?.awaitingAdmin || 0,
+    ops_rejected: stats?.returnedByMe || 0,
+    rejected: stats?.rejectedByAdmin || 0,
+    approved: stats?.approved || 0,
+    awarded: stats?.awarded || 0,
+  };
+  
   return {
-    stats, loading, refresh: fetchStats,
+    stats,
+    loading,
+    refresh: fetchStats,
     totalQuotations: stats?.totalQuotations || 0,
     pendingReview: stats?.pendingReview || 0,
     awaitingAdmin: stats?.awaitingAdmin || 0,
     returnedByMe: stats?.returnedByMe || 0,
+    rejectedByAdmin: stats?.rejectedByAdmin || 0,
+    approved: stats?.approved || 0,
+    awarded: stats?.awarded || 0,
     totalValue: stats?.totalValue || 0,
+    tabCounts, // ✅ Added tabCounts
   };
 };
 
@@ -214,7 +230,6 @@ export const useItemsWithSync = () => {
   return { items, loading, error, syncItems, refreshItems, isSyncing };
 };
 
-// New hooks for customer sync with company context
 export const useCustomerSync = () => {
   const syncCustomersFromZoho = useAppStore((state) => state.syncCustomersFromZoho);
   const getCustomerSyncStatus = useAppStore((state) => state.getCustomerSyncStatus);

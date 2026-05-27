@@ -308,6 +308,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const { toasts, addToast, dismissToast } = useToast();
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
+  const isMountedRef = useRef(true);
+const loadingTimeoutRef = useRef(null);
 
   // ── Server-side filters state ───────────────────────────────────────────
   const [serverFilters, setServerFilters] = useState({
@@ -347,7 +349,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   // ── Derived state ─────────────────────────────────────────
   const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
   const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
-  const isInitialLoading = !quotationsInitialized || safeQuotationsLoading;
+    const hasData = safeQ.length > 0;
+  const isInitialLoading = (!quotationsInitialized || safeQuotationsLoading) && !hasData;
   const isRefreshing = quotationsInitialized && safeQuotationsLoading && safeQ.length > 0;
   const showEmptyState = quotationsInitialized && !safeQuotationsLoading && safeQ.length === 0;
 
@@ -373,6 +376,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     }
   }, [selectedCompany, resetPagination]);
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+    };
+  }, []);
+  
 const refreshWithFilters = useCallback(async () => {
   if (!selectedCompany) return;
   

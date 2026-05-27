@@ -285,57 +285,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 OpsQuotationCard.displayName = 'OpsQuotationCard';
 
 // ─────────────────────────────────────────────────────────────
-// Custom Hooks
-// ─────────────────────────────────────────────────────────────
-const useTableData = (quotations, activeTab, search, sort) => {
-  return useMemo(() => {
-    if (!quotations || !Array.isArray(quotations) || quotations.length === 0) {
-      return { filtered: [], total: 0 };
-    }
-    
-    const { statusFilter } = TAB_KEYS[activeTab] || TAB_KEYS.all;
-    
-    const tabFiltered = !statusFilter || statusFilter === 'all' 
-      ? quotations 
-      : quotations.filter(q => q && q.status === statusFilter);
-
-    const searchFiltered = !search.trim() ? tabFiltered :
-      tabFiltered.filter(q => {
-        if (!q) return false;
-        const t = search.toLowerCase();
-        return (q.quotationNumber || '').toLowerCase().includes(t) ||
-               (q.customerSnapshot?.name || q.customer || q.customerId?.name || '').toLowerCase().includes(t);
-      });
-
-    const sorted = [...searchFiltered].sort((a, b) => {
-      if (!a || !b) return 0;
-      const { field, dir } = sort;
-      let av = a[field], bv = b[field];
-      
-      if (field === 'total') {
-        av = Number(av) || 0;
-        bv = Number(bv) || 0;
-      } else if (field === 'customer') {
-        av = (a.customerSnapshot?.name || a.customer || a.customerId?.name || '').toLowerCase();
-        bv = (b.customerSnapshot?.name || b.customer || b.customerId?.name || '').toLowerCase();
-      } else if (field === 'createdBy') {
-        av = (a.createdBy?.name || a.createdBySnapshot?.name || '').toLowerCase();
-        bv = (b.createdBy?.name || b.createdBySnapshot?.name || '').toLowerCase();
-      } else {
-        av = av ?? '';
-        bv = bv ?? '';
-      }
-      return dir === 'asc' ? (av < bv ? -1 : av > bv ? 1 : 0) : (av > bv ? -1 : av < bv ? 1 : 0);
-    });
-
-    return {
-      filtered: sorted,
-      total: sorted.length
-    };
-  }, [quotations, activeTab, search, sort]);
-};
-
-// ─────────────────────────────────────────────────────────────
 // Main Dashboard
 // ─────────────────────────────────────────────────────────────
 export default function OpsDashboard({ onViewQuotation }) {
@@ -352,9 +301,21 @@ export default function OpsDashboard({ onViewQuotation }) {
     quotation: null,
     loading: false
   });
+  const [forceHideLoading, setForceHideLoading] = useState(false);
+  const loadingTimeoutRef = useRef(null);
   
   // ── Store subscriptions ───────────────────────────────────
-  const { quotations: companyQuotations, refresh: refreshCompanyQuotations, loading: quotationsLoading } = useCompanyQuotations();
+  // ✅ USE THE HOOK'S BUILT-IN PAGINATION
+  const { 
+    quotations: companyQuotations, 
+    pagination,
+    refresh: refreshCompanyQuotations, 
+    loading: quotationsLoading,
+    goToPage,
+    changeLimit,
+    currentPage,
+    currentLimit
+  } = useCompanyQuotations();
   
   const user = useAppStore((s) => s.user);
   const awardQuotation = useAppStore((s) => s.awardQuotation);
@@ -373,7 +334,11 @@ export default function OpsDashboard({ onViewQuotation }) {
     pendingReview,
     awaitingAdmin,
     returnedByMe,
-    totalValue
+    totalValue,
+    tabCounts, 
+    rejectedByAdmin,
+    approved,
+    awarded
   } = useOpsStats();
 
   // ── Company & Currency ────────────────────────────────────
@@ -387,13 +352,11 @@ export default function OpsDashboard({ onViewQuotation }) {
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
   const isMountedRef = useRef(true);
-  const initialLoadDone = useRef(false); // ✅ FIX: Track initial load
-  const refreshInProgress = useRef(false); // ✅ FIX: Prevent multiple refreshes
+  const initialLoadDone = useRef(false);
+  const refreshInProgress = useRef(false);
 
   // ── Table state ───────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('all');
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(isMobile ? 10 : 20);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
@@ -404,8 +367,12 @@ export default function OpsDashboard({ onViewQuotation }) {
  
   // Update limit on screen resize
   useEffect(() => {
-    setLimit(isMobile ? 10 : 20);
-  }, [isMobile]);
+    if (isMobile && currentLimit !== 10) {
+      changeLimit(10);
+    } else if (!isMobile && currentLimit !== 20) {
+      changeLimit(20);
+    }
+  }, [isMobile, currentLimit, changeLimit]);
 
   // Reset view mode on mobile
   useEffect(() => {
@@ -422,87 +389,77 @@ export default function OpsDashboard({ onViewQuotation }) {
     };
   }, []);
 
-  // ✅ FIX: Single initial load with proper guard
-  useEffect(() => {
-    if (!selectedCompany || initialLoadDone.current) return;
+useEffect(() => {
+  if (!selectedCompany || initialLoadDone.current) return;
+  
+  const loadInitialData = async () => {
+    if (refreshInProgress.current) return;
+    refreshInProgress.current = true;
     
-    const loadInitialData = async () => {
-      // Prevent multiple simultaneous refreshes
-      if (refreshInProgress.current) return;
-      refreshInProgress.current = true;
+    loadingTimeoutRef.current = setTimeout(() => {
+      console.log('Loading timeout - forcing data display');
+      setForceHideLoading(true);
+      initialLoadDone.current = true;
+      refreshInProgress.current = false;
+    }, 8000);
+    
+    try {
+      // ✅ Call refresh with initial params
+      await refreshCompanyQuotations({
+        page: 1,
+        limit: isMobile ? 10 : 20,
+        status: activeTab === 'all' ? undefined : activeTab,
+        search: '',
+        sortBy: 'createdAt',
+        sortDir: 'desc'
+      });
+      await refreshStats();
       
-      try {
-        await Promise.all([
-          refreshCompanyQuotations(),
-          refreshStats()
-        ]);
-        if (isMountedRef.current) {
-          initialLoadDone.current = true;
-        }
-      } catch (error) {
-        console.error('Initial load error:', error);
-        if (isMountedRef.current) {
-          initialLoadDone.current = true;
-        }
-      } finally {
-        refreshInProgress.current = false;
+      if (isMountedRef.current) {
+        initialLoadDone.current = true;
+        setForceHideLoading(false);
       }
-    };
-    
-    loadInitialData();
-  }, [selectedCompany, refreshCompanyQuotations, refreshStats]);
-
-  // ✅ FIX: Remove auto-refresh effect that was causing duplicates
-  // The previous useEffect that triggered after 500ms was causing multiple refreshes
+    } catch (error) {
+      console.error('Initial load error:', error);
+      if (isMountedRef.current) {
+        initialLoadDone.current = true;
+        setForceHideLoading(true);
+      }
+    } finally {
+      clearTimeout(loadingTimeoutRef.current);
+      refreshInProgress.current = false;
+    }
+  };
+  
+  loadInitialData();
+}, [selectedCompany, refreshCompanyQuotations, refreshStats, isMobile, activeTab]);
 
   // ── Derived state ─────────────────────────────────────────
   const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
-
-  // ✅ FIX: Only show loading on initial load, not on subsequent refreshes
-  const isLoading = !initialLoadDone.current && (safeQuotationsLoading || statsLoading);
+  const hasData = companyQuotations?.length > 0;
+  const isLoading = !initialLoadDone.current && (safeQuotationsLoading || statsLoading) && !hasData && !forceHideLoading;
   const isRefreshing = initialLoadDone.current && safeQuotationsLoading && companyQuotations?.length > 0;
 
-  // ── Safe quotation array (filtered by selected company) ──
+  // ✅ Use server-side pagination from the hook
   const safeQ = useMemo(() => {
-    if (!Array.isArray(companyQuotations)) return [];
-    if (!selectedCompany) return companyQuotations;
-    
-    return companyQuotations.filter(q => {
-      if (!q) return false;
-      const match = q.companyId === selectedCompany || 
-                    q.companyId?._id === selectedCompany ||
-                    q.companyId?.toString() === selectedCompany?.toString();
-      return match;
-    });
-  }, [companyQuotations, selectedCompany]);
+    return Array.isArray(companyQuotations) ? companyQuotations : [];
+  }, [companyQuotations]);
 
-  // ── Table data management ─────────────────────────────────
-  const { filtered: filteredQuotations, total: totalFiltered } = useTableData(safeQ, activeTab, search, sort);
-  
-  const paginated = useMemo(() => {
-    const start = (page - 1) * limit;
-    return filteredQuotations.slice(start, start + limit);
-  }, [filteredQuotations, page, limit]);
+  const totalFiltered = pagination?.total || 0;
+  const totalPages = pagination?.totalPages || 1;
+  const safePage = currentPage;
+  const currentLimitValue = currentLimit;
 
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
-  const safePage = Math.min(page, totalPages);
-
-  // ── Tab counts ────────────────────────────────────────────
-  const tabCounts = useMemo(() => {
-    if (!Array.isArray(safeQ) || safeQ.length === 0) {
-      return {
-        all: 0,
-        pending: 0,
-        ops_approved: 0,
-        ops_rejected: 0,
-        rejected: 0,
-        approved: 0,
-        awarded: 0,
-      };
+  // ── Tab counts from API counts or calculate from data
+  const tabCountsFromStats = useMemo(() => {
+    // Use tabCounts from API if available
+    if (tabCounts && Object.values(tabCounts).some(v => v > 0)) {
+      return tabCounts;
     }
     
+    // Fallback to local calculation
     return {
-      all: safeQ.length,
+      all: pagination?.total || safeQ.length,
       pending: safeQ.filter(q => q && q.status === 'pending').length,
       ops_approved: safeQ.filter(q => q && q.status === 'ops_approved').length,
       ops_rejected: safeQ.filter(q => q && q.status === 'ops_rejected').length,
@@ -510,8 +467,7 @@ export default function OpsDashboard({ onViewQuotation }) {
       approved: safeQ.filter(q => q && q.status === 'approved').length,
       awarded: safeQ.filter(q => q && q.status === 'awarded').length,
     };
-  }, [safeQ]);
-
+  }, [safeQ, pagination, tabCounts]);
   // ── Loading helpers ───────────────────────────────────────
   const setOp = useCallback((id, action, val) => {
     setLoadingIds((p) => ({ ...p, [`${id}_${action}`]: val }));
@@ -520,79 +476,116 @@ export default function OpsDashboard({ onViewQuotation }) {
   const isOp = useCallback((id, action) => !!loadingIds[`${id}_${action}`], [loadingIds]);
 
   // ── Handlers ──────────────────────────────────────────────
-  const handleSearchChange = useCallback((e) => {
-    const val = e.target.value;
-    setSearchInput(val);
-    clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => {
-      setSearch(val);
-      setPage(1);
-    }, DEBOUNCE_MS);
-  }, []);
+// Replace handleSearchChange (around line 400)
+const handleSearchChange = useCallback((e) => {
+  const val = e.target.value;
+  setSearchInput(val);
+  clearTimeout(searchTimer.current);
+  searchTimer.current = setTimeout(() => {
+    setSearch(val);
+    // ✅ Pass search to refresh with page 1
+    refreshCompanyQuotations({ 
+      page: 1, 
+      search: val,
+      status: activeTab === 'all' ? undefined : activeTab,
+      sortBy: sort.field,
+      sortDir: sort.dir
+    });
+  }, DEBOUNCE_MS);
+}, [refreshCompanyQuotations, activeTab, sort]);
 
-  const clearSearch = useCallback(() => {
-    setSearchInput('');
-    setSearch('');
-    setPage(1);
-  }, []);
+// Replace clearSearch
+const clearSearch = useCallback(() => {
+  setSearchInput('');
+  setSearch('');
+  refreshCompanyQuotations({ 
+    page: 1, 
+    search: '',
+    status: activeTab === 'all' ? undefined : activeTab,
+    sortBy: sort.field,
+    sortDir: sort.dir
+  });
+}, [refreshCompanyQuotations, activeTab, sort]);
 
-  const handleTabChange = useCallback((key) => {
-    setActiveTab(key);
-    setPage(1);
-    setSearchInput('');
-    setSearch('');
-    setSort({ field: 'createdAt', dir: 'desc' });
-    setMobileMenuOpen(false);
-  }, []);
+// Replace handleTabChange
+const handleTabChange = useCallback((key) => {
+  setActiveTab(key);
+  setSearchInput('');
+  setSearch('');
+  setSort({ field: 'createdAt', dir: 'desc' });
+  setMobileMenuOpen(false);
+  
+  // ✅ Pass status to refresh with page 1
+  refreshCompanyQuotations({ 
+    page: 1, 
+    status: key === 'all' ? undefined : key,
+    search: '',
+    sortBy: 'createdAt',
+    sortDir: 'desc'
+  });
+}, [refreshCompanyQuotations]);
 
-  const handleSort = useCallback((field) => {
-    setSort(prev => ({ 
-      field, 
-      dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' 
-    }));
-    setPage(1);
-  }, []);
+// Replace handleSort
+const handleSort = useCallback((field) => {
+  const newDir = sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc';
+  setSort({ field, dir: newDir });
+  
+  // ✅ Pass sort to refresh with page 1
+  refreshCompanyQuotations({ 
+    page: 1, 
+    sortBy: field, 
+    sortDir: newDir,
+    status: activeTab === 'all' ? undefined : activeTab,
+    search: search
+  });
+}, [refreshCompanyQuotations, activeTab, search, sort]);
 
-  // ✅ FIX: Prevent multiple refresh calls
-  const handleRefresh = useCallback(async () => {
-    if (refreshInProgress.current) {
-      addToast('Refresh already in progress', 'info');
-      return;
-    }
-    
-    refreshInProgress.current = true;
-    try {
+// Replace handleRefresh
+const handleRefresh = useCallback(async () => {
+  if (refreshInProgress.current) {
+    addToast('Refresh already in progress', 'info');
+    return;
+  }
+  
+  refreshInProgress.current = true;
+  try {
+    // ✅ Pass current page, limit, and filters to refresh
+    await refreshCompanyQuotations({ 
+      page: currentPage, 
+      limit: currentLimit,
+      status: activeTab === 'all' ? undefined : activeTab,
+      search: search,
+      sortBy: sort.field,
+      sortDir: sort.dir
+    });
+    await refreshStats();
+    addToast('Data refreshed', 'success');
+  } catch (err) {
+    addToast(err.message || 'Refresh failed', 'error');
+  } finally {
+    refreshInProgress.current = false;
+  }
+}, [refreshCompanyQuotations, refreshStats, addToast, currentPage, currentLimit, activeTab, search, sort]);
+
+const handleApprove = useCallback(async (id) => {
+  setOp(id, 'approve', true);
+  try {
+    const result = await opsApproveQuotation(id);
+    if (result?.success) {
+      addToast('Quotation approved and forwarded to admin', 'success');
       await Promise.all([
-        refreshCompanyQuotations(),
+        refreshCompanyQuotations({ page: currentPage, limit: currentLimit }), // ✅ Pass pagination
         refreshStats()
       ]);
-      addToast('Data refreshed', 'success');
-    } catch (err) {
-      addToast(err.message || 'Refresh failed', 'error');
-    } finally {
-      refreshInProgress.current = false;
+    } else {
+      addToast(result?.error || 'Failed to approve quotation', 'error');
     }
-  }, [refreshCompanyQuotations, refreshStats, addToast]);
-
-  const handleApprove = useCallback(async (id) => {
-    setOp(id, 'approve', true);
-    try {
-      const result = await opsApproveQuotation(id);
-      if (result?.success) {
-        addToast('Quotation approved and forwarded to admin', 'success');
-        await Promise.all([
-          refreshCompanyQuotations(),
-          refreshStats()
-        ]);
-      } else {
-        addToast(result?.error || 'Failed to approve quotation', 'error');
-      }
-    } catch (error) {
-      addToast(error.message || 'Failed to approve quotation', 'error');
-    } finally {
-      setOp(id, 'approve', false);
-    }
-  }, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp]);
+  } catch (error) {
+    addToast(error.message || 'Failed to approve quotation', 'error');
+  } finally {
+    setOp(id, 'approve', false);
+  }
+}, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit]);
 
   const handleReject = {
     open: useCallback((quotation) => {
@@ -610,7 +603,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           addToast('Quotation rejected', 'success');
           handleReject.close();
           await Promise.all([
-            refreshCompanyQuotations(),
+            refreshCompanyQuotations({ page: currentPage, limit: currentLimit }),
             refreshStats()
           ]);
         } else {
@@ -621,7 +614,7 @@ export default function OpsDashboard({ onViewQuotation }) {
       } finally {
         setOp(rejectTarget._id, 'reject', false);
       }
-    }, [rejectTarget, rejectReason, opsRejectQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp])
+    }, [rejectTarget, rejectReason, opsRejectQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit])
   };
 
   const handleDownload = useCallback(async (quotation) => {
@@ -676,7 +669,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           "success"
         );
         await Promise.all([
-          refreshCompanyQuotations(),
+          refreshCompanyQuotations({ page: currentPage, limit: currentLimit }),
           refreshStats()
         ]);
         handleAwardClose();
@@ -689,7 +682,7 @@ export default function OpsDashboard({ onViewQuotation }) {
       addToast(error.message || "Failed to update award status", "error");
       setAwardModal(prev => ({ ...prev, loading: false }));
     }
-  }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose]);
+  }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose, currentPage, currentLimit]);
 
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
@@ -707,15 +700,15 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Tab configuration ─────────────────────────────────────
   const TABS = useMemo(() => [
-    { key: 'all',           label: 'All Quotations',     Icon: FileText,     count: tabCounts.all },
-    { key: 'pending',       label: 'Pending Review',     Icon: Clock,        count: tabCounts.pending },
-    { key: 'ops_approved',  label: 'Awaiting Admin',     Icon: Shield,       count: tabCounts.ops_approved },
-    { key: 'ops_rejected',  label: 'Returned by Me',     Icon: Ban,          count: tabCounts.ops_rejected },
-    { key: 'rejected',      label: 'Rejected by Admin',  Icon: XCircle,      count: tabCounts.rejected },
-    { key: 'approved',      label: 'Approved',           Icon: CheckCircle,  count: tabCounts.approved },
-    { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCounts.awarded },
-  ], [tabCounts]);
-
+    { key: 'all',           label: 'All Quotations',     Icon: FileText,     count: tabCountsFromStats.all },
+    { key: 'pending',       label: 'Pending Review',     Icon: Clock,        count: tabCountsFromStats.pending },
+    { key: 'ops_approved',  label: 'Awaiting Admin',     Icon: Shield,       count: tabCountsFromStats.ops_approved },
+    { key: 'ops_rejected',  label: 'Returned by Me',     Icon: Ban,          count: tabCountsFromStats.ops_rejected },
+    { key: 'rejected',      label: 'Rejected by Admin',  Icon: XCircle,      count: tabCountsFromStats.rejected },
+    { key: 'approved',      label: 'Approved',           Icon: CheckCircle,  count: tabCountsFromStats.approved },
+    { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCountsFromStats.awarded },
+  ], [tabCountsFromStats]);
+  
   // ── Render helpers with Shimmer ──────────────────────────
   const renderStatCards = () => {
     if (isLoading) {
@@ -845,13 +838,13 @@ export default function OpsDashboard({ onViewQuotation }) {
             gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
             gap: isMobile ? '0.75rem' : '1rem'
           }}>
-            {paginated.length === 0 ? (
+            {safeQ.length === 0 ? (
               <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
                 No results for "<strong>{search}</strong>"
                 <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
               </div>
             ) : (
-              paginated.map((q) => (
+              safeQ.map((q) => (
                 <OpsQuotationCard
                   key={q._id}
                   quotation={q}
@@ -886,119 +879,121 @@ export default function OpsDashboard({ onViewQuotation }) {
                 </tr>
               </thead>
               <tbody>
-                {paginated.length === 0 ? (
+                {safeQ.length === 0 ? (
                   <tr>
                     <td colSpan={9} style={styles.noResults}>
                       No results for "<strong>{search}</strong>"
                       <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
                     </td>
                   </tr>
-                ) : paginated.map((q) => {
-                  const isDownloading = downloadLoadingId === q._id;
-                  const canAct = q.status === 'pending';  
-                  const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
-                  const isAdminRejected = q.status === 'rejected';
-                  const expired = isExpired(q.expiryDate);
-                  const expiring = !expired && isExpiringSoon(q.expiryDate);
-                
-                  return (
-                    <tr key={q._id} className="ops-row" style={{
-                      backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
-                    }}>
-                      <td style={styles.cell}>
-                        <div style={styles.quoteCell}>
-                          <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
-                          {expired && <ExpiryBadge type="expired" />}
-                          {expiring && <ExpiryBadge type="expiring" />}
-                        </div>
-                      </td>
-                      <td style={styles.cell}>
-                        <div style={styles.customerCell}>
-                          <div style={styles.customerName}>
-                            {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
+                ) : (
+                  safeQ.map((q) => {
+                    const isDownloading = downloadLoadingId === q._id;
+                    const canAct = q.status === 'pending';  
+                    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
+                    const isAdminRejected = q.status === 'rejected';
+                    const expired = isExpired(q.expiryDate);
+                    const expiring = !expired && isExpiringSoon(q.expiryDate);
+                  
+                    return (
+                      <tr key={q._id} className="ops-row" style={{
+                        backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
+                      }}>
+                        <td style={styles.cell}>
+                          <div style={styles.quoteCell}>
+                            <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
+                            {expired && <ExpiryBadge type="expired" />}
+                            {expiring && <ExpiryBadge type="expiring" />}
                           </div>
-                          {q.contact && <div style={styles.contactText}>{q.contact}</div>}
-                        </div>
-                      </td>
-                      <td style={styles.dateCell}>{fmtDate(q.date)}</td>
-                      <td style={styles.dateCell}>
-                        <span style={{ 
-                          color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
-                          fontWeight: expired || expiring ? 600 : 400
-                        }}>
-                          {fmtDate(q.expiryDate)}
-                        </span>
-                       </td>
-                      <td style={styles.cell}>
-                        <StatusBadge status={q.status}/>
-                        <RejectionNote quotation={q}/>
-                       </td>
-                      <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
-                      <td style={{ ...styles.cell, textAlign: 'center' }}>
-                        <ItemsBadge count={q.items?.length ?? 0} />
-                       </td>
-                      <td style={styles.totalCell}>
-                        {fmtCurrency(q.total, selectedCurrency)}
-                       </td>
-                      <td style={styles.actionsCell}>
-                        <div style={styles.actionsContainer}>
-                          <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
-                            icon={Eye} label="View" title="View quotation" size="small"/>
-                          
-                          {canAct && (
-                            <>
+                        </td>
+                        <td style={styles.cell}>
+                          <div style={styles.customerCell}>
+                            <div style={styles.customerName}>
+                              {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
+                            </div>
+                            {q.contact && <div style={styles.contactText}>{q.contact}</div>}
+                          </div>
+                        </td>
+                        <td style={styles.dateCell}>{fmtDate(q.date)}</td>
+                        <td style={styles.dateCell}>
+                          <span style={{ 
+                            color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
+                            fontWeight: expired || expiring ? 600 : 400
+                          }}>
+                            {fmtDate(q.expiryDate)}
+                          </span>
+                        </td>
+                        <td style={styles.cell}>
+                          <StatusBadge status={q.status}/>
+                          <RejectionNote quotation={q}/>
+                        </td>
+                        <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
+                        <td style={{ ...styles.cell, textAlign: 'center' }}>
+                          <ItemsBadge count={q.items?.length ?? 0} />
+                        </td>
+                        <td style={styles.totalCell}>
+                          {fmtCurrency(q.total, selectedCurrency)}
+                        </td>
+                        <td style={styles.actionsCell}>
+                          <div style={styles.actionsContainer}>
+                            <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
+                              icon={Eye} label="View" title="View quotation" size="small"/>
+                            
+                            {canAct && (
+                              <>
+                                <ActionBtn 
+                                  bg="#dcfce7" 
+                                  color="#166534" 
+                                  onClick={() => handleApprove(q._id)} 
+                                  icon={Check} 
+                                  label="Approve" 
+                                  title="Approve quotation"
+                                  disabled={isOp(q._id, 'approve')}
+                                  size="small"
+                                />
+                                <ActionBtn 
+                                  bg="#fee2e2" 
+                                  color="#991b1b" 
+                                  onClick={() => handleReject.open(q)} 
+                                  icon={X} 
+                                  label="Reject" 
+                                  title="Reject quotation"
+                                  disabled={isOp(q._id, 'reject')}
+                                  size="small"
+                                />
+                              </>
+                            )}
+                            {canAward && (
                               <ActionBtn 
-                                bg="#dcfce7" 
-                                color="#166534" 
-                                onClick={() => handleApprove(q._id)} 
-                                icon={Check} 
-                                label="Approve" 
-                                title="Approve quotation"
-                                disabled={isOp(q._id, 'approve')}
+                                bg="#e9d5ff" 
+                                color="#6b21a8" 
+                                onClick={() => handleAwardOpen(q)} 
+                                icon={Award} 
+                                label="Award" 
+                                title="Mark as Awarded / Not Awarded"
                                 size="small"
+                                disabled={isOp(q._id, 'award')}
                               />
-                              <ActionBtn 
-                                bg="#fee2e2" 
-                                color="#991b1b" 
-                                onClick={() => handleReject.open(q)} 
-                                icon={X} 
-                                label="Reject" 
-                                title="Reject quotation"
-                                disabled={isOp(q._id, 'reject')}
-                                size="small"
-                              />
-                            </>
-                          )}
-                          {canAward && (
-                            <ActionBtn 
-                              bg="#e9d5ff" 
-                              color="#6b21a8" 
-                              onClick={() => handleAwardOpen(q)} 
-                              icon={Award} 
-                              label="Award" 
-                              title="Mark as Awarded / Not Awarded"
-                              size="small"
-                              disabled={isOp(q._id, 'award')}
-                            />
-                          )}
-                        </div>
-                       </td>
-                    </tr>
-                  );
-                })}
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
         )}
         
-        {/* Pagination */}
+        {/* Server-side Pagination */}
         {!isMobile && totalFiltered > 0 && (
           <PaginationBar
             total={totalFiltered}
             page={safePage}
-            limit={limit}
-            onPage={setPage}
-            onLimit={(l) => { setLimit(l); setPage(1); }}
+            limit={currentLimitValue}
+            onPage={goToPage}
+            onLimit={(l) => changeLimit(l)}
           />
         )}
         
@@ -1006,11 +1001,11 @@ export default function OpsDashboard({ onViewQuotation }) {
         {isMobile && totalFiltered > 0 && (
           <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
             <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-              {((safePage - 1) * limit) + 1}–{Math.min(safePage * limit, totalFiltered)} of {totalFiltered}
+              {((safePage - 1) * currentLimitValue) + 1}–{Math.min(safePage * currentLimitValue, totalFiltered)} of {totalFiltered}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <button 
-                onClick={() => setPage(p => Math.max(1, p - 1))} 
+                onClick={() => goToPage(safePage - 1)} 
                 disabled={safePage === 1}
                 style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
               >
@@ -1020,7 +1015,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                 {safePage} / {totalPages}
               </span>
               <button 
-                onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
+                onClick={() => goToPage(safePage + 1)} 
                 disabled={safePage === totalPages}
                 style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
               >
@@ -1034,7 +1029,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   };
 
   // ─────────────────────────────────────────────────────────
-  // Main Render
+  // Main Render (keep your existing JSX with styles)
   // ─────────────────────────────────────────────────────────
   return (
     <div style={styles.container}>
@@ -1256,7 +1251,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     </div>
   );
 }
-
+ 
  
 // ─────────────────────────────────────────────────────────────
 // Styles

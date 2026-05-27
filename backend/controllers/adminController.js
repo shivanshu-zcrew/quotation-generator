@@ -53,29 +53,61 @@ const sanitizeQuotation = (q) => {
 // OPS MANAGER CONTROLLERS
 // ═══════════════════════════════════════════════════════════════
 
+// OPS MANAGER CONTROLLERS WITH PAGINATION
+
 exports.getOpsPendingQuotations = async (req, res) => {
   const startTime = Date.now();
   try {
-    logger.debug('Fetching ops pending quotations', {
+    const { page = 1, limit = 20 } = req.query;
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (parsedPage - 1) * parsedLimit;
+    
+    logger.debug('Fetching ops pending quotations with pagination', {
       userId: req.user?.id,
-      companyId: req.headers['x-company-id']
+      companyId: req.headers['x-company-id'],
+      page: parsedPage,
+      limit: parsedLimit
     });
 
-    const quotations = await fullPopulate(
-      Quotation.find({ status: 'pending' }).sort({ createdAt: -1 })
-    ).lean();
+    const query = { status: 'pending' };
+    
+    const [quotations, totalCount] = await Promise.all([
+      fullPopulate(
+        Quotation.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parsedLimit)
+      ).lean(),
+      Quotation.countDocuments(query)
+    ]);
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
+    const totalPages = Math.ceil(totalCount / parsedLimit);
     const duration = Date.now() - startTime;
     
     LoggerHelper.logDBQuery('Quotation', 'find', { status: 'pending' }, duration);
     logger.info(`Fetched ${sanitizedQuotations.length} pending quotations for ops`, {
       count: sanitizedQuotations.length,
+      totalCount,
+      page: parsedPage,
+      totalPages,
       userId: req.user?.id,
       duration: `${duration}ms`
     });
 
-    res.json(sanitizedQuotations);
+    res.json({
+      success: true,
+      quotations: sanitizedQuotations,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total: totalCount,
+        totalPages,
+        hasNextPage: parsedPage < totalPages,
+        hasPreviousPage: parsedPage > 1
+      }
+    });
   } catch (error) {
     const duration = Date.now() - startTime;
     LoggerHelper.logError('getOpsPendingQuotations', error, req);
@@ -92,20 +124,52 @@ exports.getOpsPendingQuotations = async (req, res) => {
 exports.getAllOpsQuotations = async (req, res) => {
   const startTime = Date.now();
   try {
-    const { status, search, fromDate, toDate } = req.query;
+    const { 
+      status, 
+      search, 
+      fromDate, 
+      toDate,
+      page = 1,
+      limit = 20
+    } = req.query;
     
-    logger.debug('Fetching all ops quotations with filters', {
-      filters: { status, search, fromDate, toDate },
-      userId: req.user?.id,
-      companyId: req.headers['x-company-id']
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (parsedPage - 1) * parsedLimit;
+    
+    // ✅ Get companyId from query params or headers
+    let companyId = req.query.companyId || req.headers['x-company-id'];
+    
+    logger.debug('Fetching all ops quotations with filters and pagination', {
+      filters: { status, search, fromDate, toDate, page: parsedPage, limit: parsedLimit, companyId },
+      userId: req.user?.id
     });
     
-    const query = {
-      status: { $in: ['pending', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] }
+    // ✅ Build query with company filter
+    const query = {};
+    
+    // ✅ Add company filter if provided (and not 'all')
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        query.companyId = companyId;
+      }
+    }
+    
+    // ✅ Add status filter
+    query.status = { 
+      $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] 
     };
     
-    if (status && status !== 'all') query.status = status;
+    // ✅ Handle status filter
+    if (status && status !== 'all') {
+      if (status === 'pending') {
+        query.status = { $in: ['pending', 'pending_admin'] };
+      } else {
+        query.status = status;
+      }
+    }
     
+    // ✅ Handle search
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
       query.$or = [
@@ -115,33 +179,48 @@ exports.getAllOpsQuotations = async (req, res) => {
       ];
     }
     
+    // ✅ Handle date filters
     if (fromDate || toDate) {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
       if (toDate) query.createdAt.$lte = new Date(toDate);
     }
     
-    const quotations = await fullPopulate(
-      Quotation.find(query).sort({ createdAt: -1 })
-    ).lean();
+    console.log('🔍 getAllOpsQuotations query:', JSON.stringify(query, null, 2));
+    
+    const [quotations, totalCount] = await Promise.all([
+      fullPopulate(
+        Quotation.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parsedLimit)
+      ).lean(),
+      Quotation.countDocuments(query)
+    ]);
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
+    const totalPages = Math.ceil(totalCount / parsedLimit);
     
+    // Calculate counts from the filtered query (for display)
+    const allQuotationsForCounts = await Quotation.find(query).lean();
     const counts = {
-      all: sanitizedQuotations.length,
-      pending: sanitizedQuotations.filter(q => q.status === 'pending').length,
-      ops_approved: sanitizedQuotations.filter(q => q.status === 'ops_approved').length,
-      ops_rejected: sanitizedQuotations.filter(q => q.status === 'ops_rejected').length,
-      rejected: sanitizedQuotations.filter(q => q.status === 'rejected').length,
-      approved: sanitizedQuotations.filter(q => q.status === 'approved').length,
-      awarded: sanitizedQuotations.filter(q => q.status === 'awarded').length,
+      all: totalCount,
+      pending: allQuotationsForCounts.filter(q => q.status === 'pending' || q.status === 'pending_admin').length,
+      ops_approved: allQuotationsForCounts.filter(q => q.status === 'ops_approved').length,
+      ops_rejected: allQuotationsForCounts.filter(q => q.status === 'ops_rejected').length,
+      rejected: allQuotationsForCounts.filter(q => q.status === 'rejected').length,
+      approved: allQuotationsForCounts.filter(q => q.status === 'approved').length,
+      awarded: allQuotationsForCounts.filter(q => q.status === 'awarded').length,
     };
     
     const duration = Date.now() - startTime;
-    LoggerHelper.logDBQuery('Quotation', 'find with filters', query, duration);
-    logger.info(`Fetched ${sanitizedQuotations.length} quotations for ops`, {
-      count: sanitizedQuotations.length,
-      filters: { status, search, fromDate, toDate },
+    LoggerHelper.logDBQuery('Quotation', 'find with filters and pagination', query, duration);
+    logger.info(`Fetched ${sanitizedQuotations.length} quotations for ops (page ${parsedPage}/${totalPages})`, {
+      totalCount,
+      page: parsedPage,
+      limit: parsedLimit,
+      totalPages,
+      filters: { status, search, fromDate, toDate, companyId },
       counts,
       duration: `${duration}ms`
     });
@@ -150,7 +229,16 @@ exports.getAllOpsQuotations = async (req, res) => {
       success: true,
       quotations: sanitizedQuotations,
       counts,
-      total: sanitizedQuotations.length
+      total: totalCount,
+      companyId: companyId || null,
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total: totalCount,
+        totalPages,
+        hasNextPage: parsedPage < totalPages,
+        hasPreviousPage: parsedPage > 1
+      }
     });
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -634,122 +722,148 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 
 // @desc  Admin Dashboard Stats 
 // @route GET /api/admin/dashboard/stats
+ 
 exports.getAdminDashboardStats = async (req, res) => {
   const startTime = Date.now();
   try {
-    let { companyId } = req.query;
+    // ✅ Get companyId from query params or headers (consistent with other APIs)
+    let companyId = req.query.companyId || req.headers['x-company-id'];
     let matchStage = {};
     
-    logger.debug('Fetching admin dashboard stats', {
-      companyId,
-      userId: req.user?.id
-    });
+    console.log('🔍 getAdminDashboardStats - companyId:', companyId);
     
     // Handle "All Companies" - don't filter by companyId
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
         matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+        console.log('🔍 matchStage with companyId:', JSON.stringify(matchStage, null, 2));
+      } else {
+        console.log('⚠️ Invalid companyId format:', companyId);
       }
+    } else {
+      console.log('🔍 No company filter (all companies)');
     }
-
-    const [
-      totalQuotations,
-      byStatus,
-      totalRevenue,
-      awardedValue,
-      conversionRateData,
-      totalCustomers  // ✅ Added total customers
-    ] = await Promise.all([
-      Quotation.countDocuments(matchStage),
-      
-      Quotation.aggregate([
-        { $match: matchStage },
-        { $group: { 
-          _id: '$status', 
-          count: { $sum: 1 } 
-        } }
-      ]),
-      
-      Quotation.aggregate([
-        { 
-          $match: { 
-            ...matchStage,
-            status: 'approved' 
-          } 
-        },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalInBaseCurrency' } 
-          } 
-        },
-      ]),
-      
-      Quotation.aggregate([
-        { 
-          $match: { 
-            ...matchStage,
-            status: 'awarded' 
-          } 
-        },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalInBaseCurrency' } 
-          } 
-        },
-      ]),
-      
-      (async () => {
-        const [approvedCount, awardedCount, notAwardedCount] = await Promise.all([
-          Quotation.countDocuments({ ...matchStage, status: 'approved' }),
-          Quotation.countDocuments({ ...matchStage, status: 'awarded' }),
-          Quotation.countDocuments({ ...matchStage, status: 'not_awarded' })
-        ]);
-        
-        const totalDecided = approvedCount + awardedCount + notAwardedCount;
-        const rate = totalDecided > 0 ? (awardedCount / totalDecided) * 100 : 0;
-        
-        return {
-          approvedCount,
-          awardedCount,
-          notAwardedCount,
-          totalDecided,
-          rate: Math.round(rate * 100) / 100
-        };
-      })(),
-      
-      // ✅ Get total customers count
-      Customer.countDocuments(matchStage)
-    ]);
-
-    const counts = {
-      total: totalQuotations,
-      draft: 0,
-      pending: 0,
-      ops_approved: 0,
-      ops_rejected: 0,
-      approved: 0,
-      rejected: 0,
-      awarded: 0,
-      not_awarded: 0,
-      sent: 0,
-    };
-
-    byStatus.forEach(item => {
-      if (item._id && counts.hasOwnProperty(item._id)) {
-        counts[item._id] = item.count;
-      }
+    
+    logger.debug('Fetching admin dashboard stats', {
+      companyId,
+      userId: req.user?.id
     });
 
-    const totalRevenueValue = totalRevenue[0]?.total || 0;
-    const awardedValueTotal = awardedValue[0]?.total || 0;
+    // ✅ Define all statuses that admin can see
+    const adminVisibleStatuses = [
+      'pending', 
+      'pending_admin',
+      'ops_approved', 
+      'ops_rejected', 
+      'rejected', 
+      'approved', 
+      'awarded', 
+      'not_awarded',
+      'draft',
+      'sent'
+    ];
+    
+    // ✅ Get all status counts using aggregation
+    const allStatusCounts = await Quotation.aggregate([
+      { $match: { ...matchStage, status: { $in: adminVisibleStatuses } } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+    
+    console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
+    
+    // Build counts map
+    const countsMap = {};
+    allStatusCounts.forEach(item => {
+      countsMap[item._id] = item.count;
+    });
+    
+    const totalQuotations = allStatusCounts.reduce((sum, item) => sum + item.count, 0);
+    
+    // Get individual counts
+    const pendingCount = (countsMap['pending'] || 0) + (countsMap['pending_admin'] || 0);
+    const opsApprovedCount = countsMap['ops_approved'] || 0;
+    const opsRejectedCount = countsMap['ops_rejected'] || 0;
+    const rejectedCount = countsMap['rejected'] || 0;
+    const approvedCount = countsMap['approved'] || 0;
+    const awardedCount = countsMap['awarded'] || 0;
+    const notAwardedCount = countsMap['not_awarded'] || 0;
+    const draftCount = countsMap['draft'] || 0;
+    const sentCount = countsMap['sent'] || 0;
+    
+    // ✅ Get total revenue from approved quotations
+    const totalRevenueResult = await Quotation.aggregate([
+      { 
+        $match: { 
+          ...matchStage,
+          status: 'approved' 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: '$totalInBaseCurrency' } 
+        } 
+      },
+    ]);
+    
+    // ✅ Get awarded value
+    const awardedValueResult = await Quotation.aggregate([
+      { 
+        $match: { 
+          ...matchStage,
+          status: 'awarded' 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: '$totalInBaseCurrency' } 
+        } 
+      },
+    ]);
+    
+    // ✅ Get conversion rate data
+    const conversionRateData = await (async () => {
+      const [approvedCnt, awardedCnt, notAwardedCnt] = await Promise.all([
+        Quotation.countDocuments({ ...matchStage, status: 'approved' }),
+        Quotation.countDocuments({ ...matchStage, status: 'awarded' }),
+        Quotation.countDocuments({ ...matchStage, status: 'not_awarded' })
+      ]);
+      
+      const totalDecided = approvedCnt + awardedCnt + notAwardedCnt;
+      const rate = totalDecided > 0 ? (awardedCnt / totalDecided) * 100 : 0;
+      
+      return {
+        approvedCount: approvedCnt,
+        awardedCount: awardedCnt,
+        notAwardedCount: notAwardedCnt,
+        totalDecided,
+        rate: Math.round(rate * 100) / 100
+      };
+    })();
+    
+    // ✅ Get total customers count
+    const totalCustomers = await Customer.countDocuments(matchStage);
+    
+    const totalRevenueValue = totalRevenueResult[0]?.total || 0;
+    const awardedValueTotal = awardedValueResult[0]?.total || 0;
+    
+    console.log('📊 Admin counts:');
+    console.log('   - totalQuotations:', totalQuotations);
+    console.log('   - pending (including pending_admin):', pendingCount);
+    console.log('   - ops_approved:', opsApprovedCount);
+    console.log('   - ops_rejected:', opsRejectedCount);
+    console.log('   - rejected:', rejectedCount);
+    console.log('   - approved:', approvedCount);
+    console.log('   - awarded:', awardedCount);
+    console.log('   - not_awarded:', notAwardedCount);
+    
     const duration = Date.now() - startTime;
     
     logger.info(`Admin dashboard stats fetched successfully`, {
       totalQuotations,
-      totalCustomers,  // ✅ Added to log
-      actionRequired: counts.ops_approved,
+      totalCustomers,
+      actionRequired: opsApprovedCount,
       totalRevenue: totalRevenueValue,
       awardedValue: awardedValueTotal,
       conversionRate: conversionRateData.rate,
@@ -761,19 +875,41 @@ exports.getAdminDashboardStats = async (req, res) => {
     res.json({
       success: true,
       stats: {
-        totalQuotations: counts.total || 0,
-        totalCustomers: totalCustomers || 0,  // ✅ Added total customers
-        actionRequired: counts.ops_approved || 0,
-        approved: counts.approved || 0,
-        awarded: counts.awarded || 0,
-        notAwarded: counts.not_awarded || 0,
+        totalQuotations: totalQuotations || 0,
+        totalCustomers: totalCustomers || 0,
+        actionRequired: opsApprovedCount || 0,
+        approved: approvedCount || 0,
+        awarded: awardedCount || 0,
+        notAwarded: notAwardedCount || 0,
         totalRevenue: totalRevenueValue || 0,
         awardedValue: awardedValueTotal || 0,
         conversionRate: conversionRateData.rate || 0,
-        rejected: counts.rejected || 0,
-        statusCounts: counts,
+        rejected: rejectedCount || 0,
+        statusCounts: {
+          total: totalQuotations || 0,
+          draft: draftCount || 0,
+          pending: pendingCount || 0,
+          ops_approved: opsApprovedCount || 0,
+          ops_rejected: opsRejectedCount || 0,
+          approved: approvedCount || 0,
+          rejected: rejectedCount || 0,
+          awarded: awardedCount || 0,
+          not_awarded: notAwardedCount || 0,
+          sent: sentCount || 0,
+        },
         conversionDetails: conversionRateData,
-        isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
+        isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL',
+        // ✅ Tab counts for frontend
+        tabCounts: {
+          all: totalQuotations || 0,
+          pending: pendingCount || 0,
+          ops_approved: opsApprovedCount || 0,
+          ops_rejected: opsRejectedCount || 0,
+          rejected: rejectedCount || 0,
+          approved: approvedCount || 0,
+          awarded: awardedCount || 0,
+          not_awarded: notAwardedCount || 0,
+        }
       }
     });
   } catch (err) {
@@ -794,54 +930,105 @@ exports.getAdminDashboardStats = async (req, res) => {
   }
 };
 
-// @desc  Ops Manager Dashboard Stats
-// @route GET /api/admin/ops-dashboard/stats
 exports.getOpsDashboardStats = async (req, res) => {
   const startTime = Date.now();
   try {
-    let { companyId } = req.query;
+    // ✅ Get companyId from query params or headers (consistent with getAllOpsQuotations)
+    let companyId = req.query.companyId || req.headers['x-company-id'];
     let matchStage = {};
+    
+    console.log('🔍 getOpsDashboardStats - companyId:', companyId);
     
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
         matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+        console.log('🔍 matchStage with companyId:', JSON.stringify(matchStage, null, 2));
+      } else {
+        console.log('⚠️ Invalid companyId format:', companyId);
       }
+    } else {
+      console.log('🔍 No company filter (all companies)');
     }
 
-    const [
-      totalQuotations,
-      pendingCount,
-      opsApprovedCount,
-      opsRejectedCount,
-      totalValue,
-    ] = await Promise.all([
-      Quotation.countDocuments(matchStage),
-      Quotation.countDocuments({ ...matchStage, status: 'pending' }),
-      Quotation.countDocuments({ ...matchStage, status: 'ops_approved' }),
-      Quotation.countDocuments({ ...matchStage, status: 'ops_rejected' }),
-      Quotation.aggregate([
-        { 
-          $match: { 
-            ...matchStage,
-            status: { $in: ['pending', 'ops_approved', 'ops_rejected'] } 
-          } 
-        },
-        { 
-          $group: { 
-            _id: null, 
-            total: { $sum: '$totalInBaseCurrency' } 
-          } 
-        },
-      ]),
+    // ✅ Include ALL statuses that Ops can see
+    const opsVisibleStatuses = [
+      'pending', 
+      'pending_admin',
+      'ops_approved', 
+      'ops_rejected', 
+      'rejected', 
+      'approved', 
+      'awarded', 
+      'not_awarded'
+    ];
+    
+    const allStatusCounts = await Quotation.aggregate([
+      { $match: { ...matchStage, status: { $in: opsVisibleStatuses } } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
+    
+    console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
+
+    const totalValueResult = await Quotation.aggregate([
+      { 
+        $match: { 
+          ...matchStage,
+          status: { $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected'] } 
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: '$totalInBaseCurrency' } 
+        } 
+      },
+    ]);
+
+    const countsMap = {};
+    allStatusCounts.forEach(item => {
+      countsMap[item._id] = item.count;
+    });
+
+    const totalQuotations = allStatusCounts.reduce((sum, item) => sum + item.count, 0);
+    
+    const pendingCount = (countsMap['pending'] || 0) + (countsMap['pending_admin'] || 0);
+    const opsApprovedCount = countsMap['ops_approved'] || 0;
+    const opsRejectedCount = countsMap['ops_rejected'] || 0;
+    const rejectedCount = countsMap['rejected'] || 0;
+    const approvedCount = countsMap['approved'] || 0;
+    const awardedCount = countsMap['awarded'] || 0;
+    const notAwardedCount = countsMap['not_awarded'] || 0;
+
+    console.log('📊 Individual counts:');
+    console.log('   - pending (including pending_admin):', pendingCount);
+    console.log('   - ops_approved:', opsApprovedCount);
+    console.log('   - ops_rejected:', opsRejectedCount);
+    console.log('   - rejected:', rejectedCount);
+    console.log('   - approved:', approvedCount);
+    console.log('   - awarded:', awardedCount);
+    console.log('   - not_awarded:', notAwardedCount);
 
     const stats = {
       totalQuotations: totalQuotations || 0,
       pendingReview: pendingCount || 0,
       awaitingAdmin: opsApprovedCount || 0,
       returnedByMe: opsRejectedCount || 0,
-      totalValue: totalValue[0]?.total || 0,
-      isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
+      rejectedByAdmin: rejectedCount || 0,
+      approved: approvedCount || 0,
+      awarded: awardedCount || 0,
+      notAwarded: notAwardedCount || 0,
+      totalValue: totalValueResult[0]?.total || 0,
+      isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL',
+      tabCounts: {
+        all: totalQuotations || 0,
+        pending: pendingCount || 0,
+        ops_approved: opsApprovedCount || 0,
+        ops_rejected: opsRejectedCount || 0,
+        rejected: rejectedCount || 0,
+        approved: approvedCount || 0,
+        awarded: awardedCount || 0,
+        not_awarded: notAwardedCount || 0,
+      }
     };
 
     const duration = Date.now() - startTime;

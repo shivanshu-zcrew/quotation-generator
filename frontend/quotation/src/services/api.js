@@ -287,17 +287,23 @@ export const adminAPI = {
   },
 };
 
-// ==================== OPS MANAGER ====================
 export const opsAPI = {
-  getPendingQuotations: (params) => api.get("/admin/quotations/ops-pending", { params }),
-  getReviewHistory: (params) => api.get("/admin/quotations/ops-history", { params: { ...params, status: "ops_approved,ops_rejected" } }),
+   getPendingQuotations: (params = {}) => {
+    const { page = 1, limit = 20, ...rest } = params;
+    return api.get("/admin/quotations/ops-pending", { params: { page, limit, ...rest } });
+  },
+   getReviewHistory: (params = {}) => {
+    const { page = 1, limit = 20, ...rest } = params;
+    return api.get("/admin/quotations/ops-history", { params: { page, limit, status: "ops_approved,ops_rejected", ...rest } });
+  },
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/ops-approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/ops-reject`, data),
   getOpsStats: (params) => api.get("/admin/ops-dashboard", { params }),
   getAllQuotations: (params) => {
-    const key = `/admin/quotations/ops-all?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/admin/quotations/ops-all", { params }), { 
-      ttl: 1 * 60 * 1000  // Cache for 1 minute
+    const { page = 1, limit = 20, ...rest } = params;
+    const key = `/admin/quotations/ops-all?${JSON.stringify({ page, limit, ...rest })}`;
+    return withCache(key, () => api.get("/admin/quotations/ops-all", { params: { page, limit, ...rest } }), { 
+      ttl: 1 * 60 * 1000   
     });
   },
 };

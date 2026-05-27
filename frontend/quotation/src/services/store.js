@@ -1444,10 +1444,25 @@ export const useCompanyQuotations = () => {
         sortDir: options.sortDir,
         ...options 
       });
+      
+      // ✅ FIX: Update local page/limit from result pagination
       if (result?.pagination) {
         setPage(result.pagination.page);
         setLimit(result.pagination.limit);
+      } else if (result?.data?.total !== undefined && result?.data?.quotations?.length) {
+        // Fallback: calculate from response
+        const returnedCount = result.data.quotations.length;
+        const totalItems = result.data.total;
+        const currentPage = usePage;
+        const currentLimit = useLimit;
+        
+        // Only update if we have pagination info from the response
+        if (totalItems !== undefined) {
+          const calculatedTotalPages = Math.ceil(totalItems / currentLimit);
+          // Don't auto-update page/limit here, keep as is
+        }
       }
+      
       return result;
     } finally {
       isRefreshingRef.current = false;
