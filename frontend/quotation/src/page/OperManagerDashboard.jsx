@@ -245,15 +245,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
         <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        {/* <ActionBtn 
-          bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
-          color={isDownloading ? '#94a3b8' : '#166534'} 
-          onClick={() => !isDownloading && onDownload(quotation)} 
-          disabled={isDownloading}
-          icon={isDownloading ? RefreshCw : Download} 
-          label={isDownloading ? '…' : 'PDF'} 
-          size="small" 
-        /> */}
         {canAct && (
           <>
             <ActionBtn 
@@ -298,7 +289,6 @@ OpsQuotationCard.displayName = 'OpsQuotationCard';
 // ─────────────────────────────────────────────────────────────
 const useTableData = (quotations, activeTab, search, sort) => {
   return useMemo(() => {
-    // Add safety check
     if (!quotations || !Array.isArray(quotations) || quotations.length === 0) {
       return { filtered: [], total: 0 };
     }
@@ -397,7 +387,8 @@ export default function OpsDashboard({ onViewQuotation }) {
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
   const isMountedRef = useRef(true);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const initialLoadDone = useRef(false); // ✅ FIX: Track initial load
+  const refreshInProgress = useRef(false); // ✅ FIX: Prevent multiple refreshes
 
   // ── Table state ───────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('all');
@@ -431,51 +422,45 @@ export default function OpsDashboard({ onViewQuotation }) {
     };
   }, []);
 
-  // Load initial data - Only once
+  // ✅ FIX: Single initial load with proper guard
   useEffect(() => {
-    if (!selectedCompany || hasLoadedOnce) return;
+    if (!selectedCompany || initialLoadDone.current) return;
     
     const loadInitialData = async () => {
+      // Prevent multiple simultaneous refreshes
+      if (refreshInProgress.current) return;
+      refreshInProgress.current = true;
+      
       try {
         await Promise.all([
           refreshCompanyQuotations(),
           refreshStats()
         ]);
         if (isMountedRef.current) {
-          setHasLoadedOnce(true);
+          initialLoadDone.current = true;
         }
       } catch (error) {
         console.error('Initial load error:', error);
         if (isMountedRef.current) {
-          setHasLoadedOnce(true);
+          initialLoadDone.current = true;
         }
+      } finally {
+        refreshInProgress.current = false;
       }
     };
     
     loadInitialData();
-  }, [selectedCompany, refreshCompanyQuotations, refreshStats, hasLoadedOnce]);
+  }, [selectedCompany, refreshCompanyQuotations, refreshStats]);
 
-  // Auto-refresh if data is not initialized
-  useEffect(() => {
-    if (!hasLoadedOnce && !quotationsLoading && !statsLoading && selectedCompany) {
-      const timer = setTimeout(() => {
-        Promise.all([
-          refreshCompanyQuotations(),
-          refreshStats()
-        ]);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [hasLoadedOnce, quotationsLoading, statsLoading, selectedCompany, refreshCompanyQuotations, refreshStats]);
+  // ✅ FIX: Remove auto-refresh effect that was causing duplicates
+  // The previous useEffect that triggered after 500ms was causing multiple refreshes
 
   // ── Derived state ─────────────────────────────────────────
-  // Fix: Treat undefined loading as true initially
   const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
 
-  const isLoading = (!hasLoadedOnce && (safeQuotationsLoading || statsLoading)) || 
-                    (hasLoadedOnce && safeQuotationsLoading && (!companyQuotations || companyQuotations.length === 0));
-
-  const isRefreshing = hasLoadedOnce && safeQuotationsLoading && companyQuotations?.length > 0;
+  // ✅ FIX: Only show loading on initial load, not on subsequent refreshes
+  const isLoading = !initialLoadDone.current && (safeQuotationsLoading || statsLoading);
+  const isRefreshing = initialLoadDone.current && safeQuotationsLoading && companyQuotations?.length > 0;
 
   // ── Safe quotation array (filtered by selected company) ──
   const safeQ = useMemo(() => {
@@ -568,7 +553,14 @@ export default function OpsDashboard({ onViewQuotation }) {
     setPage(1);
   }, []);
 
+  // ✅ FIX: Prevent multiple refresh calls
   const handleRefresh = useCallback(async () => {
+    if (refreshInProgress.current) {
+      addToast('Refresh already in progress', 'info');
+      return;
+    }
+    
+    refreshInProgress.current = true;
     try {
       await Promise.all([
         refreshCompanyQuotations(),
@@ -577,6 +569,8 @@ export default function OpsDashboard({ onViewQuotation }) {
       addToast('Data refreshed', 'success');
     } catch (err) {
       addToast(err.message || 'Refresh failed', 'error');
+    } finally {
+      refreshInProgress.current = false;
     }
   }, [refreshCompanyQuotations, refreshStats, addToast]);
 
@@ -934,33 +928,22 @@ export default function OpsDashboard({ onViewQuotation }) {
                         }}>
                           {fmtDate(q.expiryDate)}
                         </span>
-                      </td>
+                       </td>
                       <td style={styles.cell}>
                         <StatusBadge status={q.status}/>
                         <RejectionNote quotation={q}/>
-                      </td>
+                       </td>
                       <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
                       <td style={{ ...styles.cell, textAlign: 'center' }}>
                         <ItemsBadge count={q.items?.length ?? 0} />
-                      </td>
+                       </td>
                       <td style={styles.totalCell}>
                         {fmtCurrency(q.total, selectedCurrency)}
-                      </td>
+                       </td>
                       <td style={styles.actionsCell}>
                         <div style={styles.actionsContainer}>
                           <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
                             icon={Eye} label="View" title="View quotation" size="small"/>
-                          
-                          {/* <ActionBtn
-                            bg={isDownloading ? '#f1f5f9' : '#f0fdf4'} 
-                            color={isDownloading ? '#94a3b8' : '#166534'}
-                            onClick={() => !isDownloading && handleDownload(q)} 
-                            disabled={isDownloading}
-                            icon={isDownloading ? RefreshCw : Download} 
-                            label={isDownloading ? '…' : 'PDF'} 
-                            title="Download PDF"
-                            size="small"
-                          /> */}
                           
                           {canAct && (
                             <>
@@ -999,7 +982,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                             />
                           )}
                         </div>
-                      </td>
+                       </td>
                     </tr>
                   );
                 })}
@@ -1211,8 +1194,8 @@ export default function OpsDashboard({ onViewQuotation }) {
             </div>
 
             <div style={styles.headerActions}>
-              <button onClick={handleRefresh} disabled={isLoading} style={styles.refreshBtn}>
-                <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={isLoading ? styles.spin : {}}/>
+              <button onClick={handleRefresh} disabled={isLoading || refreshInProgress.current} style={styles.refreshBtn}>
+                <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={(isLoading || refreshInProgress.current) ? styles.spin : {}}/>
               </button>
               <div style={styles.searchBox}>
                 <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
@@ -1274,6 +1257,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   );
 }
 
+ 
 // ─────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────

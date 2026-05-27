@@ -3,8 +3,7 @@ const { Quotation, ExchangeRateService, Company } = require('../models/quotation
 const { Customer } = require('../models/customer');
 const Item = require('../models/items');
 const puppeteer = require('puppeteer');
-const mime = require('mime-types')
-const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/uploadCloudnary');
+const mime = require('mime-types');
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants'); 
 const imageCompressor = require('../utils/imageCompressor');
@@ -12,13 +11,118 @@ const ExcelJS = require('exceljs');
 const NotificationService = require("../utils/notificationService");
 const logger = require('../config/logger');
 
+// ===================== S3 IMPORTS =====================
+const {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand
+} = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+// ===================== S3 CLIENT =====================
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME;
+
+// ===================== S3 HELPER FUNCTIONS =====================
+const uploadBase64ToS3 = async (base64Data, folder) => {
+  try {
+    if (!base64Data || !base64Data.startsWith("data:")) {
+      return null;
+    }
+
+    const matches = base64Data.match(/^data:([^;]+);base64,(.*)$/);
+    if (!matches) return null;
+
+    const mimeType = matches[1];
+    const base64String = matches[2];
+    const buffer = Buffer.from(base64String, "base64");
+    const extension = mimeType.split("/")[1] || "jpg";
+    const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${extension}`;
+
+    const command = new PutObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+      Body: buffer,
+      ContentType: mimeType,
+    });
+
+    await s3Client.send(command);
+    return { key };
+  } catch (error) {
+    logger.error(`S3 Upload Error: ${error.message}`);
+    return null;
+  }
+};
+
+const uploadBufferToS3 = async (buffer, mimeType, folder) => {
+  try {
+    const extension = mimeType.split("/")[1] || "jpg";
+    const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${extension}`;
+
+    const command = new PutObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+      Body: buffer,
+      ContentType: mimeType,
+    });
+
+    await s3Client.send(command);
+    return { key };
+  } catch (error) {
+    logger.error(`S3 Upload Buffer Error: ${error.message}`);
+    return null;
+  }
+};
+
+const deleteFromS3 = async (key) => {
+  if (!key) return false;
+  
+  try {
+    const command = new DeleteObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+    });
+    
+    await s3Client.send(command);
+    return true;
+  } catch (error) {
+    logger.error(`S3 Delete Error: ${error.message}`);
+    return false;
+  }
+};
+
+const getSignedFileUrl = async (key, expiresIn = 3600) => {
+  if (!key) return null;
+  
+  try {
+    const command = new GetObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+    });
+    
+    const url = await getSignedUrl(s3Client, command, { expiresIn });
+    return url;
+  } catch (error) {
+    logger.error(`S3 Get Signed URL Error: ${error.message}`);
+    return null;
+  }
+};
+
 // ─────────────────────────────────────────────────────────────
 // Shared Puppeteer browser — one instance, auto-reconnect
 // ─────────────────────────────────────────────────────────────
 let _browser = null;
 
 exports.getPDFMetrics = async (req, res) => {
-  const metrics = browserPool.getMetrics();
+  const metrics = browserPool?.getMetrics() || {};
   const memory = process.memoryUsage();
   
   res.json({
@@ -33,70 +137,49 @@ exports.getPDFMetrics = async (req, res) => {
   });
 };
 
+
 const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
-  // _browser = await puppeteer.launch({
+  try {
+    _browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process',
+      ],
+    });
+
+     // _browser = await puppeteer.launch({
   //   headless: true,
-  //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
   //   args: [
   //     '--no-sandbox',
   //     '--disable-setuid-sandbox',
   //     '--disable-dev-shm-usage',
   //     '--disable-gpu',
-  //     '--no-zygote',
-  //     '--single-process',
   //   ],
   // });
-
-  _browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  });
-
-  _browser.on('disconnected', () => { _browser = null; });
-  return _browser;
+  
+    _browser.on('disconnected', () => { 
+      _browser = null;
+      logger.warn('Puppeteer browser disconnected');
+    });
+    
+    return _browser;
+  } catch (error) {
+    logger.error(`Puppeteer browser launch error: ${error.message}`);
+    throw error;
+  }
 };
+
 // ─────────────────────────────────────────────────────────────
-// Cloudinary helpers
+// S3 helpers for documents
 // ─────────────────────────────────────────────────────────────
-const uploadBase64ToCloudinary = async (dataUri, folder) => {
-  if (!dataUri?.startsWith('data:')) return null;
-  const matches = dataUri.match(/^data:([^;]+);base64,(.*)$/s);
-  if (!matches) return null;
-  
-  const mimeType = matches[1];
-  const base64Data = matches[2];
-  const buffer = Buffer.from(base64Data, 'base64');
-  
-  let resourceType = 'raw';
-  if (mimeType.startsWith('image/')) resourceType = 'image';
-  else if (mimeType.startsWith('video/')) resourceType = 'video';
-  
-  const result = await uploadToCloudinary(buffer, folder, resourceType);
-  return { url: result.secure_url, publicId: result.public_id };
-};
-
-const safeDelete = (publicId) =>
-  publicId
-    ? deleteFromCloudinary(publicId).catch((e) =>
-        console.warn(`[Cloudinary] delete failed for ${publicId}: ${e.message}`)
-      )
-    : Promise.resolve();
-
-const getResourceTypeFromMime = (mimeType) => {
-  if (!mimeType) return 'raw';
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('video/')) return 'video';
-  if (mimeType.startsWith('audio/')) return 'video';
-  return 'raw';
-};
-
 const getFileInfoFromBase64 = (base64String) => {
   const matches = base64String.match(/^data:([^;]+);base64,(.*)$/s);
   if (!matches) throw new Error('Invalid base64 data');
@@ -114,35 +197,25 @@ const getFileInfoFromBase64 = (base64String) => {
 const uploadInternalDocumentFromBase64 = async (base64String, quotationNumber, userId, description = '') => {
   try {
     const fileInfo = getFileInfoFromBase64(base64String);
-    
-    let resourceType = 'auto';
-    if (fileInfo.mimeType.startsWith('image/')) {
-      resourceType = 'image';
-    } else if (fileInfo.mimeType.startsWith('video/')) {
-      resourceType = 'video';
-    } else {
-      resourceType = 'raw';  
-    }
-    
     const folder = `quotations/${quotationNumber}/internal-docs`;
-    const result = await uploadToCloudinary(fileInfo.buffer, folder, resourceType, { 
-      access_mode: 'public',
-      use_filename: true,
-      unique_filename: true 
-    });
+    
+    const result = await uploadBufferToS3(fileInfo.buffer, fileInfo.mimeType, folder);
+    
+    if (!result) throw new Error('Failed to upload to S3');
     
     return {
       fileName: fileInfo.fileName,
       fileType: fileInfo.mimeType,
       fileSize: fileInfo.size,
-      fileUrl: result.secure_url,
-      publicId: result.public_id,
+      s3Key: result.key,
+      storageProvider: 's3',
       uploadedBy: userId,
       uploadedAt: new Date(),
       description: description,
       isInternalOnly: true
     };
   } catch (error) {
+    logger.error(`Upload internal document error: ${error.message}`);
     throw error;
   }
 };
@@ -155,6 +228,7 @@ const uploadMultipleInternalDocumentsFromBase64 = async (base64Array, quotationN
       const description = descriptions[index] || '';
       return await uploadInternalDocumentFromBase64(base64String, quotationNumber, userId, description);
     } catch (err) {
+      logger.error(`Failed to upload document: ${err.message}`);
       return null;
     }
   });
@@ -164,15 +238,8 @@ const uploadMultipleInternalDocumentsFromBase64 = async (base64Array, quotationN
 };
 
 const deleteInternalDocument = async (document) => {
-  if (!document || !document.publicId) return;
-  
-  try {
-    const resourceType = getResourceTypeFromMime(document.fileType);
-    await deleteFromCloudinary(document.publicId, resourceType);
-    return true;
-  } catch (error) {
-    return false;
-  }
+  if (!document || !document.s3Key) return false;
+  return await deleteFromS3(document.s3Key);
 };
 
 const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
@@ -288,7 +355,7 @@ exports.getCompanies = async (req, res) => {
 
     res.json({ success: true, companies, count: companies.length });
   } catch (err) {
-    console.error(err);
+    logger.error(`Get companies error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching companies', error: err.message });
   }
 };
@@ -299,12 +366,13 @@ exports.getCompanyByCode = async (req, res) => {
     const company = await Company.findOne({ code: code.toUpperCase(), isActive: true }).lean();
 
     if (!company) {
+      logger.warn(`Company not found: ${code}`);
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
     res.json({ success: true, company });
   } catch (err) {
-    console.error(err);
+    logger.error(`Get company by code error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching company', error: err.message });
   }
 };
@@ -316,6 +384,7 @@ exports.getCompanyStats = async (req, res) => {
 
     const company = await Company.findById(id);
     if (!company) {
+      logger.warn(`Company not found for stats: ${id}`);
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
@@ -343,7 +412,7 @@ exports.getCompanyStats = async (req, res) => {
       stats: { totalQuotations, totalValue: totalValue[0]?.total || 0, statusCounts: statusMap, currencyBreakdown, recentQuotations }
     });
   } catch (err) {
-    console.error(err);
+    logger.error(`Get company stats error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching company stats', error: err.message });
   }
 };
@@ -383,7 +452,7 @@ exports.getAllQuotations = async (req, res) => {
 
     return paginated(res, data, total, page, limit);
   } catch (err) {
-    console.error(err);
+    logger.error(`Get all quotations error: ${err.message}`);
     res.status(500).json({ message: 'Error fetching quotations', error: err.message });
   }
 };
@@ -423,7 +492,7 @@ exports.getMyQuotations = async (req, res) => {
       isAllCompanies, companyId: isAllCompanies ? 'ALL' : companyId
     });
   } catch (err) {
-    console.error('Get My Quotations Error:', err);
+    logger.error(`Get my quotations error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching your quotations', error: err.message });
   }
 };
@@ -445,13 +514,14 @@ exports.getQuotation = async (req, res) => {
 
     res.status(200).json(quotation);
   } catch (err) {
+    logger.error(`Get quotation error: ${err.message}`);
     res.status(500).json({ message: 'Error fetching quotation', error: err.message });
   }
 };
 
 exports.createQuotation = async (req, res) => {
   const {
-    projectName, scopeOfWork, companyId, currencyCode,customerName,  customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -508,27 +578,22 @@ exports.createQuotation = async (req, res) => {
     const rates = await ExchangeRateService.getRates(company.baseCurrency);
     exchangeRate = rates[targetCurrency] || 1;
   } catch (rateError) {
-    console.error('Error getting exchange rates:', rateError.message);
+    logger.error(`Error getting exchange rates: ${rateError.message}`);
   }
 
   const processedItems = [];
   for (let i = 0; i < validatedItems.length; i++) {
     const item = validatedItems[i];
-    let imageUrls = [];
+    let imageKeys = [];
     
     if (compressedQuotationImages && compressedQuotationImages[i] && Array.isArray(compressedQuotationImages[i])) {
       for (let imgIdx = 0; imgIdx < compressedQuotationImages[i].length; imgIdx++) {
         const imageData = compressedQuotationImages[i][imgIdx];
-        if (imageData && typeof imageData === 'string') {
-          if (imageData.startsWith('data:image')) {
-            try {
-              console.log(`📤 Uploading compressed image ${imgIdx + 1} for item ${i + 1}...`);
-              const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${i + 1}`);
-              if (uploaded && uploaded.url) imageUrls.push(uploaded.url);
-            } catch (err) { console.error(`❌ Upload failed:`, err.message); }
-          } else if (imageData.includes('cloudinary.com')) {
-            imageUrls.push(imageData);
-          }
+        if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+          try {
+            const uploaded = await uploadBase64ToS3(imageData, `quotations/items/item_${i + 1}`);
+            if (uploaded && uploaded.key) imageKeys.push(uploaded.key);
+          } catch (err) { logger.error(`Upload failed: ${err.message}`); }
         }
       }
     }
@@ -537,17 +602,14 @@ exports.createQuotation = async (req, res) => {
       for (const img of item.images) {
         if (img && typeof img === 'string' && img.startsWith('data:image')) {
           try {
-            const uploaded = await uploadBase64ToCloudinary(img, `quotations/items/item_${i + 1}`);
-            if (uploaded && uploaded.url && !imageUrls.includes(uploaded.url)) imageUrls.push(uploaded.url);
-          } catch (err) { console.error(`Upload failed:`, err.message); }
-        } else if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imageUrls.includes(img)) {
-          imageUrls.push(img);
+            const uploaded = await uploadBase64ToS3(img, `quotations/items/item_${i + 1}`);
+            if (uploaded && uploaded.key && !imageKeys.includes(uploaded.key)) imageKeys.push(uploaded.key);
+          } catch (err) { logger.error(`Upload failed: ${err.message}`); }
         }
       }
     }
     
-    imageUrls = [...new Set(imageUrls)];
-    console.log(`📸 Item ${i + 1}: Final ${imageUrls.length} images stored`);
+    imageKeys = [...new Set(imageKeys)];
     
     const unitPriceInBaseCurrency = item.unitPrice * exchangeRate;
     const totalPrice = item.quantity * item.unitPrice;
@@ -561,8 +623,8 @@ exports.createQuotation = async (req, res) => {
       unitPriceInBaseCurrency,
       totalPrice,
       totalPriceInBaseCurrency,
-      imagePaths: imageUrls,
-      imagePublicIds: []
+      imageS3Keys: imageKeys,
+      storageProvider: 's3'
     });
   }
   
@@ -572,8 +634,6 @@ exports.createQuotation = async (req, res) => {
 
   let processedTermsImages = [];
   if (compressedTermsImages && compressedTermsImages.length > 0) {
-    console.log(`📸 Processing ${compressedTermsImages.length} compressed terms images`);
-    
     for (let i = 0; i < compressedTermsImages.length; i++) {
       const imageData = compressedTermsImages[i];
       let imageBase64 = imageData;
@@ -586,15 +646,16 @@ exports.createQuotation = async (req, res) => {
       
       if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.startsWith('data:image')) {
         try {
-          const uploaded = await uploadBase64ToCloudinary(imageBase64, 'quotations/terms');
-          if (uploaded && uploaded.url) {
-            processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
+          const uploaded = await uploadBase64ToS3(imageBase64, 'quotations/terms');
+          if (uploaded && uploaded.key) {
+            processedTermsImages.push({ 
+              s3Key: uploaded.key, 
+              fileName: fileName, 
+              uploadedAt: new Date(),
+              storageProvider: 's3'
+            });
           }
-        } catch (uploadError) { console.error('Failed to upload terms image:', uploadError.message); }
-      } else if (typeof imageData === 'object' && imageData.url && imageData.url.includes('cloudinary.com')) {
-        processedTermsImages.push(imageData);
-      } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-        processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: fileName, uploadedAt: new Date() });
+        } catch (uploadError) { logger.error(`Failed to upload terms image: ${uploadError.message}`); }
       }
     }
   }
@@ -603,14 +664,11 @@ exports.createQuotation = async (req, res) => {
 
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
-    console.log(`📸 Processing ${compressedInternalDocuments.length} compressed internal documents`);
     processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(compressedInternalDocuments, quotationNumber, req.user.id, internalDocDescriptions || []);
   }
 
   const userRole = req.user?.role;
   const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
-  
-  console.log(`📝 Creating quotation with status: ${initialStatus} (User role: ${userRole})`);
 
   const quotation = new Quotation({
     quotationNumber,
@@ -659,22 +717,18 @@ exports.createQuotation = async (req, res) => {
     createdBy: req.user.id,
     createdBySnapshot: { name: req.user.name, email: req.user.email, role: req.user.role },
     status: initialStatus,
+    storageProvider: 's3'
   });
 
   await quotation.save();
   const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
   
-  const originalSize = JSON.stringify(req.body).length;
-  const compressedSize = JSON.stringify({ ...req.body, quotationImages: compressedQuotationImages, termsImages: compressedTermsImages, internalDocuments: compressedInternalDocuments }).length;
-  const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-  
   res.status(201).json({
     success: true, message: 'Quotation created successfully', quotation: populated,
     stats: {
       itemsCount: processedItems.length,
-      imagesUploaded: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
-      termsImagesUploaded: processedTermsImages.length,
-      compression: { originalSizeMB: (originalSize / 1024 / 1024).toFixed(2), compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2), reductionPercent: reduction }
+      imagesUploaded: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
+      termsImagesUploaded: processedTermsImages.length
     }
   });
 };
@@ -683,7 +737,7 @@ exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
   const companyId = req.companyId || req.headers['x-company-id'];
   const {
-    projectName, scopeOfWork, currencyCode,customerName , customerId, customer, contact, customerCountry,
+    projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -753,8 +807,6 @@ exports.updateQuotation = async (req, res) => {
       } else { newStatus = currentStatus; }
     }
 
-    console.log('📝 Status update:', { role: req.user?.role, currentStatus, newStatus });
-
     const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
     if (!isAdmin && !editableStatuses.includes(currentStatus)) {
       return res.status(400).json({ message: `Cannot edit quotation with status: ${currentStatus}` });
@@ -800,40 +852,37 @@ exports.updateQuotation = async (req, res) => {
       const totalPriceInBaseCurrency = totalPrice * exchangeRate;
       const unitPriceInBaseCurrency = unitPrice * exchangeRate;
       
-      let imagePaths = [];
+      let imageKeys = [];
       
       if (compressedQuotationImages && compressedQuotationImages[idx] && Array.isArray(compressedQuotationImages[idx])) {
         for (let imgIdx = 0; imgIdx < compressedQuotationImages[idx].length; imgIdx++) {
           const imageData = compressedQuotationImages[idx][imgIdx];
-          if (imageData && typeof imageData === 'string') {
-            if (imageData.startsWith('data:image')) {
-              try {
-                const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/items/item_${idx + 1}`);
-                if (uploaded && uploaded.url) imagePaths.push(uploaded.url);
-              } catch (err) { console.error(`Upload failed:`, err.message); }
-            } else if (imageData.includes('cloudinary.com')) {
-              imagePaths.push(imageData);
-            }
+          if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+            try {
+              const uploaded = await uploadBase64ToS3(imageData, `quotations/items/item_${idx + 1}`);
+              if (uploaded && uploaded.key) imageKeys.push(uploaded.key);
+            } catch (err) { logger.error(`Upload failed: ${err.message}`); }
           }
         }
       }
       
-      if (item.imagePaths && Array.isArray(item.imagePaths)) {
-        for (const img of item.imagePaths) {
-          if (img && typeof img === 'string' && img.includes('cloudinary.com') && !imagePaths.includes(img)) {
-            imagePaths.push(img);
+      if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+        for (const key of item.imageS3Keys) {
+          if (key && !imageKeys.includes(key)) {
+            imageKeys.push(key);
           }
         }
       }
       
-      imagePaths = [...new Set(imagePaths)];
+      imageKeys = [...new Set(imageKeys)];
       
       processedItems.push({
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
         quantity: quantity, unitPrice: unitPrice, unitPriceInBaseCurrency: unitPriceInBaseCurrency,
         totalPrice: totalPrice, totalPriceInBaseCurrency: totalPriceInBaseCurrency,
-        imagePaths: imagePaths, imagePublicIds: []
+        imageS3Keys: imageKeys,
+        storageProvider: 's3'
       });
     }
 
@@ -861,23 +910,31 @@ exports.updateQuotation = async (req, res) => {
           
           if (base64ToUpload) {
             try {
-              const uploaded = await uploadBase64ToCloudinary(base64ToUpload, `quotations/terms/${existing.quotationNumber || Date.now()}`);
-              if (uploaded && uploaded.url) {
-                processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: fileName, uploadedAt: new Date() });
+              const uploaded = await uploadBase64ToS3(base64ToUpload, `quotations/terms/${existing.quotationNumber || Date.now()}`);
+              if (uploaded && uploaded.key) {
+                processedTermsImages.push({ 
+                  s3Key: uploaded.key, 
+                  fileName: fileName, 
+                  uploadedAt: new Date(),
+                  storageProvider: 's3'
+                });
               }
-            } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-          } else if (imageData.url && imageData.url.includes('cloudinary.com')) {
-            processedTermsImages.push({ url: imageData.url, publicId: imageData.publicId, fileName: fileName, uploadedAt: imageData.uploadedAt || new Date() });
+            } catch (uploadError) { logger.error(`Failed to upload terms image: ${uploadError.message}`); }
+          } else if (imageData.s3Key) {
+            processedTermsImages.push(imageData);
           }
         } else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
           try {
-            const uploaded = await uploadBase64ToCloudinary(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
-            if (uploaded && uploaded.url) {
-              processedTermsImages.push({ url: uploaded.url, publicId: uploaded.publicId, fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
+            const uploaded = await uploadBase64ToS3(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
+            if (uploaded && uploaded.key) {
+              processedTermsImages.push({ 
+                s3Key: uploaded.key, 
+                fileName: `terms_image_${i + 1}`, 
+                uploadedAt: new Date(),
+                storageProvider: 's3'
+              });
             }
-          } catch (uploadError) { console.error(`Failed to upload terms image:`, uploadError.message); }
-        } else if (typeof imageData === 'string' && imageData.includes('cloudinary.com')) {
-          processedTermsImages.push({ url: imageData, publicId: imageData.split('/').pop().split('.')[0], fileName: `terms_image_${i + 1}`, uploadedAt: new Date() });
+          } catch (uploadError) { logger.error(`Failed to upload terms image: ${uploadError.message}`); }
         }
       }
     }
@@ -900,11 +957,11 @@ exports.updateQuotation = async (req, res) => {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
-       ...(customer && { customer: customer.trim() }),
-       ...(customerName && { 
-         customerName: customerName.trim(),
-         'customerSnapshot.name': customerName.trim() 
-       }),
+      ...(customer && { customer: customer.trim() }),
+      ...(customerName && { 
+        customerName: customerName.trim(),
+        'customerSnapshot.name': customerName.trim() 
+      }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
       ...(ourFocalPointDesignation !== undefined && { ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' }),
@@ -929,6 +986,7 @@ exports.updateQuotation = async (req, res) => {
       termsImages: processedTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
+      storageProvider: 's3'
     };
 
     if (newStatus === 'pending' || newStatus === 'pending_admin') {
@@ -954,22 +1012,17 @@ exports.updateQuotation = async (req, res) => {
       .populate('approvedBy', 'name email').populate('awardedBy', 'name email')
       .populate('companyId', 'name code baseCurrency logo focalPointDesignation').lean();
     
-    const originalSize = JSON.stringify(req.body).length;
-    const compressedSize = compressedPayloadSize;
-    const reduction = ((1 - compressedSize / originalSize) * 100).toFixed(1);
-     
     res.status(200).json({
       success: true, message: 'Quotation updated successfully', quotation: populated,
       stats: {
         itemsCount: processedItems.length,
-        imagesCount: processedItems.reduce((sum, i) => sum + i.imagePaths.length, 0),
-        termsImagesCount: processedTermsImages.length,
-        compression: { originalSizeMB: (originalSize / 1024 / 1024).toFixed(2), compressedSizeMB: (compressedSize / 1024 / 1024).toFixed(2), reductionPercent: reduction }
+        imagesCount: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
+        termsImagesCount: processedTermsImages.length
       }
     });
 
   } catch (err) {
-    console.error('Update error:', err);
+    logger.error(`Update quotation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error updating quotation', error: err.message });
   }
 };
@@ -992,7 +1045,7 @@ exports.updateQueryDate = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Query date updated', queryDate: quotation.queryDate });
   } catch (err) {
-    console.error('Error updating query date:', err);
+    logger.error(`Update query date error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error updating query date', error: err.message });
   }
 };
@@ -1103,16 +1156,13 @@ exports.awardQuotation = async (req, res) => {
         let lineItemsWithDiscount = [];
         const subtotal = quotation.subtotal || 0;
         
-        // Create line items using ONLY description (no item_id needed)
         for (let i = 0; i < quotation.items.length; i++) {
           const item = quotation.items[i];
           const originalRate = item.unitPrice;
           let finalRate = originalRate;
           let itemDiscountPercent = 0;
           
-          // Calculate discount
           if (taxRate > 0 && originalDiscountPercent > 0) {
-            // Apply discount to rate when VAT registered
             finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
             itemDiscountPercent = 0;
           } else if (!(taxRate > 0) && originalDiscountPercent > 0) {
@@ -1120,11 +1170,9 @@ exports.awardQuotation = async (req, res) => {
           }
           
           const itemTotal = item.quantity * finalRate;
-      
           
-          // Create line item WITHOUT item_id - just using description
           const lineItem = {
-             description: item.description || "",
+            description: item.description || "",
             quantity: item.quantity,
             rate: finalRate,
             discount: itemDiscountPercent,
@@ -1133,7 +1181,6 @@ exports.awardQuotation = async (req, res) => {
             item_order: i + 1
           };
           
-          // Add tax if applicable
           if (taxRate > 0) {
             lineItem.tax_id = taxId;
             lineItem.tax_percentage = taxRate;
@@ -1144,17 +1191,10 @@ exports.awardQuotation = async (req, res) => {
           lineItemsWithDiscount.push(lineItem);
         }
         
-        // Recalculate totals
         const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
         const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
         const recalculatedDiscountAmount = (taxRate > 0) ? 0 : (subtotal * originalDiscountPercent / 100);
         const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
-        
-        // Clean HTML from terms and conditions
-        const cleanHtmlForZoho = (html) => {
-          if (!html) return '';
-          return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-        };
         
         const estimateData = {
           customer_id: customerZohoId,
@@ -1183,8 +1223,6 @@ exports.awardQuotation = async (req, res) => {
         
         if (taxRate > 0) estimateData.tax_id = taxId;
         
-        console.log('📝 Creating Zoho Estimate with items (no item_id):', JSON.stringify(lineItemsWithDiscount, null, 2));
-        
         zohoEstimate = await zohoBooksService.createEstimate(estimateData);
         
         if (!zohoEstimate.success) {
@@ -1198,7 +1236,7 @@ exports.awardQuotation = async (req, res) => {
         quotation.zohoSyncedAt = new Date();
         
       } catch (zohoError) {
-        console.error('❌ Zoho estimate creation error:', zohoError);
+        logger.error(`Zoho estimate creation error: ${zohoError.message}`);
         return res.status(500).json({ 
           success: false, 
           message: `Failed to create estimate in Zoho Books: ${zohoError.message}`,
@@ -1207,7 +1245,6 @@ exports.awardQuotation = async (req, res) => {
       }
     }
     
-    // Update quotation status
     quotation.status = awarded ? 'awarded' : 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
@@ -1241,7 +1278,7 @@ exports.awardQuotation = async (req, res) => {
     });
     
   } catch (err) {
-    console.error('❌ Award quotation error:', err);
+    logger.error(`Award quotation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error awarding quotation', error: err.message });
   }
 };
@@ -1259,15 +1296,29 @@ exports.deleteQuotation = async (req, res) => {
       return res.status(400).json({ message: `Cannot delete a quotation with status: ${quotation.status}` });
 
     const jobs = [];
-    quotation.items?.forEach((item) => item.imagePublicIds?.forEach((pid) => { if (pid) jobs.push(safeDelete(pid)); }));
-    if (quotation.termsImagePublicId) jobs.push(safeDelete(quotation.termsImagePublicId));
-    quotation.internalDocuments?.forEach((doc) => { if (doc.publicId) { jobs.push(deleteFromCloudinary(doc.publicId, getResourceTypeFromMime(doc.fileType))); } });
+    
+    quotation.items?.forEach((item) => {
+      if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+        item.imageS3Keys.forEach((key) => {
+          if (key) jobs.push(deleteFromS3(key));
+        });
+      }
+    });
+    
+    quotation.termsImages?.forEach((img) => {
+      if (img.s3Key) jobs.push(deleteFromS3(img.s3Key));
+    });
+    
+    quotation.internalDocuments?.forEach((doc) => {
+      if (doc.s3Key) jobs.push(deleteFromS3(doc.s3Key));
+    });
     
     await Promise.allSettled(jobs);
     await Quotation.findByIdAndDelete(req.params.id);
     
     res.status(200).json({ success: true, message: 'Quotation deleted successfully' });
   } catch (err) {
+    logger.error(`Delete quotation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error deleting quotation', error: err.message });
   }
 };
@@ -1310,6 +1361,7 @@ exports.generatePDF = async (req, res) => {
     
   } catch (err) {
     if (page) await page.close().catch(() => {});
+    logger.error(`PDF generation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
   }
 };
@@ -1333,6 +1385,7 @@ exports.getDashboardStats = async (req, res) => {
 
     res.json({ success: true, counts, byCurrency, byCompany, totalApprovedValue: totalValueAgg[0]?.total || 0, monthlyStats });
   } catch (err) {
+    logger.error(`Get dashboard stats error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching dashboard stats', error: err.message });
   }
 };
@@ -1385,6 +1438,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
       .lean();
 
     if (!quotations.length) {
+      logger.warn(`No quotations found for export`);
       return res.status(404).json({ success: false, message: "No quotations found" });
     }
 
@@ -1544,7 +1598,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
     return res.send(buffer);
 
   } catch (error) {
-    console.error("Export error:", error);
+    logger.error(`Export quotations error: ${error.message}`);
     return res.status(500).json({ success: false, message: "Error exporting quotations", error: error.message });
   }
 };
@@ -1567,13 +1621,13 @@ exports.addInternalDocuments = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to add documents to this quotation' });
     }
 
-    const processedDocuments = await uploadMultipleInternalDocuments(
+    const processedDocuments = await uploadMultipleInternalDocumentsFromBase64(
       documents,
       quotation.quotationNumber,
       req.user.id
@@ -1590,6 +1644,7 @@ exports.addInternalDocuments = async (req, res) => {
 
     res.status(200).json({ success: true, message: `${processedDocuments.length} internal document(s) added successfully`, documents: processedDocuments });
   } catch (err) {
+    logger.error(`Add internal documents error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error adding internal documents', error: err.message });
   }
 };
@@ -1616,6 +1671,7 @@ exports.getInternalDocuments = async (req, res) => {
       count: quotation.internalDocuments?.length || 0
     });
   } catch (err) {
+    logger.error(`Get internal documents error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching internal documents', error: err.message });
   }
 };
@@ -1639,6 +1695,7 @@ exports.getInternalDocumentById = async (req, res) => {
 
     res.status(200).json({ success: true, document });
   } catch (err) {
+    logger.error(`Get document by ID error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching document', error: err.message });
   }
 };
@@ -1662,6 +1719,7 @@ exports.updateInternalDocumentDescription = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Internal document description updated', document });
   } catch (err) {
+    logger.error(`Update document description error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error updating document description', error: err.message });
   }
 };
@@ -1684,6 +1742,7 @@ exports.removeInternalDocument = async (req, res) => {
 
     res.status(200).json({ success: true, message: 'Internal document removed successfully' });
   } catch (err) {
+    logger.error(`Remove document error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error removing internal document', error: err.message });
   }
 };
@@ -1696,7 +1755,7 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy._id.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to download internal documents' });
@@ -1705,8 +1764,76 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
     const document = quotation.internalDocuments?.id(docId);
     if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
 
-    res.status(200).json({ success: true, downloadUrl: document.fileUrl, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, uploadedAt: document.uploadedAt, uploadedBy: document.uploadedBy });
+    let downloadUrl = document.s3Key ? await getSignedFileUrl(document.s3Key) : null;
+    
+    if (!downloadUrl) {
+      return res.status(404).json({ success: false, message: 'Unable to generate download URL' });
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      downloadUrl, 
+      fileName: document.fileName, 
+      fileType: document.fileType, 
+      fileSize: document.fileSize, 
+      uploadedAt: document.uploadedAt, 
+      uploadedBy: document.uploadedBy 
+    });
   } catch (err) {
+    logger.error(`Get download URL error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error getting document URL', error: err.message });
+  }
+};
+
+// =============================================================
+// S3 SIGNED URL HELPERS
+// =============================================================
+
+exports.getSignedUrl = async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { expiresIn = 3600 } = req.query;
+    
+    if (!key) {
+      return res.status(400).json({ success: false, message: 'S3 key is required' });
+    }
+    
+    const signedUrl = await getSignedFileUrl(key, parseInt(expiresIn));
+    
+    if (!signedUrl) {
+      return res.status(404).json({ success: false, message: 'Unable to generate signed URL' });
+    }
+    
+    res.json({ success: true, url: signedUrl });
+  } catch (err) {
+    logger.error(`Get signed URL error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error generating signed URL', error: err.message });
+  }
+};
+
+exports.getBatchSignedUrls = async (req, res) => {
+  try {
+    const { keys } = req.body;
+    const { expiresIn = 3600 } = req.query;
+    
+    if (!keys || !Array.isArray(keys)) {
+      return res.status(400).json({ success: false, message: 'Array of S3 keys is required' });
+    }
+    
+    const urls = {};
+    
+    for (const key of keys) {
+      if (key) {
+        const signedUrl = await getSignedFileUrl(key, parseInt(expiresIn));
+        if (signedUrl) {
+          urls[key] = signedUrl;
+        }
+      }
+    }
+    
+    res.json({ success: true, urls });
+  } catch (err) {
+    logger.error(`Batch get signed URLs error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error generating signed URLs', error: err.message });
   }
 };

@@ -1,4 +1,4 @@
-// store.js - Optimized Version
+// store.js - Optimized & Fixed Version
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
@@ -37,6 +37,15 @@ const extractResponseData = (res) => {
 
 const parseData = (data) => Array.isArray(data) ? data : (data?.data ?? []);
 
+// Centralized API response parser
+const parseApiResponse = (response, fallback = []) => {
+  if (response?.data?.success) return response.data.data || response.data.quotations || fallback;
+  if (Array.isArray(response?.data)) return response.data;
+  if (response?.data?.quotations) return response.data.quotations;
+  if (response?.data?.data) return response.data.data;
+  return fallback;
+};
+
 // ==================== ERROR HANDLING ====================
 
 export class AppError extends Error {
@@ -74,6 +83,7 @@ const initialState = {
   quotations: [],
   quotationsInitialized: false,
   quotationsLoading: false,
+  quotationsPagination: null,
   opsReviewHistory: [],
   companies: [],
   exchangeRates: null,
@@ -94,6 +104,7 @@ const initialState = {
   currencyOptions: [],
   customerStats: null,
   quotationsVersion: 0,
+  _lastRefetchTime: 0, // FIXED: Added missing property
   customerFilters: {
     status: 'all',
     taxStatus: 'all',
@@ -186,121 +197,119 @@ export const useAppStore = create(
 
         // ==================== QUOTATIONS ACTIONS ====================
 
- 
-fetchQuotationsForCompany: async (companyId, page = 1, limit = 20) => {
-  const { user } = get();
-  if (!user) return;
-  
-  set({ quotationsLoading: true, loadError: null });
-  
-  try {
-    const params = { page, limit };
-    
-    // Only add companyId if it's not 'all'
-    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-      params.companyId = companyId;
-    }
-    
-    let result;
-    
-    if (user.role === 'admin') {
-      result = await adminAPI.getAllQuotations(params);
-    } else if (user.role === 'ops_manager') {
-      result = await opsAPI.getAllQuotations(params);
-    } else {
-      result = await quotationAPI.getMyQuotations(params);
-    }
-    
-    const quotationsData = result?.data?.quotations || result?.data?.data || [];
-    const pagination = result?.data?.pagination || null;
-    
-    batchUpdate(set, [
-      ['quotations', quotationsData],
-      ['quotationsPagination', pagination],
-      ['quotationsInitialized', true],
-      ['quotationsLoading', false],
-      ['lastError', null]
-    ]);
-    
-    return { success: true, quotations: quotationsData, pagination };
-  } catch (error) {
-    batchUpdate(set, [
-      ['quotationsLoading', false],
-      ['quotationsInitialized', true],
-      ['lastError', AppError.from(error)]
-    ]);
-    return { success: false, error: getErrorMessage(error) };
-  }
-},
+        fetchQuotationsForCompany: async (companyId, page = 1, limit = 20) => {
+          const { user } = get();
+          if (!user) return;
+          
+          set({ quotationsLoading: true, loadError: null });
+          
+          try {
+            const params = { page, limit };
+            
+            // Only add companyId if it's not 'all'
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+              params.companyId = companyId;
+            }
+            
+            let result;
+            
+            if (user.role === 'admin') {
+              result = await adminAPI.getAllQuotations(params);
+            } else if (user.role === 'ops_manager') {
+              result = await opsAPI.getAllQuotations(params);
+            } else {
+              result = await quotationAPI.getMyQuotations(params);
+            }
+            
+            const quotationsData = result?.data?.quotations || result?.data?.data || [];
+            const pagination = result?.data?.pagination || null;
+            
+            batchUpdate(set, [
+              ['quotations', quotationsData],
+              ['quotationsPagination', pagination],
+              ['quotationsInitialized', true],
+              ['quotationsLoading', false],
+              ['lastError', null]
+            ]);
+            
+            return { success: true, quotations: quotationsData, pagination };
+          } catch (error) {
+            batchUpdate(set, [
+              ['quotationsLoading', false],
+              ['quotationsInitialized', true],
+              ['lastError', AppError.from(error)]
+            ]);
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
 
- 
-refetchQuotations: async (options = {}) => {
-  const { selectedCompany, user } = get();
-  if (!user) return { success: false };
-  
-  // Prevent rapid consecutive calls
-  const now = Date.now();
-  const lastCall = get()._lastRefetchTime || 0;
-  if (now - lastCall < 300) {
-    // Too soon, skip this call
-    return { success: false, message: 'Throttled' };
-  }
-  set({ _lastRefetchTime: now });
-  
-  let companyId = options.companyId !== undefined ? options.companyId : selectedCompany;
-  
-  set({ loading: true });
-  
-  try {
-    const params = { _t: now };
-    
-    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-      params.companyId = companyId;
-    }
-    
-    if (options.page) params.page = options.page;
-    if (options.limit) params.limit = options.limit;
-    if (options.status) params.status = options.status;
-    if (options.search) params.search = options.search;
-    if (options.fromDate) params.fromDate = options.fromDate;
-    if (options.toDate) params.toDate = options.toDate;
-    if (options.sortBy) params.sortBy = options.sortBy;
-    if (options.sortDir) params.sortDir = options.sortDir;
-    
-    let quotationsData = [];
-    let pagination = null;
-    
-    if (user.role === 'admin') {
-      const r = await adminAPI.getAllQuotations(params);
-      quotationsData = r?.data?.quotations || r?.data?.data || [];
-      pagination = r?.data?.pagination;
-    } else if (user.role === 'ops_manager') {
-      const r = await opsAPI.getAllQuotations(params);
-      quotationsData = r?.data?.quotations || r?.data?.data || [];
-      pagination = r?.data?.pagination;
-    } else {
-      const r = await quotationAPI.getMyQuotations(params);
-      quotationsData = r?.data?.data || r?.data || [];
-      pagination = r?.data?.pagination;
-    }
-    
-    const safeQuotationsData = Array.isArray(quotationsData) ? quotationsData : [];
-    
-    set(state => ({
-      quotations: safeQuotationsData,
-      quotationsPagination: pagination,
-      quotationsVersion: state.quotationsVersion + 1,
-      loading: false,
-      lastError: null
-    }));
-    
-    return { success: true, data: safeQuotationsData, pagination };
-  } catch (error) {
-    console.error('refetchQuotations error:', error);
-    set({ loading: false, lastError: AppError.from(error) });
-    return { success: false, error: getErrorMessage(error) };
-  }
-},
+        refetchQuotations: async (options = {}) => {
+          const { selectedCompany, user } = get();
+          if (!user) return { success: false };
+          
+          // Prevent rapid consecutive calls
+          const now = Date.now();
+          const lastCall = get()._lastRefetchTime || 0;
+          if (now - lastCall < 300) {
+            return { success: false, message: 'Throttled' };
+          }
+          set({ _lastRefetchTime: now });
+          
+          let companyId = options.companyId !== undefined ? options.companyId : selectedCompany;
+          
+          set({ loading: true });
+          
+          try {
+            const params = { _t: now };
+            
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+              params.companyId = companyId;
+            }
+            
+            // Add all possible parameters
+            if (options.page) params.page = options.page;
+            if (options.limit) params.limit = options.limit;
+            if (options.status) params.status = options.status;
+            if (options.search) params.search = options.search;
+            if (options.fromDate) params.fromDate = options.fromDate;
+            if (options.toDate) params.toDate = options.toDate;
+            if (options.sortBy) params.sortBy = options.sortBy;
+            if (options.sortDir) params.sortDir = options.sortDir;
+            
+            let quotationsData = [];
+            let pagination = null;
+            
+            if (user.role === 'admin') {
+              const r = await adminAPI.getAllQuotations(params);
+              quotationsData = r?.data?.quotations || r?.data?.data || [];
+              pagination = r?.data?.pagination;
+            } else if (user.role === 'ops_manager') {
+              const r = await opsAPI.getAllQuotations(params);
+              quotationsData = r?.data?.quotations || r?.data?.data || [];
+              pagination = r?.data?.pagination;
+            } else {
+              const r = await quotationAPI.getMyQuotations(params);
+              quotationsData = r?.data?.data || r?.data || [];
+              pagination = r?.data?.pagination;
+            }
+            
+            const safeQuotationsData = Array.isArray(quotationsData) ? quotationsData : [];
+            
+            set(state => ({
+              quotations: safeQuotationsData,
+              quotationsPagination: pagination,
+              quotationsVersion: state.quotationsVersion + 1,
+              loading: false,
+              lastError: null
+            }));
+            
+            return { success: true, data: safeQuotationsData, pagination };
+          } catch (error) {
+            console.error('refetchQuotations error:', error);
+            set({ loading: false, lastError: AppError.from(error) });
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
 
         addQuotation: async (data) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, addQuotation: true } }));
@@ -445,180 +454,187 @@ refetchQuotations: async (options = {}) => {
 
         // ==================== CUSTOMER ACTIONS ====================
 
-fetchFilteredCustomers: async (filters = {}, paginationOptions = {}) => {
-  const { selectedCompany } = get();
-  if (!selectedCompany) return { success: false, error: 'No company selected' };
+        fetchFilteredCustomers: async (filters = {}, paginationOptions = {}) => {
+          const { selectedCompany } = get();
+          if (!selectedCompany) return { success: false, error: 'No company selected' };
 
-  set(s => ({ operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: true }, loading: true }));
+          set(s => ({ operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: true }, loading: true }));
 
-  try {
-    // Handle "All Companies" - don't send companyId parameter
-    let companyIdParam = selectedCompany;
-    if (companyIdParam === 'all' || companyIdParam === 'ALL') {
-      companyIdParam = undefined; // Don't send companyId to get all companies
-    }
-    
-    const params = {
-      page: paginationOptions.page || 1,
-      limit: paginationOptions.limit || 20,
-      sortBy: paginationOptions.sortBy || 'name',
-      sortOrder: paginationOptions.sortOrder || 'asc',
-      ...filters
-    };
-    
-    // Only add companyId if it's defined and not 'all'
-    if (companyIdParam && companyIdParam !== 'all') {
-      params.companyId = companyIdParam;
-    }
+          try {
+            // Handle "All Companies" - don't send companyId parameter
+            let companyIdParam = selectedCompany;
+            if (companyIdParam === 'all' || companyIdParam === 'ALL') {
+              companyIdParam = undefined; // Don't send companyId to get all companies
+            }
+            
+            const params = {
+              page: paginationOptions.page || 1,
+              limit: paginationOptions.limit || 20,
+              sortBy: paginationOptions.sortBy || 'name',
+              sortOrder: paginationOptions.sortOrder || 'asc',
+              ...filters
+            };
+            
+            // Only add companyId if it's defined and not 'all'
+            if (companyIdParam && companyIdParam !== 'all') {
+              params.companyId = companyIdParam;
+            }
 
-    // Remove undefined or 'all' values
-    Object.keys(params).forEach(key => {
-      if (params[key] === 'all' || params[key] === null || params[key] === undefined || params[key] === '') {
-        delete params[key];
-      }
-    });
+            // Remove undefined or 'all' values
+            Object.keys(params).forEach(key => {
+              if (params[key] === 'all' || params[key] === null || params[key] === undefined || params[key] === '') {
+                delete params[key];
+              }
+            });
 
-    console.log('fetchFilteredCustomers - params:', params);
+            console.log('fetchFilteredCustomers - params:', params);
 
-    const response = await customerAPI.getAll(params, { skipCache: !!params.search || Object.keys(filters).length > 2 });
+            const response = await customerAPI.getAll(params, { skipCache: !!params.search || Object.keys(filters).length > 2 });
 
-    if (response.data?.success !== false) {
-      batchUpdate(set, [
-        ['customers', response.data?.data || []],
-        ['customersPagination', response.data?.pagination || null],
-        ['loading', false],
-        ['lastError', null]
-      ]);
-      return { success: true, customers: response.data?.data || [], pagination: response.data?.pagination };
-    }
-    throw new Error(response.data?.message || 'Failed to fetch customers');
-  } catch (error) {
-    console.error('fetchFilteredCustomers error:', error);
-    batchUpdate(set, [['loading', false], ['lastError', AppError.from(error)]]);
-    return { success: false, error: getErrorMessage(error) };
-  } finally {
-    set(s => ({ operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: false } }));
-  }
-},
+            if (response.data?.success !== false) {
+              batchUpdate(set, [
+                ['customers', response.data?.data || []],
+                ['customersPagination', response.data?.pagination || null],
+                ['loading', false],
+                ['lastError', null]
+              ]);
+              return { success: true, customers: response.data?.data || [], pagination: response.data?.pagination };
+            }
+            throw new Error(response.data?.message || 'Failed to fetch customers');
+          } catch (error) {
+            console.error('fetchFilteredCustomers error:', error);
+            batchUpdate(set, [['loading', false], ['lastError', AppError.from(error)]]);
+            return { success: false, error: getErrorMessage(error) };
+          } finally {
+            set(s => ({ operationInProgress: { ...s.operationInProgress, fetchFilteredCustomers: false } }));
+          }
+        },
 
-fetchCustomerStats: async (appliedFilters = null, forceRefresh = false) => {
-  const { selectedCompany, operationInProgress } = get();
-  if (!selectedCompany) return { success: false, error: 'No company selected' };
-  if (operationInProgress.fetchCustomerStats) return { success: false, error: 'Already fetching stats' };
+        fetchCustomerStats: async (appliedFilters = null, forceRefresh = false) => {
+          const { selectedCompany, operationInProgress } = get();
+          if (!selectedCompany) return { success: false, error: 'No company selected' };
+          
+          // FIXED: Use a more reliable check with atomic operation
+          if (get().operationInProgress.fetchCustomerStats) {
+            return { success: false, error: 'Already fetching stats' };
+          }
 
-  set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: true } }));
+          set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: true } }));
 
-  try {
-    // Handle "All Companies" - don't send companyId parameter
-    let companyIdParam = selectedCompany;
-    if (companyIdParam === 'all' || companyIdParam === 'ALL') {
-      companyIdParam = undefined;
-    }
-    
-    const params = {};
-    
-    // Only add companyId if it's defined and not 'all'
-    if (companyIdParam && companyIdParam !== 'all') {
-      params.companyId = companyIdParam;
-    }
-    
-    if (appliedFilters) {
-      const filterMap = {
-        status: 'status', taxStatus: 'taxStatus', placeOfSupply: 'placeOfSupply',
-        hasTRN: 'hasTRN', search: 'search', zohoSyncStatus: 'zohoSyncStatus'
-      };
-      Object.entries(filterMap).forEach(([key, paramKey]) => {
-        const value = appliedFilters[key];
-        if (value && value !== 'all') params[paramKey] = value;
-      });
-    }
+          try {
+            // Handle "All Companies" - don't send companyId parameter
+            let companyIdParam = selectedCompany;
+            if (companyIdParam === 'all' || companyIdParam === 'ALL') {
+              companyIdParam = undefined;
+            }
+            
+            const params = {};
+            
+            // Only add companyId if it's defined and not 'all'
+            if (companyIdParam && companyIdParam !== 'all') {
+              params.companyId = companyIdParam;
+            }
+            
+            if (appliedFilters) {
+              const filterMap = {
+                status: 'status', taxStatus: 'taxStatus', placeOfSupply: 'placeOfSupply',
+                hasTRN: 'hasTRN', search: 'search', zohoSyncStatus: 'zohoSyncStatus'
+              };
+              Object.entries(filterMap).forEach(([key, paramKey]) => {
+                const value = appliedFilters[key];
+                if (value && value !== 'all') params[paramKey] = value;
+              });
+            }
 
-    console.log('fetchCustomerStats - params:', params);
+            console.log('fetchCustomerStats - params:', params);
 
-    const res = await customerAPI.getStats(params);
-    
-    if (res.data?.success) {
-      set({ customerStats: res.data.stats || res.data, lastError: null });
-      return { success: true, stats: res.data.stats || res.data };
-    }
-    throw new Error(res.data?.message || 'Failed to fetch stats');
-  } catch (error) {
-    console.error('fetchCustomerStats error:', error);
-    set({ lastError: AppError.from(error) });
-    return { success: false, error: getErrorMessage(error) };
-  } finally {
-    set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: false } }));
-  }
-},
+            const res = await customerAPI.getStats(params);
+            
+            if (res.data?.success) {
+              set({ customerStats: res.data.stats || res.data, lastError: null });
+              return { success: true, stats: res.data.stats || res.data };
+            }
+            throw new Error(res.data?.message || 'Failed to fetch stats');
+          } catch (error) {
+            console.error('fetchCustomerStats error:', error);
+            set({ lastError: AppError.from(error) });
+            return { success: false, error: getErrorMessage(error) };
+          } finally {
+            set(s => ({ operationInProgress: { ...s.operationInProgress, fetchCustomerStats: false } }));
+          }
+        },
 
-addCustomer: async (data) => {
-  set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: true } }));
-  try {
-    const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
-    const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
-    if (!trnValidation.valid) throw new Error(trnValidation.error);
-    
-    // ✅ FIX: Use the companyId from the data (passed from modal)
-    // NEVER use get().selectedCompany when creating a customer
-    let companyId = data.companyId;
-    
-    // Validate companyId
-    if (!companyId) {
-      throw new Error('Company ID is required. Please select a company.');
-    }
-    
-    if (companyId === 'all' || companyId === 'ALL') {
-      throw new Error('Please select a specific company, not "All Companies"');
-    }
-    
-    // Validate ObjectId format
-    const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(companyId);
-    if (!isValidObjectId) {
-      throw new Error('Invalid company ID format');
-    }
-    
-    // Create customer with the companyId from the form data
-    const res = await customerAPI.create({ ...data, companyId });
-    const newCustomer = extractResponseData(res);
-    
-    set(s => ({ customers: [...s.customers, newCustomer], lastError: null }));
-    customerAPI.clearCustomerCache();
-    
-    await get().fetchCustomerStats(true);
-    return { success: true, customer: newCustomer };
-  } catch (error) {
-    set({ lastError: AppError.from(error) });
-    return { success: false, error: getErrorMessage(error) };
-  } finally {
-    set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: false } }));
-  }
-},
+        addCustomer: async (data) => {
+          set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: true } }));
+          try {
+            const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
+            const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
+            if (!trnValidation.valid) throw new Error(trnValidation.error);
+            
+            // Use the companyId from the data (passed from modal)
+            let companyId = data.companyId;
+            
+            // Validate companyId
+            if (!companyId) {
+              throw new Error('Company ID is required. Please select a company.');
+            }
+            
+            if (companyId === 'all' || companyId === 'ALL') {
+              throw new Error('Please select a specific company, not "All Companies"');
+            }
+            
+            // Validate ObjectId format
+            const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(companyId);
+            if (!isValidObjectId) {
+              throw new Error('Invalid company ID format');
+            }
+            
+            // Create customer with the companyId from the form data
+            const res = await customerAPI.create({ ...data, companyId });
+            const newCustomer = extractResponseData(res);
+            
+            set(s => ({ customers: [...s.customers, newCustomer], lastError: null }));
+            if (typeof customerAPI.clearCustomerCache === 'function') {
+              customerAPI.clearCustomerCache();
+            }
+            
+            await get().fetchCustomerStats(true);
+            return { success: true, customer: newCustomer };
+          } catch (error) {
+            set({ lastError: AppError.from(error) });
+            return { success: false, error: getErrorMessage(error) };
+          } finally {
+            set(s => ({ operationInProgress: { ...s.operationInProgress, addCustomer: false } }));
+          }
+        },
 
-updateCustomer: async (id, data) => {
-  set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
-  try {
-    // ✅ Prevent updating companyId to 'all'
-    if (data.companyId === 'all' || data.companyId === 'ALL') {
-      delete data.companyId; // Remove companyId from update
-    }
-    
-    const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
-    set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
-    
-    const res = await customerAPI.update(id, data);
-    const finalCustomer = extractResponseData(res);
-    set(s => ({ customers: s.customers.map(c => c._id === id ? finalCustomer : c) }));
-    
-    customerAPI.clearCustomerCache();
-    get().fetchCustomerStats(true);
-    return { success: true, customer: finalCustomer };
-  } catch (error) {
-    set({ lastError: AppError.from(error) });
-    return { success: false, error: getErrorMessage(error) };
-  } finally {
-    set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: false } }));
-  }
-},
+        updateCustomer: async (id, data) => {
+          set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
+          try {
+            // Prevent updating companyId to 'all'
+            if (data.companyId === 'all' || data.companyId === 'ALL') {
+              delete data.companyId; // Remove companyId from update
+            }
+            
+            const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
+            set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
+            
+            const res = await customerAPI.update(id, data);
+            const finalCustomer = extractResponseData(res);
+            set(s => ({ customers: s.customers.map(c => c._id === id ? finalCustomer : c) }));
+            
+            if (typeof customerAPI.clearCustomerCache === 'function') {
+              customerAPI.clearCustomerCache();
+            }
+            get().fetchCustomerStats(true);
+            return { success: true, customer: finalCustomer };
+          } catch (error) {
+            set({ lastError: AppError.from(error) });
+            return { success: false, error: getErrorMessage(error) };
+          } finally {
+            set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: false } }));
+          }
+        },
 
         deleteCustomer: async (id) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteCustomer_${id}`]: true } }));
@@ -626,7 +642,9 @@ updateCustomer: async (id, data) => {
             const response = await customerAPI.delete(id);
             if (response.data?.success) {
               set(s => ({ customers: s.customers.filter(c => c._id !== id), lastError: null }));
-              customerAPI.clearCustomerCache?.();
+              if (typeof customerAPI.clearCustomerCache === 'function') {
+                customerAPI.clearCustomerCache();
+              }
               await get().fetchCustomerStats(true);
               return { success: true };
             }
@@ -648,7 +666,9 @@ updateCustomer: async (id, data) => {
           try {
             const response = await customerAPI.syncFromZoho(fullSync);
             if (response.data.success) {
-              customerAPI.clearCustomerCache();
+              if (typeof customerAPI.clearCustomerCache === 'function') {
+                customerAPI.clearCustomerCache();
+              }
               await get().fetchCustomerStats(true);
               await get().fetchAllData();
               return { success: true, stats: response.data.stats };
@@ -1092,7 +1112,7 @@ updateCustomer: async (id, data) => {
         
             const companies = companiesRes.data?.companies || [];
             
-            // ✅ If no company selected but companies exist, select the first one
+            // If no company selected but companies exist, select the first one
             let finalSelectedCompany = selectedCompany;
             if (!finalSelectedCompany && companies.length > 0) {
               finalSelectedCompany = companies[0]._id;
@@ -1130,7 +1150,10 @@ updateCustomer: async (id, data) => {
           } catch (error) {
             batchUpdate(set, [['loadError', getErrorMessage(error)], ['lastError', AppError.from(error)], ['initialized', true]]);
           } finally {
-            set(s => s.loading ? { loading: false } : {});
+            // FIXED: Only update loading if it's currently true
+            if (get().loading) {
+              set({ loading: false });
+            }
           }
         },
 
@@ -1240,7 +1263,7 @@ updateCustomer: async (id, data) => {
             
             let companyId = getFn().selectedCompany;
             
-            // ✅ If no company is selected, automatically select one
+            // If no company is selected, automatically select one
             if (!companyId) {
               if (userAssignedCompany) {
                 // User has assigned company - use that
@@ -1263,7 +1286,7 @@ updateCustomer: async (id, data) => {
             // Update store with companies
             setFn({ companies });
             
-            // ✅ Set the selected company if we have one (for ALL roles)
+            // Set the selected company if we have one (for ALL roles)
             if (companyId) {
               // For ops_manager, ensure they only get their assigned company
               if (userRole === 'ops_manager' && userAssignedCompany && companyId !== userAssignedCompany) {
@@ -1352,7 +1375,9 @@ updateCustomer: async (id, data) => {
           }
         },
       }),
-      { name: 'app-store', partialize: (state) => ({
+      { 
+        name: 'app-store', 
+        partialize: (state) => ({
           user: state.user,
           selectedCompany: state.selectedCompany,
           selectedCurrency: state.selectedCurrency,
@@ -1369,7 +1394,6 @@ updateCustomer: async (id, data) => {
 );
 
 // ==================== CUSTOM HOOKS ====================
-
 
 export const useCompanyQuotations = () => {
   const quotations = useAppStore((state) => state.quotations);
@@ -1548,7 +1572,6 @@ export const useCompanyContext = () => {
     companyCurrency: currentCompany?.baseCurrency || selectedCurrency || 'AED',
   };
 };
-
 
 export const useCustomerStatsWithCompany = () => {
   const customerStats = useAppStore(s => s.customerStats);

@@ -19,6 +19,12 @@ import LoadingOverlay from "../components/LoadingOverlay";
 import ItemModal from "../components/AddItemModal";
 
 // ============================================================
+// S3 SERVICE IMPORTS
+// ============================================================
+import { quotationAPI } from '../services/api';
+import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from '../hooks/useS3Image';
+
+// ============================================================
 // LOADING COMPONENTS
 // ============================================================
 
@@ -111,8 +117,6 @@ const getCompanyDetails = (selectedCompany, companies) => {
   };
 };
 
- 
-
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
@@ -200,14 +204,15 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [tcSections, setTcSections] = useState([newSection()]);
   const [snackbar, setSnackbar] = useState(SNACK_HIDE);
   
-  // Terms images state
+  // Terms images state (now stores S3 keys instead of URLs)
   const [termsImages, setTermsImages] = useState([]);
   
   const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
   const hideSnack = useCallback(() => setSnackbar(SNACK_HIDE), []);
   
-  // Terms images handlers
+  // Terms images handlers (now for S3 keys)
   const handleTermsImagesUpload = useCallback((newImages) => {
+    // newImages should contain { s3Key, fileName, uploadedAt, storageProvider }
     setTermsImages(prev => [...prev, ...newImages]);
   }, []);
   
@@ -227,8 +232,9 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
-        imagePaths: item.imagePaths || [],
-        newImages: []
+        // S3 keys for images
+        imageS3Keys: item.imageS3Keys || [],
+        newImages: []  // Will store base64 for new uploads
       });
     });
     setQuotationItems(Array.from(itemsMap.values()));
@@ -252,23 +258,24 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   }, [customer]);
 
   // Auto-populate Company Name from selectedCompany
-useEffect(() => {
-  if (selectedCompany) {
-    let companyNameValue = '';
-    
-    if (typeof selectedCompany === 'object') {
-      companyNameValue = selectedCompany.name || '';
-    } else {
-      const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
-      companyNameValue = company?.name || '';
+  useEffect(() => {
+    if (selectedCompany) {
+      let companyNameValue = '';
+      
+      if (typeof selectedCompany === 'object') {
+        companyNameValue = selectedCompany.name || '';
+      } else {
+        const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+        companyNameValue = company?.name || '';
+      }
+      
+      setQuotationData(prev => ({
+        ...prev,
+        customer: companyNameValue,
+      }));
     }
-    
-    setQuotationData(prev => ({
-      ...prev,
-      customer: companyNameValue,  // This sets the Company Name field
-    }));
-  }
-}, [selectedCompany, companies]);
+  }, [selectedCompany, companies]);
+  
   // Add this useEffect to auto-populate creator (user) details on the right side
   useEffect(() => {
     if (user && !quotationData.ourFocalPoint) {
@@ -320,7 +327,7 @@ useEffect(() => {
   const totalImageCount = useMemo(() => {
     let count = 0;
     quotationItems.forEach(item => {
-      count += (item.imagePaths?.length || 0) + (item.newImages?.length || 0);
+      count += (item.imageS3Keys?.length || 0) + (item.newImages?.length || 0);
     });
     return count;
   }, [quotationItems]);
@@ -428,7 +435,10 @@ useEffect(() => {
     if (!files.length) return;
     
     const currentImages = itemImages[itemId] || [];
-    const slots = MAX_IMAGES_PER_ITEM - currentImages.length;
+    const currentS3Keys = quotationItems.find(i => i.id === itemId)?.imageS3Keys?.length || 0;
+    const totalCurrent = currentImages.length + currentS3Keys;
+    const slots = MAX_IMAGES_PER_ITEM - totalCurrent;
+    
     if (slots <= 0) {
       showSnack(`Max ${MAX_IMAGES_PER_ITEM} images per item.`);
       return;
@@ -458,16 +468,18 @@ useEffect(() => {
     
     setEditingImageId(null);
     e.target.value = "";
-  }, [itemImages, showSnack]);
+  }, [itemImages, quotationItems, showSnack]);
   
   const handleRemoveImage = useCallback((itemId, imageIndex) => {
     setQuotationItems(prev => prev.map(item => {
       if (item.id !== itemId) return item;
-      const isExisting = item.imagePaths?.length > imageIndex;
+      const s3KeyCount = item.imageS3Keys?.length || 0;
+      const isExisting = imageIndex < s3KeyCount;
+      
       if (isExisting) {
-        return { ...item, imagePaths: item.imagePaths.filter((_, idx) => idx !== imageIndex) };
+        return { ...item, imageS3Keys: item.imageS3Keys.filter((_, idx) => idx !== imageIndex) };
       }
-      const newImageIndex = imageIndex - (item.imagePaths?.length || 0);
+      const newImageIndex = imageIndex - s3KeyCount;
       return { ...item, newImages: item.newImages.filter((_, idx) => idx !== newImageIndex) };
     }));
     setItemImages(prev => ({ ...prev, [itemId]: (prev[itemId] || []).filter((_, idx) => idx !== imageIndex) }));
@@ -499,27 +511,31 @@ useEffect(() => {
           .join("\n\n");
       }
   
-      const termsImagesForSave = termsImages
-        .filter(img => img.url && !img.url.startsWith('data:'))
+      // Filter existing S3 term images (already uploaded)
+      const existingTermsImages = termsImages
+        .filter(img => img.s3Key && !img.url?.startsWith('data:'))
         .map(img => ({
-          url: img.url,
-          publicId: img.publicId,
+          s3Key: img.s3Key,
           fileName: img.fileName,
-          uploadedAt: img.uploadedAt || new Date().toISOString()
+          uploadedAt: img.uploadedAt || new Date().toISOString(),
+          storageProvider: 's3'
         }));
   
+      // New base64 images that need to be uploaded
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
       
       const formattedItems = quotationItems.map(item => ({
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
-        imagePaths: [...(item.imagePaths || []), ...(item.newImages || [])]
+        // Send S3 keys for existing images, base64 for new ones
+        imageS3Keys: item.imageS3Keys || [],
+        newImages: item.newImages || []
       }));
   
       const quotationImages = {};
       quotationItems.forEach((item, index) => {
-        const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
+        const allImages = [...(item.imageS3Keys || []), ...(item.newImages || [])];
         if (allImages.length > 0) {
           quotationImages[index] = allImages;
         }
@@ -563,7 +579,7 @@ useEffect(() => {
         notes: quotationData.notes?.trim() || "",
         termsAndConditions: finalTermsAndConditions,
         termsImages: newBase64Images,
-        existingTermsImages: termsImagesForSave,
+        existingTermsImages: existingTermsImages,
         items: formattedItems,
         quotationImages: quotationImages,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
@@ -597,14 +613,21 @@ useEffect(() => {
     setImageCount(totalImageCount);
     
     try {
-      const imageToBase64 = (url) => {
+      const imageToBase64 = async (source) => {
+        // If it's an S3 key, convert to signed URL first
+        if (typeof source === 'string' && source.startsWith('quotations/')) {
+          const signedUrl = await convertS3KeyToUrl(source);
+          if (!signedUrl) return null;
+          source = signedUrl;
+        }
+        
         return new Promise((resolve) => {
-          if (!url) {
+          if (!source) {
             resolve(null);
             return;
           }
-          if (url.startsWith('data:')) {
-            resolve(url);
+          if (typeof source === 'string' && source.startsWith('data:')) {
+            resolve(source);
             return;
           }
           const img = new Image();
@@ -617,10 +640,10 @@ useEffect(() => {
             resolve(canvas.toDataURL('image/jpeg', 0.8));
           };
           img.onerror = () => {
-            console.warn('Failed to load image:', url);
+            console.warn('Failed to load image:', source);
             resolve(null);
           };
-          img.src = url;
+          img.src = source;
         });
       };
   
@@ -631,12 +654,27 @@ useEffect(() => {
         ? selectedCompany 
         : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
       
+      // Process items - convert S3 keys to base64 for PDF
       const processedItems = await Promise.all(quotationItems.map(async (item) => {
-        const allImages = [...(item.imagePaths || []), ...(item.newImages || [])];
-        const base64Images = await Promise.all(allImages.map(imageToBase64));
+        // Convert S3 keys to signed URLs then to base64
+        const s3ImagePromises = (item.imageS3Keys || []).map(async (s3Key) => {
+          const signedUrl = await convertS3KeyToUrl(s3Key);
+          if (signedUrl) {
+            return await imageToBase64(signedUrl);
+          }
+          return null;
+        });
+        
+        const s3Images = await Promise.all(s3ImagePromises);
+        
+        // New images are already base64
+        const newImagesBase64 = (item.newImages || []).filter(img => img && typeof img === 'string');
+        
+        const allImages = [...s3Images.filter(Boolean), ...newImagesBase64];
+        
         return {
           ...item,
-          imagePaths: base64Images.filter(Boolean),
+          imagePaths: allImages,
           name: item.name,
           description: item.description
         };
@@ -651,8 +689,9 @@ useEffect(() => {
         tcSections.forEach((section, sectionIdx) => {
           if (section.images && section.images.length > 0) {
             section.images.forEach((img, imgIdx) => {
-              if (img.url) {
+              if (img.url || img.s3Key) {
                 allTermsImages.push({
+                  s3Key: img.s3Key,
                   url: img.url,
                   fileName: img.fileName || `image_${sectionIdx + 1}_${imgIdx + 1}`,
                   caption: img.caption || ''
@@ -666,9 +705,13 @@ useEffect(() => {
       let processedTermsImages = [];
       if (allTermsImages.length > 0) {
         processedTermsImages = await Promise.all(allTermsImages.map(async (img) => {
-          const base64 = await imageToBase64(img.url);
+          let source = img.url;
+          if (img.s3Key && !source?.startsWith('data:')) {
+            source = await convertS3KeyToUrl(img.s3Key);
+          }
+          const base64 = await imageToBase64(source);
           return {
-            url: base64 || img.url,
+            url: base64 || source,
             fileName: img.fileName,
             caption: img.caption
           };
@@ -682,9 +725,13 @@ useEffect(() => {
         if (section.images && section.images.length > 0) {
           const imagesWithBase64 = await Promise.all(
             section.images.map(async (img) => {
-              if (img.url) {
-                const base64 = await imageToBase64(img.url);
-                return { ...img, url: base64 || img.url };
+              let source = img.url;
+              if (img.s3Key && !source?.startsWith('data:')) {
+                source = await convertS3KeyToUrl(img.s3Key);
+              }
+              if (source && !source.startsWith('data:')) {
+                const base64 = await imageToBase64(source);
+                return { ...img, url: base64 || source };
               }
               return img;
             })
@@ -797,7 +844,8 @@ useEffect(() => {
         fileData: file.fileData,
         description: descriptions[index] || '',
         uploadedAt: new Date().toISOString(),
-        isTemp: true
+        isTemp: true,
+        storageProvider: 's3'
       }));
 
       setUploadedDocuments(prev => [...prev, ...newDocs]);

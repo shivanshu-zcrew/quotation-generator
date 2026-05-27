@@ -34,3 +34,22 @@ export const formatFileSize = (bytes) => {
 export const getTodayDate = () => new Date().toISOString().split('T')[0];
 
 export const getDefaultExpiryDate = () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+export const formatLargeCurrency = (num, currency) => {
+  if (num === null || num === undefined || isNaN(num)) return `0 ${currency}`;
+  if (num === 0) return `0 ${currency}`;
+  
+  const absNum = Math.abs(num);
+  
+  if (absNum >= 1_000_000_000) {
+    return `${(absNum / 1_000_000_000).toFixed(1)}B ${currency}`;
+  }
+  if (absNum >= 1_000_000) {
+    return `${(absNum / 1_000_000).toFixed(1)}M ${currency}`;
+  }
+  if (absNum >= 1_000) {
+    return `${(absNum / 1_000).toFixed(1)}K ${currency}`;
+  }
+  
+  return `${num.toLocaleString()} ${currency}`;
+};

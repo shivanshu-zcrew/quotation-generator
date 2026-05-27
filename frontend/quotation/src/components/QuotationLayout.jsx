@@ -852,24 +852,25 @@ export default function QuotationLayout({
     </div>
   );
 
-  // UPDATED: Manual item row without catalog selector
   const renderItemImages = (qi) => {
-    if (!qi.imagePaths?.length) return null;
+    // Use imageUrls for S3 images (not the keys)
+    const allImages = [...(qi.imagePaths || []), ...(qi.imageUrls || [])];
+    
+    if (!allImages.length) return null;
   
     return (
       <div style={styles.imageGrid}>
-        {qi.imagePaths.map((path, idx) => (
-          <div key={`existing-${idx}`} style={styles.imageContainer}>
+        {allImages.map((path, idx) => (
+          <div key={`${qi.id}-${idx}`} style={styles.imageContainer}>
             <img 
               src={path} 
               alt={`item-img-${idx}`} 
-              style={styles.itemImage} 
+              style={styles.itemImage}
             />
             {isEditing && onRemoveExistingImage && (
               <button 
                 onClick={() => onRemoveExistingImage(qi.id, idx)} 
                 style={styles.removeImgBtnStyle}
-                title="Remove image"
               >
                 ×
               </button>

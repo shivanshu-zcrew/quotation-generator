@@ -166,8 +166,6 @@ const getScopeOfWork = (quotation) => {
   return '';
 };
 
- 
- 
 /**
  * Safely extract item name and description
  */
@@ -192,24 +190,192 @@ const getItemDetails = (item) => {
 };
 
 /**
- * Build HTML for terms images gallery
+ * Generate a unique hash for an image source to detect duplicates
  */
-const buildTermsImagesHTML = (termsImages = []) => {
-  if (!termsImages || termsImages.length === 0) return '';
-  
-  let imagesHTML = '<div style="margin-top:16px;">';
-  imagesHTML += '<div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:flex-start;">';
-  
-  termsImages.forEach((img, idx) => {
-    if (img && img.url) {
-      imagesHTML += `
-        <div style="text-align:center; max-width:200px; border:1px solid #e2e8f0; border-radius:8px; padding:8px; background:#ffffff;">
-          <img src="${img.url}" style="max-width:180px;max-height:150px;border-radius:4px;object-fit:contain;" />
-          ${img.fileName ? `<div style="font-size:10px;color:#6b7280;margin-top:8px;word-break:break-all;">${img.fileName}</div>` : ''}
-        </div>
-      `;
+const generateImageHash = (source) => {
+  if (!source) return null;
+  if (typeof source === 'string') {
+    if (source.startsWith('data:image')) {
+      return source.substring(0, 200);
     }
-  });
+    return source;
+  }
+  return String(source);
+};
+
+/**
+ * Process item images with duplicate prevention
+ */
+const processItemImages = async (item, newImages = {}) => {
+  const imageSources = [];
+  const imageSet = new Set();
+  
+  const addImageIfUnique = (source, sourceType) => {
+    if (!source) return false;
+    const hash = generateImageHash(source);
+    if (!imageSet.has(hash)) {
+      imageSet.add(hash);
+      imageSources.push(source);
+      return true;
+    }
+    return false;
+  };
+  
+  // Add Cloudinary images
+  if (item.imagePaths && Array.isArray(item.imagePaths)) {
+    for (const imgPath of item.imagePaths) {
+      addImageIfUnique(imgPath, 'Cloudinary');
+    }
+  }
+  
+  // Add new images from editing
+  if (newImages[item.id] && Array.isArray(newImages[item.id])) {
+    for (const newImg of newImages[item.id]) {
+      addImageIfUnique(newImg, 'New base64');
+    }
+  }
+  
+  // Add S3 images
+  if (item.imageS3Keys && Array.isArray(item.imageS3Keys) && item.imageS3Keys.length > 0) {
+    try {
+      const response = await quotationAPI.getBatchSignedUrls(item.imageS3Keys);
+      let urls = [];
+      if (response.data?.urls) {
+        urls = Object.values(response.data.urls);
+      } else if (response.urls) {
+        urls = Object.values(response.urls);
+      }
+      
+      for (const url of urls) {
+        addImageIfUnique(url, 'S3');
+      }
+    } catch (error) {
+      console.error(`Failed to get S3 URLs:`, error);
+    }
+  }
+  
+  // Convert to base64
+  const base64Images = await Promise.all(
+    imageSources.map(async (source) => {
+      try {
+        return await imageToBase64(source);
+      } catch (err) {
+        console.error(`Failed to convert image:`, err.message);
+        return null;
+      }
+    })
+  );
+  
+  const validBase64 = base64Images.filter(Boolean);
+  
+  const { description } = getItemDetails(item);
+  
+  return { 
+    ...item, 
+    _b64Images: validBase64,
+    description,
+    quantity: Number(item.quantity) || 1,
+    unitPrice: Number(item.unitPrice) || 0
+  };
+};
+
+/**
+ * Build HTML for terms images gallery - Fixed version
+ */
+const buildTermsImagesHTML = async (termsImages = []) => {
+  if (!termsImages || termsImages.length === 0) {
+    return '';
+  }
+  
+  console.log('📷 Building terms images HTML, count:', termsImages.length);
+  
+  // Deduplicate terms images
+  const uniqueImagesMap = new Map();
+  
+  for (const img of termsImages) {
+    if (!img) continue;
+    
+    // Get unique key from various possible fields
+    let key = null;
+    if (img.s3Key) key = img.s3Key;
+    else if (img.url) key = img.url;
+    else if (img.filePath) key = img.filePath;
+    else if (img.fileUrl) key = img.fileUrl;
+    else if (img._id) key = img._id;
+    
+    if (key && !uniqueImagesMap.has(key)) {
+      uniqueImagesMap.set(key, img);
+    }
+  }
+  
+  const uniqueImages = Array.from(uniqueImagesMap.values());
+  console.log('📷 Unique terms images:', uniqueImages.length);
+  
+  // Process images to get URLs
+  const processedImages = [];
+  
+  for (const img of uniqueImages) {
+    let imageUrl = null;
+    
+    if (img.url) {
+      imageUrl = img.url;
+    } 
+    else if (img.s3Key) {
+      try {
+        const response = await quotationAPI.getSignedUrl(img.s3Key);
+        imageUrl = response.data?.url || response.url;
+      } catch (error) {
+        console.error('Error fetching terms image S3 URL:', error);
+      }
+    }
+    else if (img.filePath) {
+      imageUrl = img.filePath;
+    }
+    else if (img.fileUrl) {
+      imageUrl = img.fileUrl;
+    }
+    else if (img.base64) {
+      imageUrl = img.base64;
+    }
+    
+    if (imageUrl) {
+      processedImages.push({ ...img, url: imageUrl });
+    }
+  }
+  
+  if (processedImages.length === 0) {
+    return '';
+  }
+  
+  // Convert to base64
+  const imagesWithBase64 = [];
+  
+  for (const img of processedImages) {
+    try {
+      const base64Url = await imageToBase64(img.url);
+      if (base64Url) {
+        imagesWithBase64.push({ ...img, base64: base64Url });
+      }
+    } catch (error) {
+      console.error('Failed to convert terms image to base64:', error);
+    }
+  }
+  
+  if (imagesWithBase64.length === 0) {
+    return '';
+  }
+  
+  // Build HTML with 2 images per row
+  let imagesHTML = '<div style="margin-top:16px;">';
+  imagesHTML += '<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;">';
+  
+  for (const img of imagesWithBase64) {
+    imagesHTML += `
+      <div style="text-align:center;">
+        <img src="${img.base64}" style="width:100%;height:180px;border-radius:4px;object-fit:cover;" />
+       </div>
+    `;
+  }
   
   imagesHTML += '</div></div>';
   return imagesHTML;
@@ -239,7 +405,6 @@ const formatTermsText = (text) => {
  */
 export const buildPDFHTML = async (quotation, options = {}) => {
   const { newImages = {}, exportType = 'with_total' } = options;
-  console.log('🔍 PDF Generator received exportType:', exportType);
   
   // Extract basic fields with fallbacks
   const items = quotation.items || [];
@@ -270,7 +435,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   // Project and reference fields
   const projectName = quotation.projectName || '';
   const scopeOfWork = getScopeOfWork(quotation);
-   const tl = quotation.tl || '';
+  const tl = quotation.tl || '';
   const trn = quotation.trn || '';
   const ourRef = quotation.ourRef || '';
   const ourContact = quotation.ourContact || '';
@@ -281,6 +446,23 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   
   // Terms and Conditions
   let termsAndConditions = quotation.termsAndConditions || '';
+  let termsImages = [];
+  
+  // Extract terms images from multiple possible locations
+  if (quotation.termsImages && Array.isArray(quotation.termsImages) && quotation.termsImages.length > 0) {
+    termsImages = quotation.termsImages;
+  } 
+  else if (quotation.tcSections && quotation.tcSections.length > 0) {
+    for (const section of quotation.tcSections) {
+      if (section.images && Array.isArray(section.images) && section.images.length > 0) {
+        termsImages.push(...section.images);
+      }
+      if (section.content && !termsAndConditions) {
+        termsAndConditions = section.content;
+      }
+    }
+  }
+  
   if (!termsAndConditions && quotation.tcSections && quotation.tcSections.length > 0) {
     termsAndConditions = quotation.tcSections
       .map(sec => {
@@ -291,11 +473,6 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       })
       .filter(Boolean)
       .join("\n\n");
-  }
-  
-  let termsImages = quotation.termsImages || [];
-  if (termsImages.length === 0 && quotation.tcSections && quotation.tcSections[0]?.images) {
-    termsImages = quotation.tcSections[0].images;
   }
   
   const quotationNumber = quotation.quotationNumber || '';
@@ -317,28 +494,10 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   // Convert header image to base64
   const headerBase64 = await imageToBase64(headerImage);
   
-  // Process items with images
+  // Process items with duplicate prevention
   const itemsWithImages = await Promise.all(
     items.map(async (item) => {
-      const { name, description } = getItemDetails(item);
-      
-      const imagePaths = [
-        ...(item.imagePaths || []),
-        ...((newImages[item.id] || []))
-      ];
-      
-      const paths = await Promise.all(
-        imagePaths.map(p => imageToBase64(p))
-      );
-      
-      return { 
-        ...item, 
-        _b64Images: paths.filter(Boolean),
-        name,
-        description,
-        quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unitPrice) || 0
-      };
+      return await processItemImages(item, newImages);
     })
   );
 
@@ -364,22 +523,36 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const remaining = itemsWithImages.slice(ITEMS_PER_FIRST_PAGE);
   const multiPage = remaining.length > 0;
 
-  // Render row function
+  // Render row function - with 2 images per row
   const renderRow = (item, index) => {
     const imgs = item._b64Images || [];
+    // Remove duplicates in final render
+    const uniqueImgs = [...new Set(imgs)];
+    
+    // Split images into rows of 2
+    const imageRows = [];
+    for (let i = 0; i < uniqueImgs.length; i += 2) {
+      imageRows.push(uniqueImgs.slice(i, i + 2));
+    }
+    
     return `<tr>
-      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${index + 1}</td>
+      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${index + 1}</td>
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
-        ${item.description ? `<div style="font-size:11px;margin-top:3px;line-height:1.3;">${item.description}</div>` : ''}
-        ${imgs.length ? `<div style="margin-top:6px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;">
-          ${imgs.map(src => `<div style="width:100%;height:150px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;">
-            <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
-          </div>`).join('')}
-        </div>` : ''}
+        ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;">${item.description}</div>` : ''}
+        ${imageRows.map(row => `
+          <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;">
+            ${row.map(src => `
+              <div style="width:100%;height:180px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;background:#f9fafb;">
+                <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
+              </div>
+            `).join('')}
+            ${row.length === 1 ? '<div style="width:100%;"></div>' : ''}
+          </div>
+        `).join('')}
       </td>
-      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${item.quantity}</td>
-      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${item.unitPrice.toFixed(2)}</td>
-      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${(item.quantity * item.unitPrice).toFixed(2)}</td>
+      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.quantity}</td>
+      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unitPrice.toFixed(2)}</td>
+      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${(item.quantity * item.unitPrice).toFixed(2)}</td>
     </tr>`;
   };
 
@@ -388,37 +561,37 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   if (exportType === 'with_total') {
     totalsRows = `
       <tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
+        <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td colspan="2" style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
         <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
       </tr>
       <tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
+        <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
         <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
       </tr>
       ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
-        <td colspan="3" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
+        <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
+        <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
         <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discAmt.toFixed(2)}</td>
       </tr>` : ''}
       <tr style="background:#0C405A;color:white;font-weight:700;">
-        <td colspan="3" style="border:none;padding:8px;"></td>
-        <td style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
+        <td colspan="2" style="border:none;padding:8px;"></td>
+        <td colspan="2" style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
         <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
       </tr>`;
   }
 
   // Table header
   const thead = `<thead><tr style="background:#0C405A;">
-  <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;">SR#</th>
-  <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
-  <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Qty</th>
-  <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit Price</th>
-  <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:80px;">Amount</th>
- </tr></thead>`;
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;">SR#</th>
+    <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Qty</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit Price</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:80px;">Amount</th>
+  </tr></thead>`;
 
-  const termsImagesHTML = buildTermsImagesHTML(termsImages);
+  const termsImagesHTML = await buildTermsImagesHTML(termsImages);
   const formattedTermsText = formatTermsText(termsAndConditions);
 
   // Company footer
@@ -511,9 +684,9 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </div>
     </div>
 
-    <!-- Details Grid - LEFT SIDE (Customer Info) & RIGHT SIDE (Company/Focal Point Info) -->
+    <!-- Details Grid -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
-      <!-- LEFT COLUMN - Customer Details -->
+      <!-- LEFT COLUMN -->
       <div style="display:grid;grid-template-columns:140px 20px 1fr;row-gap:8px;font-size:11px;">
         <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
         ${scopeOfWork ? `<span style="font-weight:600;color:#4b5563;">Scope of Work</span><span>:</span><span>${scopeOfWork}</span>` : ''}
@@ -524,9 +697,9 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         ${customerDesignation ? `<span style="font-weight:600;color:#4b5563;">Designation</span><span>:</span><span>${customerDesignation}</span>` : ''}
         ${customerTradeLicense ? `<span style="font-weight:600;color:#4b5563;">Trade License No.</span><span>:</span><span>${customerTradeLicense}</span>` : ''}
         ${customerTaxRegistration ? `<span style="font-weight:600;color:#4b5563;">Tax Registration No.</span><span>:</span><span>${customerTaxRegistration}</span>` : ''}
-       </div>
+      </div>
       
-      <!-- RIGHT COLUMN - Focal Point / Company Details -->
+      <!-- RIGHT COLUMN -->
       <div style="display:grid;grid-template-columns:140px 20px 1fr;row-gap:8px;font-size:11px;">
         <span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${focalPointName}</span>
         <span style="font-weight:600;color:#4b5563;">Phone</span><span>:</span><span>${focalPointPhone || "N/A"}</span>

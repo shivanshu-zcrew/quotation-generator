@@ -51,7 +51,7 @@ export const btnStyle = (bg, disabled = false) => ({
   fontWeight: "500",
 });
 
- export const parseQuotationData = (q) => ({
+export const parseQuotationData = (q) => ({
   projectName: q.projectName || "",
   currencyCode: q.currency?.code || "",
   customer: q.customer || q.customerId?.name || "",
@@ -69,7 +69,6 @@ export const btnStyle = (bg, disabled = false) => ({
   discount: q.discountPercent || 0,
   notes: q.notes || "",
   termsAndConditions: q.termsAndConditions || "",
-  // termsImage: q.termsImage || null,  // ← REMOVED THIS LINE
 });
 
 export const parseQuotationItems = (items) => (items || []).map((item) => ({
@@ -80,6 +79,8 @@ export const parseQuotationItems = (items) => (items || []).map((item) => ({
   quantity: Number(item.quantity) || 1,
   unitPrice: Number(item.unitPrice) || 0,
   imagePaths: item.imagePaths || [],
+  imageS3Keys: item.imageS3Keys || [],  
+  storageProvider: item.storageProvider || 'cloudinary',  
 }));
 
 export const parseInternalDocuments = (docs) => (docs || []).map((doc) => ({ ...doc, id: doc._id }));

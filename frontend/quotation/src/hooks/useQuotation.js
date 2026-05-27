@@ -13,6 +13,7 @@ import { newSection, htmlToSections, sectionsToHTML } from '../components/TermsC
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { ALLOWED_IMAGE_TYPES, MAX_IMAGES_PER_ITEM, MAX_IMAGE_SIZE_MB } from '../utils/constants';
+import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from './useS3Image';
 
 export function useQuotation() {
   const { id } = useParams();
@@ -44,7 +45,8 @@ export function useQuotation() {
   const [customerTaxTreatment, setCustomerTaxTreatment] = useState('non_vat_registered');
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
   const [termsImages, setTermsImages] = useState([]);
-
+  const [signedUrls, setSignedUrls] = useState({});  
+  const [signedUrlsLoaded, setSignedUrlsLoaded] = useState(false);
   // Helper functions defined before useMemo/useCallback
   const round = useCallback((num) => Number((num || 0).toFixed(2)), []);
   
@@ -56,6 +58,51 @@ export function useQuotation() {
   const originalQuotation = useMemo(() => {
     return (quotations || []).find((q) => q._id === id) || fetchedQ;
   }, [quotations, id, fetchedQ]);
+
+  
+// Load signed URLs for S3 images when quotation loads
+useEffect(() => {
+  if (!originalQuotation) return;
+
+  const loadSignedUrls = async () => {
+    setSignedUrlsLoaded(false);  // Add this line
+    // Collect all S3 keys from the quotation
+    const allS3Keys = [];
+    
+    // From items
+    originalQuotation.items?.forEach(item => {
+      if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+        allS3Keys.push(...item.imageS3Keys);
+        console.log("Found S3 keys in items:", item.imageS3Keys);  // Add debug
+      }
+    });
+    
+    // From terms images
+    originalQuotation.termsImages?.forEach(img => {
+      if (img.s3Key) {
+        allS3Keys.push(img.s3Key);
+      }
+    });
+    
+    // From internal documents
+    originalQuotation.internalDocuments?.forEach(doc => {
+      if (doc.s3Key) {
+        allS3Keys.push(doc.s3Key);
+      }
+    });
+    
+    console.log("Total S3 keys found:", allS3Keys);  // Add debug
+    
+    if (allS3Keys.length > 0) {
+      const urls = await convertBatchS3KeysToUrls(allS3Keys);
+      console.log("Signed URLs received:", urls);  // Add debug
+      setSignedUrls(urls);
+    }
+    setSignedUrlsLoaded(true);  // Add this line
+  };
+  
+  loadSignedUrls();
+}, [originalQuotation]);
 
   // Calculations - useMemo for derived values
   const subtotal = useMemo(() => {
@@ -98,12 +145,26 @@ export function useQuotation() {
   useEffect(() => {
     if (!originalQuotation) return;
     
+    // Check if we have S3 keys that need URLs
+    const hasS3Keys = originalQuotation.items?.some(item => 
+      item.imageS3Keys && item.imageS3Keys.length > 0
+    );
+    
+    console.log("Has S3 keys:", hasS3Keys, "Signed URLs loaded:", signedUrlsLoaded);
+    
+    // If we have S3 keys but signed URLs are still loading, wait
+    if (hasS3Keys && !signedUrlsLoaded) {
+      console.log("Waiting for signed URLs to load...");
+      return;
+    }
+    
+    console.log("Processing quotation data with signed URLs:", signedUrls);
+    
     const parsedData = parseQuotationData(originalQuotation);
     delete parsedData.termsImage;
     
     setQuotationData({
       ...parsedData,
-      // Left side fields
       projectName: originalQuotation.projectName || "",
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
@@ -114,7 +175,6 @@ export function useQuotation() {
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
       customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
       customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || originalQuotation.trn || "",
-      // Right side fields
       ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
       ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
       ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
@@ -134,39 +194,46 @@ export function useQuotation() {
       notes: originalQuotation.notes || "",
     });
     
+    // Parse items - convert S3 keys to URLs
     const parsedItems = parseQuotationItems(originalQuotation.items);
-    setQuotationItems(parsedItems);
+    const itemsWithUrls = parsedItems.map(item => {
+      const s3Urls = (item.imageS3Keys || []).map(key => signedUrls[key]).filter(Boolean);
+      console.log(`Item ${item.id} - S3 keys:`, item.imageS3Keys, "-> URLs:", s3Urls);
+      
+      return {
+        ...item,
+        imageUrls: s3Urls,
+        imagePaths: item.imagePaths || [],
+      };
+    });
+    setQuotationItems(itemsWithUrls);
     
-    const taxTreatment = originalQuotation.customerId?.taxTreatment || 
-      originalQuotation.customerTaxTreatment || 
-      originalQuotation.taxTreatment ||
-      'non_vat_registered';
-    
-    const placeOfSupply = originalQuotation.customerId?.placeOfSupply || 
-      originalQuotation.customerPlaceOfSupply || 
-      originalQuotation.placeOfSupply ||
-      'Dubai';
-    
-    setCustomerTaxTreatment(taxTreatment);
-    setCustomerPlaceOfSupply(placeOfSupply);
-    
+    // Handle terms images
     const cloudinaryImages = originalQuotation.termsImages || [];
     const formattedTermsImages = cloudinaryImages.map((img, index) => ({
       id: img._id || `existing-img-${Date.now()}-${index}`,
-      url: img.url,
+      url: img.s3Key ? signedUrls[img.s3Key] : img.url,
+      s3Key: img.s3Key,
       publicId: img.publicId,
       fileName: img.fileName,
       isTemp: false,
-      uploadedAt: img.uploadedAt
+      uploadedAt: img.uploadedAt,
+      storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
     }));
-    
     setTermsImages(formattedTermsImages);
     
     const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
     setTcSections(sections.length ? sections : [newSection()]);
     
-    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
-  }, [originalQuotation]);
+    // Handle internal documents
+    const parsedDocs = parseInternalDocuments(originalQuotation.internalDocuments);
+    const docsWithUrls = parsedDocs.map(doc => ({
+      ...doc,
+      fileUrl: doc.s3Key ? signedUrls[doc.s3Key] : doc.fileUrl
+    }));
+    setInternalDocuments(docsWithUrls);
+    
+  }, [originalQuotation, signedUrls, signedUrlsLoaded]); // Add signedUrlsLoaded to dependencies
 
   // Define all callbacks before conditional logic
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
@@ -276,7 +343,9 @@ export function useQuotation() {
       description: "",
       quantity: 1,
       unitPrice: 0,
-      imagePaths: []
+      imagePaths: [],
+      imageS3Keys: [],
+      newImages: []
     }]);
   }, []);
 
@@ -377,8 +446,9 @@ export function useQuotation() {
   
     const existingItem = quotationItems.find(item => item.id === itemId);
     const existingImageCount = existingItem?.imagePaths?.length || 0;
+    const existingS3Count = existingItem?.imageS3Keys?.length || 0;
     const newImageCount = (newImages[itemId] || []).length;
-    const currentTotalImages = existingImageCount + newImageCount;
+    const currentTotalImages = existingImageCount + existingS3Count + newImageCount;
     const availableSlots = MAX_IMAGES_PER_ITEM - currentTotalImages;
   
     if (availableSlots <= 0) {
@@ -425,15 +495,13 @@ export function useQuotation() {
       const reader = new FileReader();
   
       reader.onload = () => {
-        // ✅ Store ONLY the base64 string, NOT an object
         const base64String = reader.result;
         
         setNewImages((prev) => ({
           ...prev,
-          [itemId]: [...(prev[itemId] || []), base64String], // Store as string
+          [itemId]: [...(prev[itemId] || []), base64String],
         }));
   
-        // Also update quotationItems to keep track
         setQuotationItems(prev => prev.map(item => 
           item.id === itemId ? { 
             ...item, 
@@ -473,7 +541,6 @@ export function useQuotation() {
       return updated;
     });
     
-    // Also remove from quotationItems if you store newImages there
     setQuotationItems(prev => prev.map(item =>
       item.id === itemId ? {
         ...item,
@@ -483,15 +550,33 @@ export function useQuotation() {
   }, []);
 
   const removeExistingImage = useCallback((itemId, imageIndex) => {
-    setQuotationItems(prev => prev.map(item => {
-      if (item.id !== itemId) return item;
-      // Remove the image at the specified index
-      const newImagePaths = item.imagePaths.filter((_, idx) => idx !== imageIndex);
-      return {
-        ...item,
-        imagePaths: newImagePaths
-      };
-    }));
+    setQuotationItems(prevItems => 
+      prevItems.map(item => {
+        if (item.id !== itemId) return item;
+        
+        // Get current arrays
+        const currentS3Keys = item.imageS3Keys || [];
+        const currentUrls = item.imageUrls || [];
+        const currentPaths = item.imagePaths || [];
+        
+        // If removing from S3 images
+        if (imageIndex < currentS3Keys.length) {
+          return {
+            ...item,
+            imageS3Keys: currentS3Keys.filter((_, idx) => idx !== imageIndex),
+            imageUrls: currentUrls.filter((_, idx) => idx !== imageIndex)  // ← THIS IS THE KEY FIX
+          };
+        } 
+        // If removing from Cloudinary images
+        else {
+          const adjustedIndex = imageIndex - currentS3Keys.length;
+          return {
+            ...item,
+            imagePaths: currentPaths.filter((_, idx) => idx !== adjustedIndex)
+          };
+        }
+      })
+    );
   }, []);
 
   const handleTermsImagesUpload = useCallback((files) => {
@@ -524,6 +609,7 @@ export function useQuotation() {
             fileType: file.type,
             fileSize: file.size,
             isTemp: true,
+            storageProvider: 's3',
             uploadedAt: new Date().toISOString()
           });
 
@@ -566,7 +652,7 @@ export function useQuotation() {
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
       customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
-customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
+      customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
       customerPhone: originalQuotation.customerPhone || originalQuotation.contact || "",
       customerEmail: originalQuotation.customerEmail || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
@@ -578,15 +664,34 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
       expiryDate: originalQuotation.expiryDate ? new Date(originalQuotation.expiryDate).toISOString().split('T')[0] : "",
     });
 
-    setQuotationItems(parseQuotationItems(originalQuotation.items));
+    const parsedItems = parseQuotationItems(originalQuotation.items);
+    const itemsWithUrls = parsedItems.map(item => ({
+      ...item,
+      imageUrls: (item.imageS3Keys || []).map(key => signedUrls[key]).filter(Boolean),
+    }));
+    setQuotationItems(itemsWithUrls);
 
     const cloudinaryImages = originalQuotation.termsImages || [];
-    setTermsImages(cloudinaryImages);
+    const formattedTermsImages = cloudinaryImages.map((img, index) => ({
+      id: img._id || `existing-img-${Date.now()}-${index}`,
+      url: img.s3Key ? signedUrls[img.s3Key] : img.url,
+      s3Key: img.s3Key,
+      publicId: img.publicId,
+      fileName: img.fileName,
+      isTemp: false,
+      uploadedAt: img.uploadedAt
+    }));
+    setTermsImages(formattedTermsImages);
 
     const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
     setTcSections(sections.length ? sections : [newSection()]);
 
-    setInternalDocuments(parseInternalDocuments(originalQuotation.internalDocuments));
+    const parsedDocs = parseInternalDocuments(originalQuotation.internalDocuments);
+    const docsWithUrls = parsedDocs.map(doc => ({
+      ...doc,
+      fileUrl: doc.s3Key ? signedUrls[doc.s3Key] : doc.fileUrl
+    }));
+    setInternalDocuments(docsWithUrls);
     setNewDocuments([]);
     setNewImages({});
     setEditingImgId(null);
@@ -604,7 +709,7 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
 
     setCustomerTaxTreatment(taxTreatment);
     setCustomerPlaceOfSupply(placeOfSupply);
-  }, [originalQuotation]);
+  }, [originalQuotation, signedUrls]);
 
   const validateBeforeSave = useCallback(() => {
     if (!quotationItems.length) {
@@ -671,21 +776,24 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
       quotationItems.forEach((item, index) => {
         const allImages = [];
       
+        // Add existing S3 keys (as keys, not URLs)
+        if (item.imageS3Keys && Array.isArray(item.imageS3Keys) && item.imageS3Keys.length > 0) {
+          allImages.push(...item.imageS3Keys);
+        }
+      
+        // Add existing Cloudinary paths
         if (item.imagePaths && Array.isArray(item.imagePaths) && item.imagePaths.length > 0) {
           allImages.push(...item.imagePaths);
         }
       
+        // Add new base64 images
         if (newImages[item.id] && Array.isArray(newImages[item.id]) && newImages[item.id].length > 0) {
-          const previewUrls = newImages[item.id].map(img => {
-            if (typeof img === 'object' && img.preview) {
-              return img.preview;
-            }
-            if (typeof img === 'string') {
-              return img;
-            }
+          const base64Images = newImages[item.id].map(img => {
+            if (typeof img === 'string') return img;
+            if (typeof img === 'object' && img.preview) return img.preview;
             return img;
           });
-          allImages.push(...previewUrls);
+          allImages.push(...base64Images);
         }
       
         if (allImages.length > 0) {
@@ -700,6 +808,7 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
           fileSize: doc.fileSize,
           fileUrl: doc.fileUrl,
           publicId: doc.publicId,
+          s3Key: doc.s3Key,
           description: doc.description || '',
         })),
         ...newDocuments.map(doc => ({
@@ -727,17 +836,23 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
           .join("\n\n");
       }
   
-      // ✅ FIX: Include newImages in imagePaths
+      // Format items for API - separate S3 keys and base64 images
       const formattedItems = quotationItems.map((qi) => ({
         itemId: qi.itemId || null,
         name: qi.name || "",
         description: qi.description || "",
         quantity: Number(qi.quantity) || 1,
         unitPrice: Number(qi.unitPrice) || 0,
+        // Send S3 keys (existing images)
+        imageS3Keys: qi.imageS3Keys || [],
+        // Send new base64 images
+        newImages: newImages[qi.id] || [],
+        // Keep for backward compatibility
         imagePaths: qi.imagePaths || []
       }));
   
-      const existingCloudinaryImages = termsImages.filter(img => img.url && !img.url.startsWith('data:'));
+      // Separate existing S3 term images from new base64 ones
+      const existingTermsImages = termsImages.filter(img => img.s3Key && !img.url?.startsWith('data:'));
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
   
       const payload = {
@@ -777,7 +892,8 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
         notes: quotationData.notes?.trim() || "",
         
         termsAndConditions: finalTermsAndConditions,
-        termsImages: [...existingCloudinaryImages, ...newBase64Images],
+        termsImages: newBase64Images,
+        existingTermsImages: existingTermsImages,
         
         items: formattedItems,
         quotationImages: quotationImages,
@@ -795,17 +911,12 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
         const updatedQuotation = result.quotation;
   
         if (updatedQuotation) {
-          // Update fetchedQ with the complete updated quotation
           setFetchedQ(updatedQuotation);
           
-          // Update all state with the complete data from server
           setQuotationData({
-            // Left side fields
             projectName: updatedQuotation.projectName || "",
             scopeOfWork: updatedQuotation.scopeOfWork || "",
             remark: updatedQuotation.remark || "",
-            
-            // Customer/Company fields
             customer: updatedQuotation.companySnapshot?.name || updatedQuotation.customer || "",
             customerName: updatedQuotation.customerName || updatedQuotation.customerId?.name || "",
             customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
@@ -813,21 +924,15 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
             customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
             customerTradeLicenseNumber: updatedQuotation.customerTradeLicenseNumber || updatedQuotation.customerSnapshot?.tradeLicenseNumber || "",
             customerTaxRegistrationNumber: updatedQuotation.customerTaxRegistrationNumber || updatedQuotation.customerSnapshot?.vatNumber || updatedQuotation.trn || "",
-            
-            // Right side fields
             ourFocalPoint: updatedQuotation.ourFocalPoint || updatedQuotation.createdBySnapshot?.name || "",
             ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBySnapshot?.role || "",
             ourContact: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
             salesManagerEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
             companyPhone: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
             companyEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
-            
-            // Dates
             date: updatedQuotation.date ? new Date(updatedQuotation.date).toISOString().split('T')[0] : "",
             expiryDate: updatedQuotation.expiryDate ? new Date(updatedQuotation.expiryDate).toISOString().split('T')[0] : "",
             queryDate: updatedQuotation.queryDate ? new Date(updatedQuotation.queryDate).toISOString().split('T')[0] : "",
-            
-            // Other fields
             ourRef: updatedQuotation.ourRef || "",
             paymentTerms: updatedQuotation.paymentTerms || "",
             deliveryTerms: updatedQuotation.deliveryTerms || "",
@@ -839,31 +944,28 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
             currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
           });
           
-          // Update items - preserve newImages as empty after save
           const updatedItems = parseQuotationItems(updatedQuotation.items);
-          // Add empty newImages array to each item for future uploads
           const itemsWithNewImages = updatedItems.map(item => ({
             ...item,
             newImages: []
           }));
           setQuotationItems(itemsWithNewImages);
   
-          // Update terms images
           const serverTermsImages = updatedQuotation.termsImages || [];
           setTermsImages(serverTermsImages.map(img => ({
             id: img._id || `img-${Date.now()}`,
-            url: img.url,
+            url: img.s3Key ? signedUrls[img.s3Key] : img.url,
+            s3Key: img.s3Key,
             publicId: img.publicId,
             fileName: img.fileName,
             isTemp: false,
-            uploadedAt: img.uploadedAt
+            uploadedAt: img.uploadedAt,
+            storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
           })));
   
-          // Update terms sections
           const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
           setTcSections(sections.length ? sections : [newSection()]);
   
-          // Update documents
           setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
         }
   
@@ -883,7 +985,7 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
       setIsSaving(false);
     }
   }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, newDocuments,
-      internalDocuments, tcSections, termsImages, updateQuotation, showSnack]);
+      internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
@@ -905,6 +1007,26 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
 
     setIsExporting(true);
     try {
+      // Convert S3 keys to signed URLs for PDF generation
+      const allS3Keys = [];
+      
+      quotationItems.forEach(item => {
+        if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+          allS3Keys.push(...item.imageS3Keys);
+        }
+      });
+      
+      termsImages.forEach(img => {
+        if (img.s3Key) {
+          allS3Keys.push(img.s3Key);
+        }
+      });
+      
+      let signedUrlsMap = {};
+      if (allS3Keys.length > 0) {
+        signedUrlsMap = await convertBatchS3KeysToUrls(allS3Keys);
+      }
+      
       const pdfQuotation = {
         ...originalQuotation,
         projectName: quotationData.projectName,
@@ -934,14 +1056,19 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
         remark: quotationData.remark || originalQuotation?.remark || "",
         items: quotationItems.map(item => ({
           ...item,
-          imagePaths: [...(item.imagePaths || []), ...((newImages[item.id] || []).map(img => img.preview))]
+          imagePaths: [
+            ...(item.imagePaths || []),
+            ...(item.imageS3Keys || []).map(key => signedUrlsMap[key]).filter(Boolean),
+            ...((newImages[item.id] || []).map(img => typeof img === 'string' ? img : img.preview))
+          ]
         })),
         subtotal,
         taxAmount,
         discountAmount,
         grandTotal,
         amountInWords,
-        exportType: exportType
+        exportType: exportType,
+        termsImagesUrls: termsImages.map(img => img.s3Key ? signedUrlsMap[img.s3Key] : img.url).filter(Boolean)
       };
 
       await downloadQuotationPDF(pdfQuotation, { newImages, exportType });
@@ -953,7 +1080,7 @@ customerName: originalQuotation.customerName || originalQuotation.customerId?.na
       setIsExporting(false);
     }
   }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, tcSections, 
-      subtotal, taxAmount, discountAmount, grandTotal, amountInWords, showSnack]);
+      subtotal, taxAmount, discountAmount, grandTotal, amountInWords, termsImages, showSnack]);
 
   // Return all values
   return {

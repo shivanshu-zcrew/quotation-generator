@@ -1,7 +1,7 @@
 // components/CompactStatsCard.jsx
 import React, { useState } from 'react';
 import { TrendingUp, FileText, Users, ChevronDown, ChevronUp, Clock, RefreshCw, CheckCircle, Award, Ban } from 'lucide-react';
-import { fmtCurrency } from '../../utils/formatters';
+import { fmtCurrency, formatLargeCurrency } from '../../utils/formatters';
 
 const CompactStatsCard = React.memo(({ 
   totalRevenue, 
@@ -21,6 +21,7 @@ const CompactStatsCard = React.memo(({
     { label: 'Returned', value: statusCounts?.returned || 0, icon: Ban, color: '#ec4899', bg: '#fce7f3' },
   ];
 
+  
   return (
     <div style={{
       background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
@@ -37,7 +38,7 @@ const CompactStatsCard = React.memo(({
             Revenue
           </div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
-            {loading ? '...' : fmtCurrency(totalRevenue, selectedCurrency)}
+            {loading ? '...' : formatLargeCurrency(totalRevenue, selectedCurrency)}
           </div>
         </div>
         

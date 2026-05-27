@@ -2,7 +2,7 @@
 import React from 'react';
 import { TrendingUp, FileText, Users, Clock, RefreshCw, CheckCircle, Award, Ban } from 'lucide-react';
 import { StatCard } from '../SharedComponents';
-import { fmtCurrency } from '../../utils/formatters';
+import { fmtCurrency, formatLargeCurrency } from '../../utils/formatters';
 
 const DesktopStatsGrid = React.memo(({ 
   totalRevenue, 
@@ -23,7 +23,7 @@ const DesktopStatsGrid = React.memo(({
       }}>
         <StatCard 
           label="Total Revenue" 
-          value={fmtCurrency(totalRevenue, selectedCurrency)} 
+          value={formatLargeCurrency(totalRevenue, selectedCurrency)} 
           accent="#6366f1" 
           iconBg="#eff1ff" 
           iconColor="#6366f1" 

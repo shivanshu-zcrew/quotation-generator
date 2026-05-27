@@ -254,6 +254,8 @@ const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
   );
 });
 
+
+
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const isMobile = useMediaQuery("(max-width: 768px)");
   const isTablet = useMediaQuery("(min-width: 769px) and (max-width: 1024px)");
@@ -322,7 +324,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const hasMountedRef = useRef(false);
 
-  // ✅ FIX: Trigger stats refresh when selectedCompany changes (including 'all')
   useEffect(() => {
     if (selectedCompany) {
       refetchCustomerStats();

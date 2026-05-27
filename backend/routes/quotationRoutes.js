@@ -14,6 +14,25 @@ router.get('/companies/:code', quotationController.getCompanyByCode);
 router.get('/companies/:code/stats', quotationController.getCompanyStats);
 
 // =============================================================
+// S3 SIGNED URL ROUTES (for displaying images from S3)
+// =============================================================
+
+/**
+ * @route   GET /api/quotations/signed-url/:key
+ * @desc    Get signed URL for a single S3 file
+ * @access  Private (All authenticated users)
+ */
+router.get('/signed-url/:key', quotationController.getSignedUrl);
+
+/**
+ * @route   POST /api/quotations/signed-urls/batch
+ * @desc    Get signed URLs for multiple S3 files
+ * @access  Private (All authenticated users)
+ * @body    { keys: ["key1", "key2", ...] }
+ */
+router.post('/signed-urls/batch', quotationController.getBatchSignedUrls);
+
+// =============================================================
 // INTERNAL DOCUMENT ROUTES
 // =============================================================
 
@@ -45,8 +64,18 @@ router.get('/:id/internal-documents/:docId', quotationController.getInternalDocu
  */
 router.patch('/:id/internal-documents/:docId', quotationController.updateInternalDocumentDescription);
 
+/**
+ * @route   DELETE /api/quotations/:id/internal-documents/:docId
+ * @desc    Remove internal document
+ * @access  Private (Creator only)
+ */
 router.delete('/:id/internal-documents/:docId', quotationController.removeInternalDocument);
 
+/**
+ * @route   GET /api/quotations/:id/internal-documents/:docId/download
+ * @desc    Get download URL for internal document
+ * @access  Private (Internal team only)
+ */
 router.get('/:id/internal-documents/:docId/download', quotationController.getInternalDocumentDownloadUrl);
 
 // =============================================================
@@ -65,7 +94,5 @@ router.patch('/:id/award', quotationController.awardQuotation);
 // ADMIN ONLY ROUTES
 // =============================================================
 router.get('/', adminOnly, quotationController.getAllQuotations);
-
- 
 
 module.exports = router;

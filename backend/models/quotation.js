@@ -76,20 +76,30 @@ class ExchangeRateService {
 }
 
 // ===== SUB-SCHEMAS =====
+
+// Updated Internal Document Schema with S3 support
 const quotationDocumentSchema = new mongoose.Schema({
   fileName: { type: String, required: true },
   fileType: { type: String, required: true },
   fileSize: { type: Number, required: true },
-  fileUrl: { type: String, required: true },
-  publicId: { type: String, required: true },
+  // Cloudinary fields (for backward compatibility)
+  fileUrl: { type: String },
+  publicId: { type: String },
+  // S3 fields
+  s3Key: { type: String },
+  storageProvider: {
+    type: String,
+    enum: ['s3', 'cloudinary'],
+    default: 'cloudinary'
+  },
   uploadedAt: { type: Date, default: Date.now },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   description: { type: String, default: "" },
 });
 
+// Updated Item Schema with S3 support
 const quotationItemSchema = new mongoose.Schema(
   {
-     
     zohoItemId: {
       type: String,
       index: true,
@@ -121,11 +131,35 @@ const quotationItemSchema = new mongoose.Schema(
       required: true,
       set: (v) => Math.round(v * 100) / 100,
     },
+    // Cloudinary fields (for backward compatibility)
     imagePaths: [{ type: String }],
     imagePublicIds: [{ type: String }],
+    // S3 fields
+    imageS3Keys: [{ type: String }],
+    storageProvider: {
+      type: String,
+      enum: ['s3', 'cloudinary'],
+      default: 'cloudinary'
+    }
   },
   { _id: false }
 );
+
+// Updated Terms Images Schema with S3 support
+const termsImageSchema = new mongoose.Schema({
+  // Cloudinary fields (for backward compatibility)
+  url: { type: String },
+  publicId: { type: String },
+  // S3 fields
+  s3Key: { type: String },
+  fileName: { type: String },
+  uploadedAt: { type: Date, default: Date.now },
+  storageProvider: {
+    type: String,
+    enum: ['s3', 'cloudinary'],
+    default: 'cloudinary'
+  }
+});
 
 // ===== MAIN QUOTATION SCHEMA =====
 const quotationSchema = new mongoose.Schema(
@@ -156,6 +190,13 @@ const quotationSchema = new mongoose.Schema(
         iban: String,
         swift: String,
       },
+    },
+
+    // Main storage provider for this quotation
+    storageProvider: {
+      type: String,
+      enum: ['s3', 'cloudinary'],
+      default: 'cloudinary'
     },
 
     // Currency
@@ -290,14 +331,7 @@ const quotationSchema = new mongoose.Schema(
     // Notes & Terms
     notes: { type: String, default: "" },
     termsAndConditions: { type: String, default: "" },
-    termsImages: [
-      {
-        url: { type: String, required: true },
-        publicId: { type: String, required: true },
-        fileName: { type: String },
-        uploadedAt: { type: Date, default: Date.now },
-      },
-    ],
+    termsImages: [termsImageSchema],
     internalDocuments: [quotationDocumentSchema],
     remark: {
       type: String,
@@ -373,6 +407,8 @@ quotationSchema.index({ companyId: 1, createdBy: 1 });
 quotationSchema.index({ companyId: 1, quotationNumber: 1 }, { unique: true });
 quotationSchema.index({ companyId: 1, totalInBaseCurrency: 1 });
 quotationSchema.index({ companyId: 1, queryDate: 1 });
+// New index for storage provider
+quotationSchema.index({ storageProvider: 1 });
 
 // ===== PRE-SAVE MIDDLEWARE =====
 quotationSchema.pre("save", async function (next) {
@@ -544,6 +580,39 @@ quotationSchema.methods.getFormattedHeader = function () {
       taxRegistrationNumber: this.companySnapshot?.vatNumber || "",
     },
   };
+};
+
+// Helper method to check if quotation uses S3 storage
+quotationSchema.methods.usesS3 = function () {
+  return this.storageProvider === 's3';
+};
+
+// Helper method to get all S3 keys for cleanup
+quotationSchema.methods.getAllS3Keys = function () {
+  const keys = [];
+  
+  // Get item image S3 keys
+  this.items?.forEach(item => {
+    if (item.imageS3Keys && item.imageS3Keys.length) {
+      keys.push(...item.imageS3Keys);
+    }
+  });
+  
+  // Get terms images S3 keys
+  this.termsImages?.forEach(img => {
+    if (img.s3Key) {
+      keys.push(img.s3Key);
+    }
+  });
+  
+  // Get internal document S3 keys
+  this.internalDocuments?.forEach(doc => {
+    if (doc.s3Key) {
+      keys.push(doc.s3Key);
+    }
+  });
+  
+  return keys;
 };
 
 // ===== EXPORTS =====

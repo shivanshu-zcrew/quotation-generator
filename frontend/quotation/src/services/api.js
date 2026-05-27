@@ -652,6 +652,16 @@ export const quotationAPI = {
     triggerBlobDownload(response.data, "test.pdf");
     return { success: true };
   },
+  
+  // ==================== S3 SIGNED URL APIS ====================
+  
+ 
+  getSignedUrl: (s3Key, expiresIn = 3600) => 
+    api.get(`/quotations/signed-url/${encodeURIComponent(s3Key)}`, { params: { expiresIn } }),
+ 
+  getBatchSignedUrls: (s3Keys, expiresIn = 3600) => 
+    api.post(`/quotations/signed-urls/batch`, { keys: s3Keys }, { params: { expiresIn } }),
+  
   documents: documentAPI,
 };
 
