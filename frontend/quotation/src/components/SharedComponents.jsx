@@ -178,26 +178,7 @@ export const PaginationBar = React.memo(({ total, page, limit, onPage, onLimit }
       
       {/* Pagination controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        {/* Rows per page selector */}
-        <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Rows:</span>
-        <select 
-          value={limit} 
-          onChange={handleLimitChange} 
-          style={{ 
-            fontSize: '0.78rem', 
-            border: '1px solid #e2e8f0', 
-            borderRadius: 6, 
-            padding: '0.25rem 0.5rem', 
-            color: '#0f172a', 
-            background: '#fff', 
-            cursor: 'pointer',
-            outline: 'none'
-          }}
-        >
-          {PAGE_SIZE_OPTIONS.map(n => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
+   
         
         {/* Previous button */}
         <button 

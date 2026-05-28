@@ -299,7 +299,7 @@ useEffect(() => {
 
   const handleDocumentDelete = useCallback(async (docId) => {
     const isTemp = newDocuments.some(d => d.id === docId);
-
+  
     if (isTemp) {
       setNewDocuments(prev => prev.filter(d => d.id !== docId));
       showSnack('Document removed', 'success');
@@ -310,7 +310,14 @@ useEffect(() => {
         showSnack('Document deleted', 'success');
       } catch (error) {
         console.error('Error deleting document:', error);
-        showSnack('Failed to delete document', 'error');
+        // ✅ Handle the specific "only creator" error
+        const errorMessage = error?.response?.data?.message || error?.message || 'Failed to delete document';
+        
+        if (errorMessage.includes('Only the creator')) {
+          showSnack('Only the quotation creator can delete internal documents', 'error');
+        } else {
+          showSnack(errorMessage, 'error');
+        }
       }
     }
   }, [id, newDocuments, showSnack]);

@@ -1063,48 +1063,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           >
             <LogOut size={isMobile ? 12 : 15} /> Logout
           </button>
-          <button 
-            onClick={() => setOpen(true)}
-            style={{
-              backgroundColor: "rgba(255,255,255,0.08)",
-              color: "#94a3b8",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 8,
-              padding: isMobile ? "0.35rem 0.7rem" : "0.45rem 0.85rem",
-              fontSize: isMobile ? "0.7rem" : "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.4rem",
-            }}
-          >
-            <Bell size={isMobile ? 18 : 20} />
-            {unreadCount > 0 && (
-              <div 
-                style={{
-                  position: "absolute",
-                  top: "-4px",
-                  right: "-4px",
-                  backgroundColor: "#ef4444",
-                  color: "white",
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  minWidth: "18px",
-                  height: "18px",
-                  borderRadius: "9999px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: "0 5px",
-                  border: "2px solid #0f172a",
-                }}
-              >
-                {unreadCount > 99 ? "99+" : unreadCount}
-              </div>
-            )}
-          </button>
+ 
         </div>
       </div>
 
@@ -2091,10 +2050,10 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
         />
       )}
 
-      <NotificationDrawer 
+      {/* <NotificationDrawer 
         isOpen={notificationOpen} 
         onClose={() => setOpen(false)} 
-      />
+      /> */}
       <QueryDateUpdater
         open={modalsState.queryDateModal.open}
         onClose={() =>
