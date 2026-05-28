@@ -252,6 +252,7 @@ export default function ViewQuotationScreen() {
   const canEdit = useCallback(() => {
     if (isEditing) return false;
     if (isApproved) return false;
+    if (originalQuotation?.status === 'not_awarded') return false;  
     return true;
   }, [isEditing, isApproved]);
   
@@ -262,8 +263,10 @@ export default function ViewQuotationScreen() {
       'awarded': 'Awarded',
       'rejected': 'Rejected',
       'pending': 'Pending',
+      'pending_admin': 'Pending Admin',
       'ops_rejected': 'Returned',
-      'ops_approved': 'In Review'
+      'ops_approved': 'In Review',
+      'not_awarded' : 'Not Awarded'
     };
     return statusMap[status] || status || 'Draft';
   }, [originalQuotation?.status]);
@@ -380,16 +383,30 @@ export default function ViewQuotationScreen() {
               📄 {isEditing ? "Edit Quotation" : "View Quotation"}
             </h1>
             {!isEditing && (
-              <div style={styles.statusContainer}>
-                <span style={{
-                  ...styles.statusBadge,
-                  backgroundColor: isApproved ? '#d1fae5' : (isRejected || isOpsRejected ? '#fee2e2' : '#fef3c7'),
-                  color: isApproved ? '#065f46' : (isRejected || isOpsRejected ? '#991b1b' : '#92400e')
-                }}>
-                  Status: {getStatusText()}
-                </span>
-              </div>
-            )}
+  <div style={styles.statusContainer}>
+    <span style={{
+      ...styles.statusBadge,
+      backgroundColor: (() => {
+        const status = originalQuotation?.status;
+        if (status === 'approved' || status === 'awarded') return '#d1fae5';
+        if (status === 'rejected' || status === 'ops_rejected') return '#fee2e2';
+        if (status === 'not_awarded') return '#f1f5f9';  // ← Grey color
+        if (status === 'pending' || status === 'pending_admin') return '#fef3c7';
+        return '#f1f5f9';
+      })(),
+      color: (() => {
+        const status = originalQuotation?.status;
+        if (status === 'approved' || status === 'awarded') return '#065f46';
+        if (status === 'rejected' || status === 'ops_rejected') return '#991b1b';
+        if (status === 'not_awarded') return '#64748b';  // ← Dark grey text
+        if (status === 'pending' || status === 'pending_admin') return '#92400e';
+        return '#64748b';
+      })()
+    }}>
+      Status: {getStatusText()}
+    </span>
+  </div>
+)}
           </div>
           
           <div style={styles.headerActions}>

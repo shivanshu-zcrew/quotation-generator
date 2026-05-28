@@ -791,8 +791,14 @@ const tabCounts = useMemo(() => {
 
   // ── Render helpers ────────────────────────────────────────
   const renderStatCards = () => {
-    const safeCustomersLength = Array.isArray(customers) ? customers.length : 0;
-    
+     const unifiedStatusCounts = {
+      pending: actionRequired,
+      in_review: 0,
+      approved: approved,
+      awarded: awarded,
+      returned: rejected
+    };
+  
     // Helper function to format large numbers
     const formatLargeNumber = (num) => {
       if (num === null || num === undefined || isNaN(num)) return '0';
@@ -833,26 +839,27 @@ const tabCounts = useMemo(() => {
       return `${num.toLocaleString()} ${currency}`;
     };
   
-    if (isMobile) {
-      const statusCounts = {
-        pending: actionRequired,
-        in_review: 0,
-        approved: approved,
-        awarded: awarded,
-        returned: rejected
-      };
-      return (
-        <CompactStatsCard 
-          totalRevenue={totalAwardedValue}
-          quotationsCount={totalQuotations}
-          customersCount={totalCustomers}
-          selectedCurrency={selectedCurrency}
-          statusCounts={statusCounts}
-          loading={statsLoading}
-        />
-      );
-    }
+   // Mobile View
+if (isMobile) {
+  return (
+    <CompactStatsCard 
+      totalRevenue={totalAwardedValue}
+      quotationsCount={totalQuotations}
+      customersCount={totalCustomers}
+      selectedCurrency={selectedCurrency}
+      loading={statsLoading}
+      // Pass all desktop stats
+      actionRequired={actionRequired}
+      approved={approved}
+      awarded={awarded}
+      rejected={rejected}
+      conversionRate={conversionDetails}
+      awardedValue={totalAwardedValue}
+    />
+  );
+}
     
+    // Desktop View
     return (
       <>
         <div style={styles.statsRow1}>
