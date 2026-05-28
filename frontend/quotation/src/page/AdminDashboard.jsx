@@ -124,9 +124,9 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct = quotation.status === 'ops_approved' || quotation.status == 'pending_admin';
-  const canAward = quotation.status === 'approved';
-  const canDelete = DELETABLE.has(quotation.status);
+   const canDelete = DELETABLE.has(quotation.status);
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
+  const canAward = quotation.status === 'approved' && ( quotation.createdBy?.role === 'admin' || quotation.createdBySnapshot?.role === 'admin');
 
   return (
     <div style={{
@@ -383,7 +383,7 @@ const loadingTimeoutRef = useRef(null);
       if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
     };
   }, []);
-  
+
 const refreshWithFilters = useCallback(async () => {
   if (!selectedCompany) return;
   

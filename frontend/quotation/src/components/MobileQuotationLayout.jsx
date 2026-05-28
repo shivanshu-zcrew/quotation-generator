@@ -105,15 +105,22 @@ const MobileItemCard = ({
   const total = (Number(item.quantity || 0) * Number(item.unitPrice || 0)).toFixed(2);
 
   const renderItemImages = () => {
-    if (!item.imagePaths?.length && !newImages[item.id]?.length) return null;
+    // Combine imagePaths (Cloudinary) and imageUrls (S3)
+    const existingImages = [...(item.imagePaths || []), ...(item.imageUrls || [])];
+    const hasImages = existingImages.length > 0 || (newImages[item.id]?.length > 0);
+    
+    if (!hasImages) return null;
     
     return (
       <div style={styles.imageSection}>
         <label style={styles.itemLabel}>Images</label>
         <div style={styles.imageGrid}>
-          {item.imagePaths?.map((path, idx) => (
+          {existingImages.map((path, idx) => (
             <div key={`existing-${idx}`} style={styles.imageContainer}>
-              <img src={path} alt="" style={styles.itemImage} />
+              <img src={path} alt="" style={styles.itemImage} onError={(e) => {
+                console.error('Failed to load image:', path);
+                e.target.style.display = 'none';
+              }} />
               {isEditing && onRemoveExistingImage && (
                 <button onClick={() => onRemoveExistingImage(item.id, idx)} style={styles.removeImgBtnStyle}>×</button>
               )}
@@ -137,7 +144,7 @@ const MobileItemCard = ({
       <div style={styles.itemCardHeader} onClick={() => setExpanded(!expanded)}>
         <div style={styles.itemCardNumber}>#{index + 1}</div>
         <div style={styles.itemCardTitle}>
-          <div style={styles.itemCardName}>{item.name || 'New Item'}</div>
+          <div style={styles.itemCardName}>{item.name || 'Item'}</div>
           <div style={styles.itemCardTotal}>{total}</div>
         </div>
         {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
@@ -164,21 +171,6 @@ const MobileItemCard = ({
             </div>
           )}
           
-          {/* Item Name */}
-          <div style={styles.itemField}>
-            <label style={styles.itemLabel}>Item Name</label>
-            {isEditing ? (
-              <input
-                type="text"
-                value={item.name || ''}
-                onChange={(e) => onUpdate(item.id, 'name', e.target.value)}
-                placeholder="Item name..."
-                style={inputStyle}
-              />
-            ) : (
-              <div style={styles.itemDescription}>{item.name || '—'}</div>
-            )}
-          </div>
           
           {/* Description */}
           <div style={styles.itemField}>
@@ -529,7 +521,10 @@ const MobileQuotationLayout = ({
   }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, quotationData.ourFocalPoint, onDataChange]);
 
   const displayCurrency = selectedCurrency || quotationData.currency?.code || 'AED';
-
+// In MobileQuotationLayout.jsx, before the TermsViewer:
+console.log('📸 MobileQuotationLayout - termsImages:', termsImages);
+console.log('📸 MobileQuotationLayout - termsImages count:', termsImages?.length);
+console.log('📸 First term image sample:', termsImages?.[0]);
   return (
     <div style={styles.container}>
       {/* Header Image */}

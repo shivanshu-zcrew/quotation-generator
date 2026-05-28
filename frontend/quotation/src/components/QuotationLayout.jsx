@@ -432,6 +432,12 @@ const styles = {
     color: '#374151',
     marginBottom: '0.5rem',
   },
+  fieldLabelRequired: {
+    fontWeight: 600,
+    color: '#dc2626',
+    fontSize: '0.875rem',
+    paddingTop: '0.5rem',
+  },
   fileRow: {
     display: 'flex',
     gap: '0.5rem',
@@ -942,6 +948,10 @@ export default function QuotationLayout({
     </div>
   );
 
+  const hideSnack = useCallback(() => {
+    setSnackbar({ show: false, message: '', type: 'error' });
+  }, []);
+
   // UPDATED: Manual item row without SearchableSelect
   const renderItemRow = (qi, index) => (
     <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
@@ -1105,6 +1115,14 @@ export default function QuotationLayout({
       taxPresets={taxPresets}
       defaultTaxValue={defaultTaxValue}
       handleTaxChange={handleTaxChange}
+      termsImages={termsImages}
+    onTermsImagesUpload={onTermsImagesUpload}
+    onRemoveTermsImage={onRemoveTermsImage}
+    companyPhone={companyPhone}
+    companyEmail={companyEmail}
+    companyTradeLicense={companyTradeLicense}
+    companyTaxRegistration={companyTaxRegistration}
+    selectedCurrency={displayCurrency}
     />;
   }
 

@@ -104,6 +104,8 @@ useEffect(() => {
   loadSignedUrls();
 }, [originalQuotation]);
 
+
+
   // Calculations - useMemo for derived values
   const subtotal = useMemo(() => {
     return round(
@@ -235,25 +237,38 @@ useEffect(() => {
     
   }, [originalQuotation, signedUrls, signedUrlsLoaded]); // Add signedUrlsLoaded to dependencies
 
+  
   // Define all callbacks before conditional logic
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
     try {
+      const readers = [];
+      let isMounted = true;
+      
       const base64Promises = files.map(file => {
         return new Promise((resolve) => {
           const reader = new FileReader();
-          reader.onload = () => resolve({
-            fileData: reader.result,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-          });
+          readers.push(reader);
+          
+          reader.onload = () => {
+            if (isMounted) {
+              resolve({
+                fileData: reader.result,
+                name: file.name,
+                type: file.type,
+                size: file.size,
+              });
+            } else {
+              resolve(null);
+            }
+          };
           reader.readAsDataURL(file);
         });
       });
-
+  
       const base64Files = await Promise.all(base64Promises);
-
-      const tempDocs = base64Files.map((file, index) => ({
+      const validFiles = base64Files.filter(f => f !== null);
+  
+      const tempDocs = validFiles.map((file, index) => ({
         id: `temp-${Date.now()}-${index}-${Math.random()}`,
         fileName: file.name,
         fileType: file.type,
@@ -263,9 +278,19 @@ useEffect(() => {
         uploadedAt: new Date().toISOString(),
         isTemp: true
       }));
-
+  
       setNewDocuments(prev => [...prev, ...tempDocs]);
-      showSnack(`${files.length} document(s) ready`, 'success');
+      showSnack(`${validFiles.length} document(s) ready`, 'success');
+      
+      // Return cleanup
+      return () => {
+        isMounted = false;
+        readers.forEach(reader => {
+          try {
+            if (reader.readyState === 1) reader.abort();
+          } catch (err) {}
+        });
+      };
     } catch (error) {
       console.error('Error processing documents:', error);
       showSnack('Failed to process documents', 'error');
@@ -489,12 +514,18 @@ useEffect(() => {
       return;
     }
   
+    // ✅ Track readers for cleanup
+    const readers = [];
     let processedCount = 0;
+    let isMounted = true;
   
     validFiles.forEach((file) => {
       const reader = new FileReader();
+      readers.push(reader);
   
       reader.onload = () => {
+        if (!isMounted) return; // Prevent state update after unmount
+        
         const base64String = reader.result;
         
         setNewImages((prev) => ({
@@ -517,7 +548,9 @@ useEffect(() => {
       };
   
       reader.onerror = () => {
-        showSnack(`Failed to read file: ${file.name}`, 'error');
+        if (isMounted) {
+          showSnack(`Failed to read file: ${file.name}`, 'error');
+        }
         processedCount++;
       };
   
@@ -526,8 +559,23 @@ useEffect(() => {
   
     setEditingImgId(null);
     e.target.value = "";
+  
+    // ✅ Return cleanup function
+    return () => {
+      isMounted = false;
+      readers.forEach(reader => {
+        try {
+          if (reader.readyState === 1) {
+            reader.abort();
+          }
+        } catch (err) {
+          console.error('Error aborting file reader:', err);
+        }
+      });
+    };
   }, [quotationItems, newImages, showSnack]);
 
+  
   const removeNewImage = useCallback((itemId, imageIndex) => {
     setNewImages(prev => {
       const currentNewImages = prev[itemId] || [];
@@ -581,26 +629,32 @@ useEffect(() => {
 
   const handleTermsImagesUpload = useCallback((files) => {
     if (!files || files.length === 0) return;
-
+  
     const remainingSlots = 10 - termsImages.length;
-
+  
     if (remainingSlots <= 0) {
       showSnack('Maximum 10 terms images allowed', 'error');
       return;
     }
-
+  
     const filesToProcess = files.slice(0, remainingSlots);
     if (files.length > remainingSlots) {
       showSnack(`Only ${remainingSlots} more image(s) allowed`, 'warning');
     }
-
+  
     const newImagesList = [];
     let processedCount = 0;
-
+    let isMounted = true;
+    const readers = [];
+  
     filesToProcess.forEach((file) => {
       if (file instanceof File) {
         const reader = new FileReader();
+        readers.push(reader);
+        
         reader.onload = () => {
+          if (!isMounted) return;
+          
           newImagesList.push({
             id: `terms-img-${Date.now()}-${Math.random()}`,
             url: reader.result,
@@ -612,27 +666,43 @@ useEffect(() => {
             storageProvider: 's3',
             uploadedAt: new Date().toISOString()
           });
-
+  
           processedCount++;
-
+  
           if (processedCount === filesToProcess.length) {
             setTermsImages(prev => [...prev, ...newImagesList]);
           }
         };
         reader.onerror = () => {
-          console.error('Error reading file:', file.name);
+          if (isMounted) {
+            console.error('Error reading file:', file.name);
+          }
           processedCount++;
         };
         reader.readAsDataURL(file);
       } else if (file.url || file.base64) {
         newImagesList.push(file);
         processedCount++;
-
+  
         if (processedCount === filesToProcess.length) {
           setTermsImages(prev => [...prev, ...newImagesList]);
         }
       }
     });
+  
+    // ✅ Return cleanup function
+    return () => {
+      isMounted = false;
+      readers.forEach(reader => {
+        try {
+          if (reader.readyState === 1) {
+            reader.abort();
+          }
+        } catch (err) {
+          console.error('Error aborting file reader:', err);
+        }
+      });
+    };
   }, [termsImages.length, showSnack]);
 
   const removeTermsImage = useCallback((imageId) => {
@@ -843,17 +913,35 @@ useEffect(() => {
         description: qi.description || "",
         quantity: Number(qi.quantity) || 1,
         unitPrice: Number(qi.unitPrice) || 0,
-        // Send S3 keys (existing images)
         imageS3Keys: qi.imageS3Keys || [],
-        // Send new base64 images
         newImages: newImages[qi.id] || [],
-        // Keep for backward compatibility
         imagePaths: qi.imagePaths || []
       }));
   
+      // ==================== ✅ FIXED: TERMS IMAGES HANDLING ====================
+      
       // Separate existing S3 term images from new base64 ones
-      const existingTermsImages = termsImages.filter(img => img.s3Key && !img.url?.startsWith('data:'));
+      // Send ALL existing images that are STILL present (not removed by user)
+      const existingTermsImages = termsImages
+        .filter(img => img.s3Key && !img.url?.startsWith('data:'))
+        .map(img => ({
+          s3Key: img.s3Key,
+          fileName: img.fileName,
+          uploadedAt: img.uploadedAt,
+          id: img.id,
+          _id: img.id
+        }));
+  
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
+  
+      console.log('📸 Terms images payload:', {
+        totalTermsImages: termsImages.length,
+        existingCount: existingTermsImages.length,
+        newCount: newBase64Images.length,
+        existing: existingTermsImages.map(img => ({ s3Key: img.s3Key?.substring(0, 50), id: img.id }))
+      });
+  
+      // ==================== END OF TERMS IMAGES FIX ====================
   
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
@@ -893,7 +981,7 @@ useEffect(() => {
         
         termsAndConditions: finalTermsAndConditions,
         termsImages: newBase64Images,
-        existingTermsImages: existingTermsImages,
+        existingTermsImages: existingTermsImages,  // ✅ Send kept existing images
         
         items: formattedItems,
         quotationImages: quotationImages,
@@ -904,6 +992,12 @@ useEffect(() => {
           .filter(doc => doc.fileData)
           .map(doc => doc.description || '')
       };
+  
+      console.log('📤 Sending payload to server:', {
+        hasExistingTermsImages: payload.existingTermsImages.length,
+        hasNewTermsImages: payload.termsImages.length,
+        itemsCount: payload.items.length
+      });
   
       const result = await updateQuotation(originalQuotation._id, payload);
   

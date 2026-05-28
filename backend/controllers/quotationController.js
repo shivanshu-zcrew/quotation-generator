@@ -155,7 +155,7 @@ const getBrowser = async () => {
       ],
     });
 
-     // _browser = await puppeteer.launch({
+  //    _browser = await puppeteer.launch({
   //   headless: true,
   //   args: [
   //     '--no-sandbox',
@@ -741,7 +741,8 @@ exports.updateQuotation = async (req, res) => {
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
-    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions
+    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
+    existingTermsImages  // ✅ Add this to receive existing images from frontend
   } = req.body;
 
   let compressedQuotationImages = quotationImages;
@@ -895,7 +896,31 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    let processedTermsImages = [];
+    // ==================== ✅ FIXED: TERMS IMAGES HANDLING ====================
+    
+    // Get existing terms images from database
+    const dbTermsImages = existing.termsImages || [];
+    
+    // Get kept existing images from frontend (the ones that were NOT removed)
+    const keptExistingImages = existingTermsImages || [];
+    
+    // 🔍 Find which images were removed (in DB but not in kept list)
+    const removedImages = dbTermsImages.filter(dbImg => 
+      !keptExistingImages.some(keptImg => 
+        keptImg.s3Key === dbImg.s3Key || keptImg.id === dbImg._id?.toString()
+      )
+    );
+    
+    // 🗑️ Delete removed images from S3
+    for (const removedImg of removedImages) {
+      if (removedImg.s3Key) {
+        await deleteFromS3(removedImg.s3Key);
+        console.log(`🗑️ Deleted removed terms image: ${removedImg.s3Key}`);
+      }
+    }
+    
+    // 📤 Process new base64 images
+    let newUploadedImages = [];
     if (compressedTermsImages && compressedTermsImages.length > 0) {
       for (let i = 0; i < compressedTermsImages.length; i++) {
         const imageData = compressedTermsImages[i];
@@ -912,7 +937,7 @@ exports.updateQuotation = async (req, res) => {
             try {
               const uploaded = await uploadBase64ToS3(base64ToUpload, `quotations/terms/${existing.quotationNumber || Date.now()}`);
               if (uploaded && uploaded.key) {
-                processedTermsImages.push({ 
+                newUploadedImages.push({ 
                   s3Key: uploaded.key, 
                   fileName: fileName, 
                   uploadedAt: new Date(),
@@ -920,14 +945,12 @@ exports.updateQuotation = async (req, res) => {
                 });
               }
             } catch (uploadError) { logger.error(`Failed to upload terms image: ${uploadError.message}`); }
-          } else if (imageData.s3Key) {
-            processedTermsImages.push(imageData);
           }
         } else if (typeof imageData === 'string' && imageData.startsWith('data:image')) {
           try {
             const uploaded = await uploadBase64ToS3(imageData, `quotations/terms/${existing.quotationNumber || Date.now()}`);
             if (uploaded && uploaded.key) {
-              processedTermsImages.push({ 
+              newUploadedImages.push({ 
                 s3Key: uploaded.key, 
                 fileName: `terms_image_${i + 1}`, 
                 uploadedAt: new Date(),
@@ -938,10 +961,21 @@ exports.updateQuotation = async (req, res) => {
         }
       }
     }
+    
+    // ✅ Combine kept existing images + new uploaded images
+    const finalTermsImages = [
+      ...keptExistingImages.map(img => ({
+        s3Key: img.s3Key,
+        fileName: img.fileName,
+        uploadedAt: img.uploadedAt || new Date(),
+        storageProvider: 's3'
+      })),
+      ...newUploadedImages
+    ];
+    
+    console.log(`📸 Terms images summary: ${dbTermsImages.length} existing, ${removedImages.length} removed, ${keptExistingImages.length} kept, ${newUploadedImages.length} new, ${finalTermsImages.length} total`);
 
-    if (processedTermsImages.length === 0 && existing.termsImages && existing.termsImages.length > 0) {
-      processedTermsImages = existing.termsImages;
-    }
+    // ==================== END OF TERMS IMAGES FIX ====================
 
     let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
@@ -983,7 +1017,7 @@ exports.updateQuotation = async (req, res) => {
       total: totals.total, totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
       ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions || '' }),
-      termsImages: processedTermsImages,
+      termsImages: finalTermsImages,  // ✅ Use the properly merged terms images
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
       storageProvider: 's3'
@@ -1017,7 +1051,7 @@ exports.updateQuotation = async (req, res) => {
       stats: {
         itemsCount: processedItems.length,
         imagesCount: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
-        termsImagesCount: processedTermsImages.length
+        termsImagesCount: finalTermsImages.length
       }
     });
 
