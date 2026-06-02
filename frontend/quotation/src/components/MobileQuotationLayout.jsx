@@ -289,6 +289,58 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
   const [docDescriptions, setDocDescriptions] = useState({});
   const [uploading, setUploading] = useState(false);
 
+  const isMobile = () => {
+    return /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  };
+
+  // NEW: Mobile-friendly preview handler
+  const handlePreview = async (documentId) => {
+    try {
+      // Get the document from the list
+      const doc = documents.find(d => (d._id || d.id) === documentId);
+      
+      if (!doc) {
+        console.error('Document not found');
+        return;
+      }
+
+      // Check if document has a direct URL
+      if (doc.fileUrl) {
+        // On mobile, open in new tab
+        window.open(doc.fileUrl, '_blank');
+        return;
+      }
+
+      // For images on mobile, use the preview function but open in new tab
+      if (doc.fileType?.startsWith('image/') || doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+        // Call the preview function which should return a blob URL
+        const result = await onPreview?.(documentId);
+        
+        // If preview returned a URL, open it in new tab
+        if (result?.url) {
+          if (isMobile()) {
+            window.open(result.url, '_blank');
+          }
+        } else if (result === undefined && onPreview) {
+          // If onPreview doesn't return anything, it might handle it internally
+          // For mobile, we'll just use the download as fallback
+          console.log('Preview handled internally');
+        }
+      } else {
+        // For non-images, download instead (mobile can't preview PDFs/docs well)
+        await onDownload(documentId);
+      }
+    } catch (error) {
+      console.error('Preview error:', error);
+      // Fallback to download if preview fails
+      try {
+        await onDownload(documentId);
+      } catch (downloadError) {
+        console.error('Download fallback error:', downloadError);
+      }
+    }
+  };
+
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     setSelectedFiles(prev => [...prev, ...files]);
@@ -371,26 +423,39 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
               {isEditing && <p style={{ fontSize: '0.7rem' }}>Upload documents for internal team reference</p>}
             </div>
           ) : (
-            documents.map(doc => (
-              <div key={doc._id || doc.id} style={styles.docItem}>
-                <div style={styles.docIcon}>{getFileIcon?.(doc.fileType) || '📎'}</div>
-                <div style={styles.docInfo}>
-                  <div style={styles.docName}>{doc.fileName}</div>
-                  {doc.description && <div style={styles.docDesc}>{doc.description}</div>}
-                  <div style={styles.docDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
+            documents.map(doc => {
+              const docId = doc._id || doc.id;
+              const isImage = doc.fileType?.startsWith('image/') || 
+                             doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+              
+              return (
+                <div key={docId} style={styles.docItem}>
+                  <div style={styles.docIcon}>{getFileIcon?.(doc.fileType) || '📎'}</div>
+                  <div style={styles.docInfo}>
+                    <div style={styles.docName}>{doc.fileName}</div>
+                    {doc.description && <div style={styles.docDesc}>{doc.description}</div>}
+                    <div style={styles.docDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
+                  </div>
+                  <div style={styles.docActions}>
+                    {/* CHANGED: Now uses handlePreview for images instead of direct onPreview */}
+                    {isImage ? (
+                      <button onClick={() => handlePreview(docId)} style={styles.docAction}>
+                        👁️
+                      </button>
+                    ) : (
+                      <button onClick={() => onDownload(docId)} style={styles.docAction}>
+                        📥
+                      </button>
+                    )}
+                    {isEditing && (
+                      <button onClick={() => onDelete(docId)} style={{ ...styles.docAction, color: '#dc2626' }}>
+                        🗑️
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div style={styles.docActions}>
-                  {(doc.fileType?.startsWith('image/') || doc.fileData?.startsWith('data:image')) ? (
-                    <button onClick={() => onPreview?.(doc._id || doc.id)} style={styles.docAction}>👁️</button>
-                  ) : (
-                    <button onClick={() => onDownload(doc._id || doc.id)} style={styles.docAction}>📥</button>
-                  )}
-                  {isEditing && (
-                    <button onClick={() => onDelete(doc._id || doc.id)} style={{ ...styles.docAction, color: '#dc2626' }}>🗑️</button>
-                  )}
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -521,10 +586,7 @@ const MobileQuotationLayout = ({
   }, [isEditing, currentUser, quotationData.salesManagerEmail, quotationData.ourContact, quotationData.ourFocalPoint, onDataChange]);
 
   const displayCurrency = selectedCurrency || quotationData.currency?.code || 'AED';
-// In MobileQuotationLayout.jsx, before the TermsViewer:
-console.log('📸 MobileQuotationLayout - termsImages:', termsImages);
-console.log('📸 MobileQuotationLayout - termsImages count:', termsImages?.length);
-console.log('📸 First term image sample:', termsImages?.[0]);
+ 
   return (
     <div style={styles.container}>
       {/* Header Image */}

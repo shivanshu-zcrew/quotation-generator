@@ -1,10 +1,22 @@
 import axios from "axios";
 
-// const API_BASE =  "http://13.234.239.26:4000/api";
+const API_BASE = import.meta.env?.VITE_API_URL || "http://13.234.239.26:4000/api";
 
-const API_BASE = import.meta.env?.VITE_API_URL;
+// ==================== HELPER FUNCTIONS ====================
 
-// Request Deduplication
+// Clean params - removes undefined, null, and empty values
+const cleanParams = (params) => {
+  if (!params) return {};
+  const clean = {};
+  Object.keys(params).forEach(key => {
+    if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
+      clean[key] = params[key];
+    }
+  });
+  return clean;
+};
+
+// ==================== REQUEST DEDUPLICATOR ====================
 class RequestDeduplicator {
   constructor() {
     this.pendingRequests = new Map();
@@ -28,46 +40,67 @@ class RequestDeduplicator {
   }
 }
 
-// Smart Retry
-const withRetry = async (requestFn, options = {}) => {
-  const {
-    maxRetries = 2,
-    baseDelay = 1000,
-    retryableStatuses = [408, 429, 500, 502, 503, 504]
-  } = options;
-  
-  let lastError;
-  
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await requestFn();
-    } catch (error) {
-      lastError = error;
-      
-      const shouldNotRetry = 
-        !error.response ||
-        [401, 403, 404, 400].includes(error.response?.status);
-      
-      if (shouldNotRetry || attempt === maxRetries) {
-        throw error;
+// ==================== SMART PAGINATION CACHE ====================
+class PaginationCache {
+  constructor(options = {}) {
+    this.cache = new Map();
+    this.ttl = options.ttl || 30000; // 30 seconds default
+    this.maxSize = options.maxSize || 50;
+  }
+
+  getKey(endpoint, params) {
+    const { page = 1, limit = 20, ...filters } = params;
+    const sortedFilters = Object.keys(filters)
+      .sort()
+      .reduce((acc, key) => {
+        if (filters[key] !== undefined && filters[key] !== null && filters[key] !== '') {
+          acc[key] = filters[key];
+        }
+        return acc;
+      }, {});
+    
+    return `${endpoint}:p${page}:l${limit}:${JSON.stringify(sortedFilters)}`;
+  }
+
+  get(key) {
+    const item = this.cache.get(key);
+    if (!item) return null;
+    
+    if (Date.now() - item.timestamp > this.ttl) {
+      this.cache.delete(key);
+      return null;
+    }
+    
+    return item.data;
+  }
+
+  set(key, data) {
+    if (this.cache.size >= this.maxSize) {
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    
+    this.cache.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+  }
+
+  clear() {
+    this.cache.clear();
+  }
+
+  clearEndpoint(endpoint) {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(endpoint)) {
+        this.cache.delete(key);
       }
-      
-      const isRetryable = retryableStatuses.includes(error.response?.status);
-      if (!isRetryable && error.response) {
-        throw error;
-      }
-      
-      const delay = baseDelay * Math.pow(2, attempt);
-      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  
-  throw lastError;
-};
+}
 
-// Response Cache
+// ==================== SIMPLE API CACHE ====================
 class ApiCache {
-  
   constructor(defaultTtl = 5 * 60 * 1000) {
     this.cache = new Map();
     this.defaultTtl = defaultTtl;
@@ -78,8 +111,6 @@ class ApiCache {
       data,
       expiresAt: Date.now() + (ttl || this.defaultTtl)
     });
-    
-    setTimeout(() => this.cleanup(), 3600000);
   }
   
   get(key) {
@@ -101,17 +132,9 @@ class ApiCache {
       this.cache.clear();
     }
   }
-  
-  cleanup() {
-    for (const [key, entry] of this.cache.entries()) {
-      if (Date.now() > entry.expiresAt) {
-        this.cache.delete(key);
-      }
-    }
-  }
 }
 
-// Request Queue for Sync Operations
+// ==================== REQUEST QUEUE ====================
 class RequestQueue {
   constructor() {
     this.queue = [];
@@ -148,31 +171,71 @@ class RequestQueue {
   }
 }
 
-
-const deduplicator = new RequestDeduplicator();
-const apiCache = new ApiCache();
-const syncQueue = new RequestQueue();
-
-const withCache = async (key, requestFn, options = {}) => {
-  const { forceRefresh = false, ttl } = options;
+// ==================== RETRY LOGIC ====================
+const withRetry = async (requestFn, options = {}) => {
+  const {
+    maxRetries = 2,
+    baseDelay = 1000,
+    retryableStatuses = [408, 429, 500, 502, 503, 504]
+  } = options;
   
-  if (!forceRefresh) {
-    const cached = apiCache.get(key);
-    if (cached) {
-      return { data: cached, fromCache: true };
+  let lastError;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      lastError = error;
+      
+      const shouldNotRetry = 
+        !error.response ||
+        [401, 403, 404, 400].includes(error.response?.status);
+      
+      if (shouldNotRetry || attempt === maxRetries) {
+        throw error;
+      }
+      
+      const isRetryable = retryableStatuses.includes(error.response?.status);
+      if (!isRetryable && error.response) {
+        throw error;
+      }
+      
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   
-  const response = await requestFn();
-  
-  if (response?.data?.success !== false) {
-    apiCache.set(key, response.data, ttl);
-  }
-  
-  return { data: response.data, fromCache: false };
+  throw lastError;
 };
 
-// Axios Instance
+// ==================== CACHE INSTANCES ====================
+const deduplicator = new RequestDeduplicator();
+const apiCache = new ApiCache();
+const syncQueue = new RequestQueue();
+const quotationCache = new PaginationCache({ ttl: 30000, maxSize: 30 });
+const adminQuotationCache = new PaginationCache({ ttl: 30000, maxSize: 30 });
+
+// Customer cache
+const customerCache = new Map();
+const CUSTOMER_CACHE_TTL = 60000;
+
+const getCachedCustomers = (cacheKey) => {
+  const cached = customerCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CUSTOMER_CACHE_TTL) {
+    return cached.data;
+  }
+  return null;
+};
+
+const setCachedCustomers = (cacheKey, data) => {
+  customerCache.set(cacheKey, { data, timestamp: Date.now() });
+};
+
+const clearCustomerCache = () => {
+  customerCache.clear();
+};
+
+// ==================== AXIOS INSTANCE ====================
 const api = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
@@ -210,46 +273,12 @@ api.interceptors.response.use(
   }
 );
 
-
-const customerCache = new Map();
-const CUSTOMER_CACHE_TTL = 60000;
-
-
-const getCachedCustomers = (cacheKey) => {
-  const cached = customerCache.get(cacheKey);
-  if (cached && (Date.now() - cached.timestamp) < CUSTOMER_CACHE_TTL) {
-    console.log('📦 Returning cached customers for key:', cacheKey);
-    return cached.data;
-  }
-  return null;
-};
-
-const setCachedCustomers = (cacheKey, data) => {
-  customerCache.set(cacheKey, {
-    data,
-    timestamp: Date.now()
-  });
-  console.log('💾 Cached customers for key:', cacheKey);
-};
-
-const clearCustomerCache = () => {
-  customerCache.clear();
-  console.log('🧹 Customer cache cleared');
-};
-
-// Cancel tokens
-export const createCancelToken = () => {
-  const source = axios.CancelToken.source();
-  return { token: source.token, cancel: source.cancel };
-};
-export const isCancel = (err) => axios.isCancel(err);
-
-// ==================== AUTH ====================
+// ==================== AUTH API ====================
 export const authAPI = {
   register: (data) => api.post("/auth/register", data),
   login: (data) => api.post("/auth/login", data),
   getMe: () => api.get("/auth/me"),
-  updateUser: (userId, userData) => api.put(`/auth/users/${userId}`, userData), 
+  updateUser: (userId, userData) => api.put(`/auth/users/${userId}`, userData),
   updateDetails: (data) => api.put("/auth/updatedetails", data),
   updatePassword: (data) => api.put("/auth/updatepassword", data),
   getAllUsers: () => api.get("/auth/users"),
@@ -262,22 +291,36 @@ export const authAPI = {
   forceChangePassword: (data) => api.put(`/auth/force-change-password`, data),
 };
 
-// ==================== ADMIN ====================
+// ==================== ADMIN API ====================
 export const adminAPI = {
   getDashboardStats: (params) => api.get("/admin/dashboard", { params }),
-  getAllQuotations: (params = {}) => {
-    const { page = 1, limit = 20, ...rest } = params;
-    const key = `/admin/quotations?${new URLSearchParams({ page, limit, ...rest })}`;
-    return withCache(key, () => api.get("/admin/quotations", { params: { page, limit, ...rest } }), {
-      ttl: 30 * 1000 // 30 seconds cache
-    });
+  
+  getAllQuotations: async (params = {}, options = {}) => {
+    const { skipCache = false, forceRefresh = false } = options;
+    const cleanParamsObj = cleanParams(params);
+    const cacheKey = adminQuotationCache.getKey('/admin/quotations', cleanParamsObj);
+    
+    if (!skipCache && !forceRefresh) {
+      const cached = adminQuotationCache.get(cacheKey);
+      if (cached) return cached;
+    }
+    
+    const response = await api.get("/admin/quotations", { params: cleanParamsObj });
+    
+    if (!skipCache) {
+      adminQuotationCache.set(cacheKey, response);
+    }
+    
+    return response;
   },
+  
   getPendingQuotations: (params) => api.get("/admin/quotations/pending", { params }),
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/reject`, data),
   getAdminStats: (params) => api.get("/admin/dashboard", { params }),
   getUserQuotationStats: () => api.get("/admin/user-stats"),
   getQuotationsByUser: (userId) => api.get(`/admin/user-quotations/${userId}`),
+  
   exportQuotationsToExcel: (params) => {
     return api.get("/admin/export-excel", { 
       params,
@@ -285,56 +328,51 @@ export const adminAPI = {
       timeout: 120000 
     });
   },
+  
+  clearCache: () => adminQuotationCache.clear(),
 };
 
+// ==================== OPS API ====================
 export const opsAPI = {
-   getPendingQuotations: (params = {}) => {
+  getPendingQuotations: (params = {}) => {
     const { page = 1, limit = 20, ...rest } = params;
     return api.get("/admin/quotations/ops-pending", { params: { page, limit, ...rest } });
   },
-   getReviewHistory: (params = {}) => {
+  
+  getReviewHistory: (params = {}) => {
     const { page = 1, limit = 20, ...rest } = params;
     return api.get("/admin/quotations/ops-history", { params: { page, limit, status: "ops_approved,ops_rejected", ...rest } });
   },
+  
   approveQuotation: (id) => api.put(`/admin/quotations/${id}/ops-approve`),
   rejectQuotation: (id, data) => api.put(`/admin/quotations/${id}/ops-reject`, data),
   getOpsStats: (params) => api.get("/admin/ops-dashboard", { params }),
-  getAllQuotations: (params) => {
-    const { page = 1, limit = 20, ...rest } = params;
-    const key = `/admin/quotations/ops-all?${JSON.stringify({ page, limit, ...rest })}`;
-    return withCache(key, () => api.get("/admin/quotations/ops-all", { params: { page, limit, ...rest } }), { 
-      ttl: 1 * 60 * 1000   
-    });
+  
+  getAllQuotations: async (params = {}, options = {}) => {
+    const { skipCache = false, forceRefresh = false } = options;
+    const cleanParamsObj = cleanParams(params);
+    
+    if (!skipCache && !forceRefresh) {
+      // Optional: Add caching for ops if needed
+    }
+    
+    return api.get("/admin/quotations/ops-all", { params: cleanParamsObj });
   },
 };
 
-// ==================== CUSTOMERS ====================
-
+// ==================== CUSTOMERS API ====================
 export const customerAPI = {
   getAll: async (params, options = {}) => {
     const { skipCache = false } = options;
+    const cacheKey = JSON.stringify({ ...params, companyId: params?.companyId });
     
-    // Create cache key from params
-    const cacheKey = JSON.stringify({ 
-      ...params, 
-      companyId: params?.companyId 
-    });
-    
-    console.log('🔍 GET /customers with params:', params);
-    
-    // Check cache first (unless skipCache is true)
     if (!skipCache) {
       const cachedData = getCachedCustomers(cacheKey);
-      if (cachedData) {
-        return { data: cachedData, source: 'cache' };
-      }
+      if (cachedData) return { data: cachedData, source: 'cache' };
     }
     
-    // Fetch from API
-    console.log('🌐 Fetching fresh customers from API');
     const response = await withRetry(() => api.get("/customers", { params }));
     
-    // Cache the response (only if not skipCache)
     if (!skipCache && response.data) {
       setCachedCustomers(cacheKey, response.data);
     }
@@ -342,18 +380,17 @@ export const customerAPI = {
     return response;
   },
   
-  // Add this method to clear cache
-  clearCustomerCache: () => {
-    clearCustomerCache();
-  },
-  
+  clearCustomerCache: () => clearCustomerCache(),
   create: (data) => api.post("/customers", data),
+  
   getById: (id) => {
     const key = `/customers/${id}`;
     return deduplicator.dedupe(key, () => api.get(`/customers/${id}`));
   },
+  
   update: (id, data) => api.put(`/customers/${id}`, data),
   delete: (id) => api.delete(`/customers/${id}`),
+  
   search: (query, limit = 20, offset = 0) => {
     const key = `/customers/search?${query}|${limit}|${offset}`;
     return deduplicator.dedupe(key, () => api.get("/customers/search", { params: { query, limit, offset } }));
@@ -362,51 +399,33 @@ export const customerAPI = {
   syncFromZoho: (fullSync = false) => syncQueue.add(() => 
     api.post(`/customers/sync-from-zoho${fullSync ? '?fullSync=true' : ''}`)
   ),
-  getSyncProgress: () => {
-    return api.get(`/customers/sync/progress`);
-  },
-  cancelSync: async () => {
-    return api.post('/customers/sync/cancel');
-  },
+  
+  getSyncProgress: () => api.get("/customers/sync/progress"),
+  cancelSync: () => api.post("/customers/sync/cancel"),
   getSyncStatus: () => api.get("/customers/sync/status"),
   getPendingSync: () => api.get("/customers/sync/pending"),
   forceSyncCustomer: (id) => syncQueue.add(() => api.post(`/customers/sync/force/${id}`)),
   syncWithZoho: (id) => syncQueue.add(() => api.post(`/customers/${id}/sync`)),
   
-  // Updated getStats to handle all companies
   getStats: (params = {}) => {
     const { companyId, ...rest } = params;
-    const apiParams = {};
+    const apiParams = { ...rest };
     
-    // Only add companyId if it's not 'all'
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       apiParams.companyId = companyId;
     }
     
-    Object.assign(apiParams, rest);
-    
     return api.get("/customers/stats", { params: apiParams });
   },
   
-  getGccCountries: () => {
-    const key = "/customers/gcc-countries";
-    return withCache(key, () => api.get("/customers/gcc-countries"), { ttl: 24 * 60 * 60 * 1000 });
-  },
-  getCurrencies: () => {
-    const key = "/customers/currencies";
-    return withCache(key, () => api.get("/customers/currencies"), { ttl: 24 * 60 * 60 * 1000 });
-  },
-  getTaxTreatments: () => {
-    const key = "/customers/tax-treatments";
-    return withCache(key, () => api.get("/customers/tax-treatments"), { ttl: 24 * 60 * 60 * 1000 });
-  },
+  getGccCountries: () => api.get("/customers/gcc-countries"),
+  getCurrencies: () => api.get("/customers/currencies"),
+  getTaxTreatments: () => api.get("/customers/tax-treatments"),
   
-  // Updated exportCustomers to handle all companies
   exportCustomers: (params, format = 'xlsx') => {
     const { companyId, ...rest } = params;
     const apiParams = { format, ...rest };
     
-    // Only add companyId if it's not 'all'
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       apiParams.companyId = companyId;
     }
@@ -426,12 +445,10 @@ export const customerAPI = {
     return api.post("/customers/bulk", { customers });
   },
   
-  // Add place stats endpoint
   getCustomerPlaceStats: (params = {}) => {
     const { companyId, ...rest } = params;
     const apiParams = { ...rest };
     
-    // Only add companyId if it's not 'all'
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       apiParams.companyId = companyId;
     }
@@ -440,66 +457,48 @@ export const customerAPI = {
   },
 };
 
-// ==================== ITEMS ====================
+// ==================== ITEMS API ====================
 export const itemAPI = {
   getAll: (params) => {
     const key = `/items?${JSON.stringify(params)}`;
-    return withCache(key, () => withRetry(() => api.get("/items", { params })), {
-      ttl: 2 * 60 * 1000
-    });
+    return api.get("/items", { params });
   },
+  
   create: async (formData) => {
     const response = await api.post("/items", formData, { headers: { "Content-Type": "multipart/form-data" } });
     apiCache.clear();
     return response;
   },
+  
   getById: (id) => {
     const key = `/items/${id}`;
     return deduplicator.dedupe(key, () => api.get(`/items/${id}`));
   },
+  
   update: async (id, formData) => {
     const response = await api.put(`/items/${id}`, formData, { headers: { "Content-Type": "multipart/form-data" } });
     apiCache.clear();
     return response;
   },
+  
   delete: async (id) => {
     const response = await api.delete(`/items/${id}`);
     apiCache.clear();
     return response;
   },
+  
   syncItems: () => syncQueue.add(() => api.post("/items/sync")),
-  getSyncProgress: () => {
-    return api.get("/items/sync/progress");
-  },
+  getSyncProgress: () => api.get("/items/sync/progress"),
   getSyncStatus: () => api.get("/items/sync/status"),
-  getAllWithRefresh: (params, forceRefresh = false) => {
-    const key = `/items?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/items", { params: { ...params, forceRefresh: forceRefresh ? 'true' : 'false' } }), {
-      forceRefresh,
-      ttl: 2 * 60 * 1000
-    });
-  },
 };
 
-// ==================== COMPANIES ====================
+// ==================== COMPANIES API ====================
 export const companyAPI = {
-  getAll: (params) => {
-    const key = `/companies?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/companies", { params }), { ttl: 5 * 60 * 1000 });
-  },
-  getById: (id) => {
-    const key = `/companies/${id}`;
-    return deduplicator.dedupe(key, () => api.get(`/companies/${id}`));
-  },
-  getByCode: (code) => {
-    const key = `/companies/code/${code}`;
-    return deduplicator.dedupe(key, () => api.get(`/companies/code/${code}`));
-  },
+  getAll: (params) => api.get("/companies", { params }),
+  getById: (id) => deduplicator.dedupe(`/companies/${id}`, () => api.get(`/companies/${id}`)),
+  getByCode: (code) => deduplicator.dedupe(`/companies/code/${code}`, () => api.get(`/companies/code/${code}`)),
   getStats: (id, params) => api.get(`/companies/${id}/stats`, { params }),
-  getCurrencies: (id) => {
-    const key = `/companies/${id}/currencies`;
-    return withCache(key, () => api.get(`/companies/${id}/currencies`), { ttl: 24 * 60 * 60 * 1000 });
-  },
+  getCurrencies: (id) => api.get(`/companies/${id}/currencies`),
   create: (data) => api.post("/companies", data),
   update: (id, data) => api.put(`/companies/${id}`, data),
   delete: (id) => api.delete(`/companies/${id}`),
@@ -507,26 +506,20 @@ export const companyAPI = {
   bulkImport: (data) => api.post("/companies/bulk", data),
 };
 
-// ==================== EXCHANGE RATES ====================
+// ==================== EXCHANGE RATES API ====================
 export const exchangeRateAPI = {
-  getRates: (params) => {
-    const key = `/exchange-rates/rates?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/exchange-rates/rates", { params }), { ttl: 60 * 60 * 1000 });
-  },
+  getRates: (params) => api.get("/exchange-rates/rates", { params }),
   convert: (data) => api.post("/exchange-rates/convert", data),
   getHistory: (params) => api.get("/exchange-rates/history", { params }),
-  getSupported: () => {
-    const key = "/exchange-rates/supported";
-    return withCache(key, () => api.get("/exchange-rates/supported"), { ttl: 24 * 60 * 60 * 1000 });
-  },
+  getSupported: () => api.get("/exchange-rates/supported"),
   refreshRates: () => {
-    apiCache.clear("/exchange-rates");
+    apiCache.clear();
     return api.post("/exchange-rates/refresh");
   },
   getStatus: () => api.get("/exchange-rates/status"),
 };
 
-// ==================== DOCUMENTS ====================
+// ==================== DOCUMENTS API ====================
 export const documentAPI = {
   upload: (quotationId, files, descriptions = []) => {
     const formData = new FormData();
@@ -539,16 +532,19 @@ export const documentAPI = {
       timeout: 60000,
     });
   },
+  
   getAll: (quotationId) => api.get(`/quotations/${quotationId}/internal-documents`),
   getById: (quotationId, documentId) => api.get(`/quotations/${quotationId}/internal-documents/${documentId}`),
   updateDescription: (quotationId, documentId, description) => api.patch(`/quotations/${quotationId}/internal-documents/${documentId}`, { description }),
   delete: (quotationId, documentId) => api.delete(`/quotations/${quotationId}/internal-documents/${documentId}`),
   getDownloadUrl: (quotationId, documentId) => api.get(`/quotations/${quotationId}/internal-documents/${documentId}/download`),
+  
   download: async (quotationId, documentId) => {
     const response = await documentAPI.getDownloadUrl(quotationId, documentId);
     if (response.data.success) window.open(response.data.downloadUrl, '_blank');
     return response;
   },
+  
   formatFileSize: (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -556,6 +552,7 @@ export const documentAPI = {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   },
+  
   getFileIcon: (mimeType) => {
     if (!mimeType) return '📎';
     if (mimeType.startsWith('image/')) return '🖼️';
@@ -565,74 +562,121 @@ export const documentAPI = {
     if (mimeType.includes('excel')) return '📊';
     return '📎';
   },
+  
   validateFile: (file, options = {}) => {
-    const { maxSize = 30 * 1024 * 1024, allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/plain'] } = options;
+    const { 
+      maxSize = 30 * 1024 * 1024, 
+      allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 
+                      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+                      'text/plain'] 
+    } = options;
+    
     if (file.size > maxSize) return { valid: false, error: `File size exceeds ${maxSize / 1024 / 1024}MB` };
     if (!allowedTypes.includes(file.type)) return { valid: false, error: 'File type not allowed' };
     return { valid: true };
   }
 };
 
-// ==================== QUOTATIONS ====================
+// ==================== QUOTATIONS API ====================
 export const quotationAPI = {
   getCompanies: (params) => api.get("/quotations/companies", { params }),
   getCompanyByCode: (code) => api.get(`/quotations/companies/${code}`),
   getCompanyStats: (code, params) => api.get(`/quotations/companies/${code}/stats`, { params }),
-  getMyQuotations: (params) => {
-    const key = `/quotations/my-quotations?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/quotations/my-quotations", { params }), { ttl: 1 * 60 * 1000 });
+  
+  getMyQuotations: async (params = {}, options = {}) => {
+    const { skipCache = false, forceRefresh = false } = options;
+    const cleanParamsObj = cleanParams(params);
+    const cacheKey = quotationCache.getKey('/quotations/my-quotations', cleanParamsObj);
+    
+    if (!skipCache && !forceRefresh) {
+      const cached = quotationCache.get(cacheKey);
+      if (cached) return cached;
+    }
+    
+    const response = await api.get("/quotations/my-quotations", { params: cleanParamsObj });
+    
+    if (!skipCache) {
+      quotationCache.set(cacheKey, response);
+    }
+    
+    return response;
   },
-  getAll: (params) => {
-    const key = `/quotations?${JSON.stringify(params)}`;
-    return withCache(key, () => api.get("/quotations", { params }), { ttl: 1 * 60 * 1000 });
+  
+  getAll: async (params = {}, options = {}) => {
+    const { skipCache = false, forceRefresh = false } = options;
+    const cleanParamsObj = cleanParams(params);
+    const cacheKey = quotationCache.getKey('/quotations', cleanParamsObj);
+    
+    if (!skipCache && !forceRefresh) {
+      const cached = quotationCache.get(cacheKey);
+      if (cached) return cached;
+    }
+    
+    const response = await api.get("/quotations", { params: cleanParamsObj });
+    
+    if (!skipCache) {
+      quotationCache.set(cacheKey, response);
+    }
+    
+    return response;
   },
-  create: (data) => api.post("/quotations", data),
+  
   getById: (id) => {
     const key = `/quotations/${id}`;
     return deduplicator.dedupe(key, () => api.get(`/quotations/${id}`));
   },
-  update: (id, data) => api.put(`/quotations/${id}`, data),
-  delete: (id) => api.delete(`/quotations/${id}`),
+  
+  create: async (data) => {
+    const response = await api.post("/quotations", data);
+    quotationCache.clearEndpoint('/quotations/my-quotations');
+    quotationCache.clearEndpoint('/quotations');
+    adminQuotationCache.clear();
+    return response;
+  },
+  
+  update: async (id, data) => {
+    const response = await api.put(`/quotations/${id}`, data);
+    deduplicator.clear(`/quotations/${id}`);
+    quotationCache.clearEndpoint('/quotations/my-quotations');
+    quotationCache.clearEndpoint('/quotations');
+    adminQuotationCache.clear();
+    return response;
+  },
+  
+  delete: async (id) => {
+    const response = await api.delete(`/quotations/${id}`);
+    deduplicator.clear(`/quotations/${id}`);
+    quotationCache.clearEndpoint('/quotations/my-quotations');
+    quotationCache.clearEndpoint('/quotations');
+    adminQuotationCache.clear();
+    return response;
+  },
+  
   updateQueryDate: (id, date) => api.patch(`/quotations/${id}/query-date`, { queryDate: date }),
-  awardQuotation: (id, awarded, awardNote = "") => api.patch(`/quotations/${id}/award`, { awarded, awardNote }),
+  
+  awardQuotation: async (id, awarded, awardNote = "") => {
+    const response = await api.patch(`/quotations/${id}/award`, { awarded, awardNote });
+    deduplicator.clear(`/quotations/${id}`);
+    quotationCache.clearEndpoint('/quotations/my-quotations');
+    quotationCache.clearEndpoint('/quotations');
+    adminQuotationCache.clear();
+    return response;
+  },
+  
   generatePDF: async (html, filename = "quotation") => {
     try {
-      console.log(`📄 Sending PDF request, HTML size: ${(html.length / 1024).toFixed(1)}KB`);
+      const response = await api.post("/quotations/generate-pdf", { html, filename }, { 
+        responseType: "blob", 
+        timeout: 120000
+      });
       
-      const response = await api.post("/quotations/generate-pdf", 
-        { html, filename }, 
-        { 
-          responseType: "blob", 
-          timeout: 120000
-        }
-      );
-      
-      console.log('📥 Response status:', response.status);
-      console.log('📥 Response content type:', response.headers['content-type']);
-      console.log('📥 Response size:', response.data?.size);
-      
-      // ✅ Check if response is valid blob
       if (!response.data || response.data.size === 0) {
         throw new Error('Empty response received');
       }
       
-      // ✅ Create blob with correct type
       const pdfBlob = new Blob([response.data], { type: 'application/pdf' });
       const url = URL.createObjectURL(pdfBlob);
-      
-      // ✅ Test if blob is readable
-      const testUrl = URL.createObjectURL(pdfBlob);
-      const testImg = document.createElement('iframe');
-      testImg.onload = () => {
-        console.log('✅ PDF blob is valid');
-        URL.revokeObjectURL(testUrl);
-      };
-      testImg.onerror = () => {
-        console.error('❌ PDF blob is invalid');
-        URL.revokeObjectURL(testUrl);
-      };
-      
-      // ✅ Trigger download
       const link = document.createElement('a');
       link.href = url;
       link.download = `${filename}.pdf`;
@@ -640,155 +684,54 @@ export const quotationAPI = {
       link.click();
       document.body.removeChild(link);
       
-      // Clean up
-      setTimeout(() => {
-        URL.revokeObjectURL(url);
-      }, 1000);
-      
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
       return { success: true };
-      
     } catch (error) {
       console.error('PDF generation error:', error);
       throw error;
     }
   },
+  
   testPDF: async () => {
     const response = await api.post("/quotations/test-pdf", {}, { responseType: "blob", timeout: 30000 });
-    triggerBlobDownload(response.data, "test.pdf");
+    const url = URL.createObjectURL(response.data);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = "test.pdf";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     return { success: true };
   },
   
-  // ==================== S3 SIGNED URL APIS ====================
-  
- 
   getSignedUrl: (s3Key, expiresIn = 3600) => 
     api.get(`/quotations/signed-url/${encodeURIComponent(s3Key)}`, { params: { expiresIn } }),
- 
+  
   getBatchSignedUrls: (s3Keys, expiresIn = 3600) => 
     api.post(`/quotations/signed-urls/batch`, { keys: s3Keys }, { params: { expiresIn } }),
+  
+  clearCache: () => {
+    quotationCache.clear();
+    adminQuotationCache.clear();
+  },
   
   documents: documentAPI,
 };
 
-// ==================== NOTIFICATIONS ====================
+// ==================== NOTIFICATIONS API ====================
 export const notificationAPI = {
-  /** Get all notifications with pagination */
-  getAll: (params = {}) => {
-    return api.get("/notifications", { params });
-  },
-
-  /** Get only unread count (for bell icon) */
-  getUnreadCount: () => {
-    return api.get("/notifications/unread-count");
-  },
-
-  /** Get single notification */
-  getById: (id) => {
-    return api.get(`/notifications/${id}`);
-  },
-
-  /** Mark one notification as read */
-  markAsRead: (id) => {
-    return api.put(`/notifications/${id}/read`);
-  },
-
-  /** Mark all notifications as read */
-  markAllAsRead: () => {
-    return api.put("/notifications/read-all");
-  },
-
-  /** Archive a notification */
-  archive: (id) => {
-    return api.put(`/notifications/${id}/archive`);
-  },
-
-  /** Delete a notification */
-  delete: (id) => {
-    return api.delete(`/notifications/${id}`);
-  },
-
-  /** Force refresh notifications */
-  refresh: () => {
-    return api.get("/notifications", { params: { forceRefresh: true } });
-  }
+  getAll: (params = {}) => api.get("/notifications", { params }),
+  getUnreadCount: () => api.get("/notifications/unread-count"),
+  getById: (id) => api.get(`/notifications/${id}`),
+  markAsRead: (id) => api.put(`/notifications/${id}/read`),
+  markAllAsRead: () => api.put("/notifications/read-all"),
+  archive: (id) => api.put(`/notifications/${id}/archive`),
+  delete: (id) => api.delete(`/notifications/${id}`),
+  refresh: () => api.get("/notifications", { params: { forceRefresh: true } })
 };
 
 // ==================== UTILITIES ====================
-export const customerTaxUtils = {
-  getTaxTreatments: () => [
-    { value: 'gcc_vat_registered', label: 'GCC VAT Registered', requiresTrn: true },
-    { value: 'gcc_non_vat_registered', label: 'GCC Non-VAT Registered', requiresTrn: false }
-  ],
-  requiresTrn: (taxTreatment) => taxTreatment === 'gcc_vat_registered',
-  validateTrn: (trn) => /^\d{15}$/.test(trn),
-  formatTrn: (trn) => trn ? trn.replace(/(\d{3})(?=\d)/g, '$1-').replace(/-$/, '') : '',
-  getTrnValidationError: (trn) => {
-    if (!trn) return 'Tax Registration Number is required';
-    if (!/^\d{15}$/.test(trn)) return 'TRN must be exactly 15 digits';
-    return null;
-  }
-};
-
-export const placeOfSupplyUtils = {
-  getGccCountries: () => ['United Arab Emirates (UAE)', 'Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'],
-  getCountryCode: (placeName) => {
-    const map = { 'United Arab Emirates (UAE)': 'AE', 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
-    return map[placeName] || 'AE';
-  },
-  getPlaceName: (countryCode) => {
-    const map = { 'AE': 'United Arab Emirates (UAE)', 'SA': 'Saudi Arabia', 'KW': 'Kuwait', 'QA': 'Qatar', 'BH': 'Bahrain', 'OM': 'Oman' };
-    return map[countryCode] || 'United Arab Emirates (UAE)';
-  }
-};
-
-export const currencyUtils = {
-  supportedCurrencies: {
-    AED: { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham', decimalPlaces: 2 },
-    SAR: { code: 'SAR', symbol: '﷼', name: 'Saudi Riyal', decimalPlaces: 2 },
-    KWD: { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar', decimalPlaces: 3 },
-    QAR: { code: 'QAR', symbol: '﷼', name: 'Qatari Riyal', decimalPlaces: 2 },
-    BHD: { code: 'BHD', symbol: '.د.ب', name: 'Bahraini Dinar', decimalPlaces: 3 },
-    OMR: { code: 'OMR', symbol: '﷼', name: 'Omani Rial', decimalPlaces: 3 },
-    USD: { code: 'USD', symbol: '$', name: 'US Dollar', decimalPlaces: 2 },
-    EUR: { code: 'EUR', symbol: '€', name: 'Euro', decimalPlaces: 2 },
-    GBP: { code: 'GBP', symbol: '£', name: 'British Pound', decimalPlaces: 2 }
-  },
-  format: (amount, currencyCode = 'AED') => {
-    const currency = currencyUtils.supportedCurrencies[currencyCode];
-    if (!currency) return `${currencyCode} ${amount.toFixed(2)}`;
-    return `${currency.symbol} ${amount.toFixed(currency.decimalPlaces || 2)}`;
-  },
-  convert: async (amount, from, to = 'AED') => {
-    try {
-      const response = await exchangeRateAPI.convert({ amount, from, to });
-      return response.data.result;
-    } catch {
-      return amount;
-    }
-  },
-  getCompanyCurrencies: async (companyId) => {
-    try {
-      const response = await companyAPI.getCurrencies(companyId);
-      return response.data.acceptedCurrencies;
-    } catch {
-      return ['AED'];
-    }
-  },
-  getSymbol: (currencyCode) => currencyUtils.supportedCurrencies[currencyCode]?.symbol || currencyCode,
-  getName: (currencyCode) => currencyUtils.supportedCurrencies[currencyCode]?.name || currencyCode,
-  getDecimalPlaces: (currencyCode) => currencyUtils.supportedCurrencies[currencyCode]?.decimalPlaces || 2
-};
-
-export const companyFilterUtils = {
-  withCompany: (params, companyId) => companyId ? { ...params, companyId } : params,
-  createFilteredApi: (apiFunc, getSelectedCompany) => async (...args) => {
-    const companyId = typeof getSelectedCompany === 'function' ? getSelectedCompany() : getSelectedCompany;
-    const params = args[0] || {};
-    return apiFunc(companyFilterUtils.withCompany(params, companyId));
-  }
-};
-
-// ==================== HELPERS ====================
 export const setSelectedCompany = (companyId) => {
   if (companyId) {
     localStorage.setItem("selectedCompany", companyId);
@@ -797,9 +740,7 @@ export const setSelectedCompany = (companyId) => {
   }
 };
 
-export const getSelectedCompany = () => {
-  return localStorage.getItem("selectedCompany");
-};
+export const getSelectedCompany = () => localStorage.getItem("selectedCompany");
 
 export const clearCompanyContext = () => {
   localStorage.removeItem("selectedCompany");
@@ -820,6 +761,9 @@ export const clearAuthData = () => {
   apiCache.clear();
   deduplicator.clear();
   syncQueue.clear();
+  quotationCache.clear();
+  adminQuotationCache.clear();
+  clearCustomerCache();
 };
 
 export const getCurrentUser = () => {
@@ -856,11 +800,14 @@ export const triggerBlobDownload = (blob, filename = "download") => {
 
 export const downloadPDF = (response, filename = "quotation") => triggerBlobDownload(response.data, `${filename}.pdf`);
 
-// Export cache management for debugging
 export const clearAllCaches = () => {
   apiCache.clear();
   deduplicator.clear();
   syncQueue.clear();
+  quotationCache.clear();
+  adminQuotationCache.clear();
+  clearCustomerCache();
 };
 
+// ==================== EXPORT DEFAULTS ====================
 export default api;

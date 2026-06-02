@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 
 import { useAppStore, useCompanyQuotations } from '../services/store';
-import { useCustomersList, useAdminStats } from '../hooks/customHooks';
+import { useCustomersList, useAdminStats, useCompanyContext, useUserRole } from '../hooks/customHooks';
 import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import useToast, { ToastContainer } from '../hooks/useToast';
@@ -63,8 +63,20 @@ const useMediaQuery = (query) => {
     const mediaQuery = window.matchMedia(query);
     const handler = (e) => setMatches(e.matches);
     
-    mediaQuery.addEventListener('change', handler);
-    return () => mediaQuery.removeEventListener('change', handler);
+    // Use addEventListener for better compatibility
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handler);
+    } else {
+      mediaQuery.addListener(handler);
+    }
+    
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handler);
+      } else {
+        mediaQuery.removeListener(handler);
+      }
+    };
   }, [query]);
 
   return matches;
@@ -123,10 +135,10 @@ const ExpiryBadge = React.memo(({ type }) => {
 const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
-  const canAct = quotation.status === 'ops_approved' || quotation.status == 'pending_admin';
-   const canDelete = DELETABLE.has(quotation.status);
+  const canAct = quotation.status === 'ops_approved' || quotation.status === 'pending_admin';
+  const canDelete = DELETABLE.has(quotation.status);
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
-  const canAward = quotation.status === 'approved' && ( quotation.createdBy?.role === 'admin' || quotation.createdBySnapshot?.role === 'admin');
+  const canAward = quotation.status === 'approved' && (quotation.createdBy?.role === 'admin' || quotation.createdBySnapshot?.role === 'admin');
 
   return (
     <div style={{
@@ -199,10 +211,6 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
         <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} 
           icon={Eye} label="View" size="small"/>
         
-        {/* <ActionBtn bg={isExporting ? '#f1f5f9' : '#f0fdf4'} color={isExporting ? '#94a3b8' : '#166534'}
-          onClick={() => !isExporting && onDownload(quotation)} disabled={isExporting}
-          icon={isExporting ? RefreshCw : Download} label={isExporting ? '…' : 'PDF'} size="small"/>
-         */}
         {canAward && (
           <ActionBtn 
             bg="#e9d5ff" 
@@ -261,7 +269,9 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     changeLimit,
     resetPagination,
     currentPage,
-    currentLimit
+    currentLimit,
+    updateFilters,
+    totalCount
   } = useCompanyQuotations();
   
   const customers = useCustomersList();
@@ -275,10 +285,10 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const clearError = useAppStore((s) => s.clearError);
   const fetchAllData = useAppStore((s) => s.fetchAllData);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
-
+  const initialized = useAppStore((s) => s.initialized);
   const awardQuotation = useAppStore((s) => s.awardQuotation);
   
-  // ── Stats hook ────────────────────────────────────────────
+  // ── Stats hook ── Now properly integrated with store
   const { 
     stats,
     loading: statsLoading,
@@ -300,24 +310,34 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   console.log('[AdminDashboard] Stats hook returned:', { 
     hasStats: !!stats, 
     statsLoading, 
-    selectedCompany 
+    selectedCompany,
+    initialized
   });
-  
-  // ── Company & Currency ────────────────────────────────────
-  const {
-    company: currentCompany,
-    selectedCurrency,
-    refreshCompanyData
-  } = useCompanyCurrency();
 
-  // ── Custom hooks ──────────────────────────────────────────
+  // ── Company & Currency ── Use the fixed hook
+  const {
+    selectedCompany: companyId,
+    currentCompany,
+    selectedCurrency,
+    setSelectedCurrency,
+    hasCompany,
+    companyName,
+    companyCurrency,
+    isSwitchingCompany
+  } = useCompanyContext();
+
+  // ── User Role hook ──
+  const { isAdmin, user } = useUserRole();
+
+  // ── Custom hooks ──
   const { toasts, addToast, dismissToast } = useToast();
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
   const isMountedRef = useRef(true);
-const loadingTimeoutRef = useRef(null);
+  const loadingTimeoutRef = useRef(null);
+  const initialLoadTriggered = useRef(false);
 
-  // ── Server-side filters state ───────────────────────────────────────────
+  // ── Server-side filters state ──
   const [serverFilters, setServerFilters] = useState({
     status: 'all',
     search: '',
@@ -328,7 +348,7 @@ const loadingTimeoutRef = useRef(null);
   const [searchInput, setSearchInput] = useState('');
   const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
 
-  // ── Action state ──────────────────────────────────────────
+  // ── Action state ──
   const [exportingId, setExportingId] = useState(null);
   const [rejectModal, setRejectModal] = useState({ open: false, id: null, reason: '' });
   const [deleteModal, setDeleteModal] = useState({ open: false, id: null });
@@ -342,113 +362,119 @@ const loadingTimeoutRef = useRef(null);
     awarded: null
   });
 
+  // ── Effect for initial company data load ──
+  useEffect(() => {
+    // Only fetch if we have a company, store is initialized, and we haven't triggered yet
+    if (hasCompany && initialized && !initialLoadTriggered.current && !isSwitchingCompany) {
+      initialLoadTriggered.current = true;
+      // The store's _loadCompanyData already handles the initial fetch
+      // We just need to refresh to ensure filters are applied
+      refreshCompanyQuotations({
+        page: currentPage,
+        limit: currentLimit,
+        status: activeTab !== 'all' ? activeTab : undefined,
+        sortBy: sort.field,
+        sortDir: sort.dir
+      });
+    }
+  }, [hasCompany, initialized, isSwitchingCompany, refreshCompanyQuotations, currentPage, currentLimit, activeTab, sort.field, sort.dir]);
+
+  // ── Effect for limit based on mobile ──
   useEffect(() => {
     changeLimit(isMobile ? 10 : 20);
   }, [isMobile, changeLimit]);
 
+  // ── Effect for view mode on mobile ──
   useEffect(() => {
     if (isMobile) {
       setViewMode('card');
     }
   }, [isMobile]);
 
-  // ── Derived state ─────────────────────────────────────────
+  // ── Derived state ──
   const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
   const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
-    const hasData = safeQ.length > 0;
+  const hasData = safeQ.length > 0;
   const isInitialLoading = (!quotationsInitialized || safeQuotationsLoading) && !hasData;
   const isRefreshing = quotationsInitialized && safeQuotationsLoading && safeQ.length > 0;
   const showEmptyState = quotationsInitialized && !safeQuotationsLoading && safeQ.length === 0;
 
-  // Auto-refresh if needed
-  useEffect(() => {
-    if (!quotationsInitialized && !quotationsLoading && safeQ.length === 0 && selectedCompany) {
-      refreshCompanyQuotations();
-    }
-  }, [quotationsInitialized, quotationsLoading, safeQ.length, selectedCompany, refreshCompanyQuotations]);
-
-  // ── Effects ───────────────────────────────────────────────
- 
+  // ── Effect for company change pagination reset ──
   const prevCompanyForPagination = useRef(selectedCompany);
-
   useEffect(() => {
     if (prevCompanyForPagination.current !== selectedCompany) {
-      // Company changed - reset pagination
       resetPagination();
       prevCompanyForPagination.current = selectedCompany;
+      // Reset filters when company changes
+      setActiveTab('all');
+      setServerFilters({ status: 'all', search: '', fromDate: '', toDate: '' });
+      setSearchInput('');
+      initialLoadTriggered.current = false;
     }
   }, [selectedCompany, resetPagination]);
 
+  // ── Cleanup effect ──
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
       if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+      if (searchTimer.current) clearTimeout(searchTimer.current);
     };
   }, []);
 
-const refreshWithFilters = useCallback(async () => {
-  if (!selectedCompany) return;
-  
-  await refreshCompanyQuotations({
-    page: currentPage,
-    limit: currentLimit,
-    status: serverFilters.status !== 'all' ? serverFilters.status : undefined,
-    search: serverFilters.search || undefined,
-    fromDate: serverFilters.fromDate || undefined,
-    toDate: serverFilters.toDate || undefined,
-    sortBy: sort.field,
-    sortDir: sort.dir
-  });
-}, [refreshCompanyQuotations, currentPage, currentLimit, serverFilters, sort.field, sort.dir, selectedCompany]);
+  // ── Refresh with filters function ──
+  const refreshWithFilters = useCallback(async () => {
+    if (!hasCompany || isSwitchingCompany) return;
+    
+    await refreshCompanyQuotations({
+      page: currentPage,
+      limit: currentLimit,
+      status: serverFilters.status !== 'all' ? serverFilters.status : undefined,
+      search: serverFilters.search || undefined,
+      fromDate: serverFilters.fromDate || undefined,
+      toDate: serverFilters.toDate || undefined,
+      sortBy: sort.field,
+      sortDir: sort.dir
+    });
+  }, [refreshCompanyQuotations, currentPage, currentLimit, serverFilters, sort.field, sort.dir, hasCompany, isSwitchingCompany]);
 
-// Use a ref to track initial load
-const initialLoadDone = useRef(false);
+  // ── Effect for filter changes ──
+  const prevFiltersRef = useRef(serverFilters);
+  const prevSortRef = useRef(sort);
 
-// Single useEffect for initial load
-useEffect(() => {
-  if (selectedCompany && !initialLoadDone.current && !quotationsInitialized) {
-    initialLoadDone.current = true;
-    refreshWithFilters();
-  }
-}, [selectedCompany, quotationsInitialized, refreshWithFilters]);
+  useEffect(() => {
+    if (!quotationsInitialized || !hasCompany || isSwitchingCompany) return;
 
-// Separate useEffect for filter changes (but prevent infinite loops)
-const prevFiltersRef = useRef(serverFilters);
-const prevSortRef = useRef(sort);
+    const filtersChanged = JSON.stringify(prevFiltersRef.current) !== JSON.stringify(serverFilters);
+    const sortChanged = JSON.stringify(prevSortRef.current) !== JSON.stringify(sort);
 
-useEffect(() => {
-  // Only refresh if filters or sort actually changed
-  if (initialLoadDone.current && 
-      (JSON.stringify(prevFiltersRef.current) !== JSON.stringify(serverFilters) ||
-       JSON.stringify(prevSortRef.current) !== JSON.stringify(sort))) {
-    prevFiltersRef.current = serverFilters;
-    prevSortRef.current = sort;
-    refreshWithFilters();
-  }
-}, [serverFilters, sort, refreshWithFilters]);
+    if (filtersChanged || sortChanged) {
+      prevFiltersRef.current = serverFilters;
+      prevSortRef.current = sort;
+      refreshWithFilters();
+    }
+  }, [serverFilters, sort, quotationsInitialized, hasCompany, isSwitchingCompany, refreshWithFilters]);
 
- 
-// ── Tab counts from adminStats (already has backend counts) ──
-const tabCounts = useMemo(() => {
-   
-  return {
-    all: statusCounts.total || 0,
-    ops_approved: statusCounts.ops_approved || 0,
-    approved: statusCounts.approved || 0,
-    awarded: statusCounts.awarded || 0,
-    rejected: statusCounts.rejected || 0,
-  };
-}, [statusCounts]);
+  // ── Tab counts from adminStats ──
+  const tabCounts = useMemo(() => {
+    return {
+      all: statusCounts?.total || totalQuotations || 0,
+      ops_approved: statusCounts?.ops_approved || actionRequired || 0,
+      approved: statusCounts?.approved || approved || 0,
+      awarded: statusCounts?.awarded || awarded || 0,
+      rejected: statusCounts?.rejected || rejected || 0,
+    };
+  }, [statusCounts, totalQuotations, actionRequired, approved, awarded, rejected]);
 
-  // ── Loading helpers ───────────────────────────────────────
+  // ── Loading helpers ──
   const setActionLoading = useCallback((id, action, val) => {
     setActionLoadingIds(prev => ({ ...prev, [`${id}_${action}`]: val }));
   }, []);
 
   const isActionLoading = useCallback((id, action) => !!actionLoadingIds[`${id}_${action}`], [actionLoadingIds]);
 
-  // ── Handlers ──────────────────────────────────────────────
+  // ── Handlers ──
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
     setSearchInput(val);
@@ -499,8 +525,8 @@ const tabCounts = useMemo(() => {
     
     try {
       await fetchAllData();
-      refreshCompanyData?.();
       await refreshWithFilters();
+      await refreshStats();
       setRefreshProgress(100);
       setRefreshMessage('Complete!');
       addToast('Data refreshed', 'success');
@@ -516,7 +542,7 @@ const tabCounts = useMemo(() => {
     } finally {
       clearInterval(progressInterval);
     }
-  }, [fetchAllData, refreshCompanyData, refreshWithFilters, addToast]);
+  }, [fetchAllData, refreshWithFilters, refreshStats, addToast]);
 
   const handleDownload = useCallback(async (q) => {
     setExportingId(q._id);
@@ -641,15 +667,19 @@ const tabCounts = useMemo(() => {
 
   const handleApprove = useCallback(async (id) => {
     setActionLoading(id, 'approve', true);
-    const result = await approveQuotation(id);
-    if (result?.success) {
-      addToast('Quotation approved successfully', 'success');
-      refreshWithFilters();
-    } else {
-      addToast(result?.error || 'Failed to approve quotation', 'error');
+    try {
+      const result = await approveQuotation(id);
+      if (result?.success) {
+        addToast('Quotation approved successfully', 'success');
+        await refreshWithFilters();
+        await refreshStats();
+      } else {
+        addToast(result?.error || 'Failed to approve quotation', 'error');
+      }
+    } finally {
+      setActionLoading(id, 'approve', false);
     }
-    setActionLoading(id, 'approve', false);
-  }, [approveQuotation, addToast, refreshWithFilters, setActionLoading]);
+  }, [approveQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading]);
 
   const handleReject = {
     open: useCallback((id) => setRejectModal({ open: true, id, reason: '' }), []),
@@ -661,16 +691,20 @@ const tabCounts = useMemo(() => {
       }
       
       setActionLoading(rejectModal.id, 'reject', true);
-      const result = await rejectQuotation(rejectModal.id, rejectModal.reason);
-      if (result?.success) {
-        addToast('Quotation rejected', 'success');
-        handleReject.close();
-        refreshWithFilters();
-      } else {
-        addToast(result?.error || 'Failed to reject quotation', 'error');
+      try {
+        const result = await rejectQuotation(rejectModal.id, rejectModal.reason);
+        if (result?.success) {
+          addToast('Quotation rejected', 'success');
+          handleReject.close();
+          await refreshWithFilters();
+          await refreshStats();
+        } else {
+          addToast(result?.error || 'Failed to reject quotation', 'error');
+        }
+      } finally {
+        setActionLoading(rejectModal.id, 'reject', false);
       }
-      setActionLoading(rejectModal.id, 'reject', false);
-    }, [rejectModal, rejectQuotation, addToast, refreshWithFilters, setActionLoading])
+    }, [rejectModal, rejectQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
   };
 
   const handleDelete = {
@@ -678,16 +712,20 @@ const tabCounts = useMemo(() => {
     close: useCallback(() => setDeleteModal({ open: false, id: null }), []),
     confirm: useCallback(async () => {
       setActionLoading(deleteModal.id, 'delete', true);
-      const result = await deleteQuotation(deleteModal.id);
-      if (result?.success) {
-        addToast('Quotation deleted', 'success');
-        handleDelete.close();
-        refreshWithFilters();
-      } else {
-        addToast(result?.error || 'Failed to delete quotation', 'error');
+      try {
+        const result = await deleteQuotation(deleteModal.id);
+        if (result?.success) {
+          addToast('Quotation deleted', 'success');
+          handleDelete.close();
+          await refreshWithFilters();
+          await refreshStats();
+        } else {
+          addToast(result?.error || 'Failed to delete quotation', 'error');
+        }
+      } finally {
+        setActionLoading(deleteModal.id, 'delete', false);
       }
-      setActionLoading(deleteModal.id, 'delete', false);
-    }, [deleteModal, deleteQuotation, addToast, refreshWithFilters, setActionLoading])
+    }, [deleteModal, deleteQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
   };
 
   const handleView = useCallback((id) => {
@@ -723,8 +761,8 @@ const tabCounts = useMemo(() => {
               : `Quotation ${awardModal.quotation.quotationNumber} marked as Not Awarded.`,
             "success"
           );
-          refreshWithFilters();
-          refreshStats();
+          await refreshWithFilters();
+          await refreshStats();
           handleAward.close();
         } else {
           addToast(result?.error || "Failed to update award status", "error");
@@ -769,7 +807,7 @@ const tabCounts = useMemo(() => {
     }
   }, [onNavigate]);
 
-  // ── Keyboard shortcut ─────────────────────────────────────
+  // ── Keyboard shortcut ──
   useEffect(() => {
     const handler = (e) => {
       if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
@@ -781,9 +819,7 @@ const tabCounts = useMemo(() => {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  useEffect(() => () => clearTimeout(searchTimer.current), []);
-
-  // ── Tab configuration ─────────────────────────────────────
+  // ── Tab configuration ──
   const TABS = useMemo(() => [
     { key: 'all',           label: 'All',              Icon: FileText,    count: tabCounts.all },
     { key: 'ops_approved',  label: 'Action Required',  Icon: Clock,       count: tabCounts.ops_approved },
@@ -792,19 +828,26 @@ const tabCounts = useMemo(() => {
     { key: 'rejected',      label: 'Rejected',         Icon: XCircle,     count: tabCounts.rejected },
   ], [tabCounts]);
 
-  // ── Render helpers ────────────────────────────────────────
+  // ── Render helpers ──
   const renderStatCards = () => {
-    // Create unified status counts for both mobile and desktop
-    const unifiedStatusCounts = {
-      pending: actionRequired,
-      in_review: 0,
-      approved: approved,
-      awarded: awarded,
-      returned: rejected
-    };
+    // Don't show data until initialized
+    const isStatsLoading = statsLoading || !initialized;
+    
+    // Only show actual values when not loading AND initialized
+    const showActualValues = !isStatsLoading && initialized;
+    
+    // Use showActualValues to determine if we show real numbers or placeholders
+    const displayTotalQuotations = showActualValues ? totalQuotations : null;
+    const displayActionRequired = showActualValues ? actionRequired : null;
+    const displayApproved = showActualValues ? approved : null;
+    const displayAwardedValue = showActualValues ? totalAwardedValue : null;
+    const displayConversionRate = showActualValues ? conversionDetails : null;
+    const displayRejected = showActualValues ? rejected : null;
+    const displayTotalCustomers = showActualValues ? totalCustomers : null;
   
-    // Helper function to format large numbers
-    const formatLargeNumber = (num) => {
+    // Helper function to format large numbers with loading state
+    const formatLargeNumber = (num, isLoading) => {
+      if (isLoading) return '—';
       if (num === null || num === undefined || isNaN(num)) return '0';
       if (num === 0) return '0';
       
@@ -823,8 +866,9 @@ const tabCounts = useMemo(() => {
       return num.toString();
     };
   
-    // Helper function to format currency with abbreviations
-    const formatLargeCurrency = (num, currency) => {
+    // Helper function to format currency with loading state
+    const formatLargeCurrency = (num, currency, isLoading) => {
+      if (isLoading) return `— ${currency}`;
       if (num === null || num === undefined || isNaN(num)) return `0 ${currency}`;
       if (num === 0) return `0 ${currency}`;
       
@@ -843,16 +887,25 @@ const tabCounts = useMemo(() => {
       return `${num.toLocaleString()} ${currency}`;
     };
   
+    // Create unified status counts for mobile
+    const unifiedStatusCounts = {
+      pending: displayActionRequired,
+      in_review: 0,
+      approved: displayApproved,
+      awarded: displayAwardedValue > 0 ? awarded : 0,
+      returned: displayRejected
+    };
+  
     // Mobile View
     if (isMobile) {
       return (
         <CompactStatsCard 
-          totalRevenue={totalAwardedValue}
-          quotationsCount={totalQuotations}
-          customersCount={totalCustomers}
+          totalRevenue={displayAwardedValue}
+          quotationsCount={displayTotalQuotations}
+          customersCount={displayTotalCustomers}
           selectedCurrency={selectedCurrency}
           statusCounts={unifiedStatusCounts}
-          loading={statsLoading}
+          loading={isStatsLoading}
         />
       );
     }
@@ -863,80 +916,80 @@ const tabCounts = useMemo(() => {
         <div style={styles.statsRow1}>
           <StatCard 
             label="Total Quotations" 
-            value={formatLargeNumber(totalQuotations)} 
-            fullValue={totalQuotations.toLocaleString()}
+            value={formatLargeNumber(displayTotalQuotations, isStatsLoading)} 
+            fullValue={showActualValues ? totalQuotations.toLocaleString() : '—'}
             accent="#6366f1" 
             iconBg="#eff1ff" 
             iconColor="#6366f1" 
             Icon={FileText} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
             sub="All time" 
           />
           <StatCard 
             label="Action Required" 
-            value={formatLargeNumber(actionRequired)} 
-            fullValue={actionRequired.toLocaleString()}
+            value={formatLargeNumber(displayActionRequired, isStatsLoading)} 
+            fullValue={showActualValues ? (actionRequired || 0).toLocaleString() : '—'}
             accent="#3b82f6" 
             iconBg="#dbeafe" 
             iconColor="#3b82f6" 
             Icon={Shield} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
             sub="Awaiting your approval" 
           />
           <StatCard 
             label="Approved" 
-            value={formatLargeNumber(approved)} 
-            fullValue={approved.toLocaleString()}
+            value={formatLargeNumber(displayApproved, isStatsLoading)} 
+            fullValue={showActualValues ? (approved || 0).toLocaleString() : '—'}
             accent="#10b981" 
             iconBg="#d1fae5" 
             iconColor="#10b981" 
             Icon={TrendingUp} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
             sub="quotations approved" 
           />
           <StatCard 
             label="Awarded Value" 
-            value={formatLargeCurrency(totalAwardedValue, selectedCurrency)} 
-            fullValue={fmtCurrency(totalAwardedValue, selectedCurrency)}
+            value={formatLargeCurrency(displayAwardedValue, selectedCurrency, isStatsLoading)} 
+            fullValue={showActualValues ? fmtCurrency(totalAwardedValue, selectedCurrency) : '—'}
             accent="#059669" 
             iconBg="#d1fae5" 
             iconColor="#059669" 
             Icon={Award} 
-            loading={statsLoading} 
-            sub={`${formatLargeNumber(awarded)} deals won`} 
+            loading={isStatsLoading} 
+            sub={`${formatLargeNumber(awarded, isStatsLoading)} deals won`} 
           />
         </div>
   
         <div style={styles.statsRow2}>
           <StatCard 
             label="Conversion Rate" 
-            value={`${conversionDetails}%`} 
+            value={isStatsLoading ? '—' : `${displayConversionRate || 0}%`} 
             accent="#f59e0b" 
             iconBg="#fef3c7" 
             iconColor="#f59e0b" 
             Icon={TrendingUp} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
           />
           <StatCard 
             label="Rejected by Admin" 
-            value={formatLargeNumber(rejected)} 
-            fullValue={rejected.toLocaleString()}
+            value={formatLargeNumber(displayRejected, isStatsLoading)} 
+            fullValue={showActualValues ? (rejected || 0).toLocaleString() : '—'}
             accent="#ec4899" 
             iconBg="#fce7f3" 
             iconColor="#ec4899" 
             Icon={Ban} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
             sub="Rejected quotations" 
           />
           <StatCard 
             label="Total Customers" 
-            value={formatLargeNumber(totalCustomers)} 
-            fullValue={totalCustomers.toLocaleString()}
+            value={formatLargeNumber(displayTotalCustomers, isStatsLoading)} 
+            fullValue={showActualValues ? (totalCustomers || 0).toLocaleString() : '—'}
             accent="#8b5cf6" 
             iconBg="#ede9fe" 
             iconColor="#8b5cf6" 
             Icon={Users} 
-            loading={statsLoading} 
+            loading={isStatsLoading} 
             sub="Active customers" 
           />
         </div>
@@ -1016,9 +1069,6 @@ const tabCounts = useMemo(() => {
             <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
               icon={Eye} label="View" title="View quotation" size="small"/>
             
-            {/* <ActionBtn bg={isExp ? '#f1f5f9' : '#f0fdf4'} color={isExp ? '#94a3b8' : '#166534'}
-              onClick={() => !isExp && handleDownload(q)} disabled={isExp}
-              icon={isExp ? RefreshCw : Download} label={isExp ? '…' : 'PDF'} title="Download PDF" size="small"/> */}
             {canAward && (
               <ActionBtn 
                 bg="#e9d5ff" 
@@ -1095,99 +1145,82 @@ const tabCounts = useMemo(() => {
           }}>
             <Users size={isMobile ? 12 : 14} /> { "Customers"}
           </button>
-          
-          {/* <button onClick={handleGoToItems} className="adm-nav-btn" style={{
-            backgroundColor: '#e0e7ff',
-            color: '#4f46e5',
-            border: 'none',
-            borderRadius: 8,
-            padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-            fontSize: isMobile ? '0.7rem' : '0.8rem',
-            fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.4rem'
-          }}>
-            <ShoppingCartIcon size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
-          </button> */}
 
-<div style={{ position: 'relative' }}>
-  <button onClick={toggleExportFilters} disabled={isExporting} style={styles.exportBtn}>
-    <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
-  </button>
-  
-  {exportFilters.showFilters && (
-    <div style={isMobile ? styles.exportFilterDropdownMobile : styles.exportFilterDropdown}>
-      {/* Add a drag handle for mobile */}
-      {isMobile && (
-        <div style={{
-          width: '50px',
-          height: '4px',
-          backgroundColor: '#e2e8f0',
-          borderRadius: '999px',
-          margin: '0 auto 1rem auto',
-          cursor: 'grab'
-        }} />
-      )}
-      
-      <div style={styles.filterGroup}>
-        <label style={styles.filterLabel}>Date Range</label>
-        <div style={styles.dateRangeRow}>
-          <input
-            type="date"
-            value={exportFilters.fromDate}
-            onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
-            style={styles.filterInput}
-          />
-          <span>to</span>
-          <input
-            type="date"
-            value={exportFilters.toDate}
-            onChange={(e) => handleExportDateChange('toDate', e.target.value)}
-            style={styles.filterInput}
-          />
-        </div>
-      </div>
-      
-      <div style={styles.filterGroup}>
-        <label style={styles.filterLabel}>Status</label>
-        <select
-          value={exportFilters.status}
-          onChange={(e) => handleExportDateChange('status', e.target.value)}
-          style={styles.filterSelect}
-        >
-          <option value="all">All Statuses</option>
-          <option value="pending">Pending</option>
-          <option value="ops_approved">Awaiting Admin</option>
-          <option value="ops_rejected">Returned by Ops</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-          <option value="awarded">Awarded</option>
-        </select>
-      </div>
-      
-      <div style={styles.filterActions}>
-        <button
-          onClick={() => {
-            setExportFilters({
-              showFilters: false,
-              fromDate: '',
-              toDate: '',
-              status: 'all',
-            });
-          }}
-          style={styles.filterResetBtn}
-        >
-          Reset
-        </button>
-        <button onClick={handleExportToExcel} style={styles.filterApplyBtn}>
-          Export Now
-        </button>
-      </div>
-    </div>
-  )}
-</div>
+          <div style={{ position: 'relative' }}>
+            <button onClick={toggleExportFilters} disabled={isExporting} style={styles.exportBtn}>
+              <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
+            </button>
+            
+            {exportFilters.showFilters && (
+              <div style={isMobile ? styles.exportFilterDropdownMobile : styles.exportFilterDropdown}>
+                {isMobile && (
+                  <div style={{
+                    width: '50px',
+                    height: '4px',
+                    backgroundColor: '#e2e8f0',
+                    borderRadius: '999px',
+                    margin: '0 auto 1rem auto',
+                    cursor: 'grab'
+                  }} />
+                )}
+                
+                <div style={styles.filterGroup}>
+                  <label style={styles.filterLabel}>Date Range</label>
+                  <div style={styles.dateRangeRow}>
+                    <input
+                      type="date"
+                      value={exportFilters.fromDate}
+                      onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
+                      style={styles.filterInput}
+                    />
+                    <span>to</span>
+                    <input
+                      type="date"
+                      value={exportFilters.toDate}
+                      onChange={(e) => handleExportDateChange('toDate', e.target.value)}
+                      style={styles.filterInput}
+                    />
+                  </div>
+                </div>
+                
+                <div style={styles.filterGroup}>
+                  <label style={styles.filterLabel}>Status</label>
+                  <select
+                    value={exportFilters.status}
+                    onChange={(e) => handleExportDateChange('status', e.target.value)}
+                    style={styles.filterSelect}
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="ops_approved">Awaiting Admin</option>
+                    <option value="ops_rejected">Returned by Ops</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="awarded">Awarded</option>
+                  </select>
+                </div>
+                
+                <div style={styles.filterActions}>
+                  <button
+                    onClick={() => {
+                      setExportFilters({
+                        showFilters: false,
+                        fromDate: '',
+                        toDate: '',
+                        status: 'all',
+                      });
+                    }}
+                    style={styles.filterResetBtn}
+                  >
+                    Reset
+                  </button>
+                  <button onClick={handleExportToExcel} style={styles.filterApplyBtn}>
+                    Export Now
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           <button onClick={handleCreateQuotation} className="adm-nav-btn" style={{
             backgroundColor: '#10b981',
@@ -1340,7 +1373,7 @@ const tabCounts = useMemo(() => {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#fafafa' }}>
-                    {['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Total','Actions'].map(h => (
+                    {['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Created By','Total','Actions'].map(h => (
                       <th key={h} style={styles.skeletonHeader}>{h}</th>
                     ))}
                   </tr>
@@ -1508,6 +1541,14 @@ const tabCounts = useMemo(() => {
         loading={isActionLoading(deleteModal.id, 'delete')}
       />
 
+      {/* Loading overlays */}
+      {isSwitchingCompany && (
+        <SimpleLoadingOverlay 
+          type="processing"
+          message="Switching company..."
+        />
+      )}
+
       {refreshProgress > 0 && (
         <SimpleLoadingOverlay 
           type="processing"
@@ -1533,7 +1574,7 @@ const tabCounts = useMemo(() => {
   );
 }
 
-  
+
 // ─────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────

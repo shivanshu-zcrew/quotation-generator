@@ -9,11 +9,15 @@ export const useAuth = () => {
   const handleLogin = useAppStore((state) => state.handleLogin);
   const handleRegister = useAppStore((state) => state.handleRegister);
   const handleLogout = useAppStore((state) => state.handleLogout);
-  const loginLoading = useAppStore((state) => state.operationInProgress.login);
-  const registerLoading = useAppStore((state) => state.operationInProgress.register);
+  const loginLoading = useAppStore((state) => state.operationInProgress?.login);
+  const registerLoading = useAppStore((state) => state.operationInProgress?.register);
+  
   return useMemo(() => ({
-    user, handleLogin, handleRegister, handleLogout,
-    isLoading: loginLoading || registerLoading,
+    user, 
+    handleLogin, 
+    handleRegister, 
+    handleLogout,
+    isLoading: loginLoading === true || registerLoading === true,
   }), [user, handleLogin, handleRegister, handleLogout, loginLoading, registerLoading]);
 };
 
@@ -22,13 +26,17 @@ export const useCustomers = () => {
   const addCustomer = useAppStore((state) => state.addCustomer);
   const updateCustomer = useAppStore((state) => state.updateCustomer);
   const deleteCustomer = useAppStore((state) => state.deleteCustomer);
-  const addLoading = useAppStore((state) => state.operationInProgress.addCustomer);
-  const updateLoading = useAppStore((state) => state.operationInProgress.updateCustomer);
-  const deleteLoading = useAppStore((state) => state.operationInProgress.deleteCustomer);
-  return {
-    customers, addCustomer, updateCustomer, deleteCustomer,
-    isLoading: addLoading || updateLoading || deleteLoading,
-  };
+  const addLoading = useAppStore((state) => state.operationInProgress?.addCustomer);
+  const updateLoading = useAppStore((state) => state.operationInProgress?.updateCustomer);
+  const deleteLoading = useAppStore((state) => state.operationInProgress?.deleteCustomer);
+  
+  return useMemo(() => ({
+    customers, 
+    addCustomer, 
+    updateCustomer, 
+    deleteCustomer,
+    isLoading: addLoading === true || updateLoading === true || deleteLoading === true,
+  }), [customers, addCustomer, updateCustomer, deleteCustomer, addLoading, updateLoading, deleteLoading]);
 };
 
 export const useItems = () => {
@@ -36,9 +44,14 @@ export const useItems = () => {
   const addItem = useAppStore((state) => state.addItem);
   const updateItem = useAppStore((state) => state.updateItem);
   const deleteItem = useAppStore((state) => state.deleteItem);
-  const addLoading = useAppStore((state) => state.operationInProgress.addItem);
+  const addLoading = useAppStore((state) => state.operationInProgress?.addItem);
+  
   return useMemo(() => ({
-    items, addItem, updateItem, deleteItem, isLoading: addLoading,
+    items, 
+    addItem, 
+    updateItem, 
+    deleteItem, 
+    isLoading: addLoading === true,
   }), [items, addItem, updateItem, deleteItem, addLoading]);
 };
 
@@ -49,11 +62,19 @@ export const useQuotations = () => {
   const deleteQuotation = useAppStore((state) => state.deleteQuotation);
   const approveQuotation = useAppStore((state) => state.approveQuotation);
   const rejectQuotation = useAppStore((state) => state.rejectQuotation);
-  const addLoading = useAppStore((state) => state.operationInProgress.addQuotation);
+  const awardQuotation = useAppStore((state) => state.awardQuotation);
+  const addLoading = useAppStore((state) => state.operationInProgress?.addQuotation);
+  
   return useMemo(() => ({
-    quotations, addQuotation, updateQuotation, deleteQuotation,
-    approveQuotation, rejectQuotation, isLoading: addLoading,
-  }), [quotations, addQuotation, updateQuotation, deleteQuotation, approveQuotation, rejectQuotation, addLoading]);
+    quotations, 
+    addQuotation, 
+    updateQuotation, 
+    deleteQuotation,
+    approveQuotation, 
+    rejectQuotation,
+    awardQuotation,
+    isLoading: addLoading === true,
+  }), [quotations, addQuotation, updateQuotation, deleteQuotation, approveQuotation, rejectQuotation, awardQuotation, addLoading]);
 };
 
 export const useAppState = () => {
@@ -61,22 +82,37 @@ export const useAppState = () => {
   const loadError = useAppStore((state) => state.loadError);
   const lastError = useAppStore((state) => state.lastError);
   const clearError = useAppStore((state) => state.clearError);
-  return useMemo(() => ({ loading, loadError, lastError, clearError }), [loading, loadError, lastError, clearError]);
+  const initialized = useAppStore((state) => state.initialized);
+  
+  return useMemo(() => ({ 
+    loading, 
+    loadError, 
+    lastError, 
+    clearError,
+    initialized 
+  }), [loading, loadError, lastError, clearError, initialized]);
 };
 
-export const useIsOperationInProgress = (key) => useAppStore((state) => state.operationInProgress[key] === true);
+export const useIsOperationInProgress = (key) => {
+  const progress = useAppStore((state) => state.operationInProgress?.[key]);
+  return progress === true;
+};
 
 export const useInitializeApp = () => {
   const user = useAppStore((state) => state.user);
+  const initialized = useAppStore((state) => state.initialized);
   const fetchAllData = useAppStore((state) => state.fetchAllData);
-  const initialized = useRef(false);
+  const hasInitializedRef = useRef(false);
+  
   useEffect(() => {
-    if (user && !initialized.current) {
-      initialized.current = true;
+    if (user && !hasInitializedRef.current && !initialized) {
+      hasInitializedRef.current = true;
       fetchAllData();
     }
-    if (!user) initialized.current = false;
-  }, [user, fetchAllData]);
+    if (!user) {
+      hasInitializedRef.current = false;
+    }
+  }, [user, fetchAllData, initialized]);
 };
 
 export const useAppStoreAll = () => useAppStore();
@@ -84,33 +120,58 @@ export const useAppStoreAll = () => useAppStore();
 export const useRetryDataLoad = () => {
   const fetchAllData = useAppStore((state) => state.fetchAllData);
   const loading = useAppStore((state) => state.loading);
-  return useMemo(() => ({ retry: fetchAllData, isRetrying: loading }), [fetchAllData, loading]);
+  const initialized = useAppStore((state) => state.initialized);
+  
+  const retry = useCallback(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+  
+  return useMemo(() => ({ 
+    retry, 
+    isRetrying: loading,
+    initialized 
+  }), [retry, loading, initialized]);
 };
 
 export const useUserRole = () => {
   const user = useAppStore((state) => state.user);
+  const selectedCompany = useAppStore((state) => state.selectedCompany);
+  
   return useMemo(() => ({
-    user, isAdmin: user?.role === 'admin', isCustomer: user?.role === 'customer', isUser: user?.role === 'user',
-  }), [user]);
+    user, 
+    isAdmin: user?.role === 'admin', 
+    isCustomer: user?.role === 'customer', 
+    isUser: user?.role === 'user',
+    isOpsManager: user?.role === 'ops_manager',
+    selectedCompany
+  }), [user, selectedCompany]);
 };
 
 export const useCustomersList = () => {
   const customers = useAppStore((state) => state.customers);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
+  
   const filteredCustomers = useMemo(() => {
-    if (!selectedCompany) return customers;
+    if (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL') {
+      return customers;
+    }
     return customers.filter(c => c.companyId === selectedCompany || c.companyId?._id === selectedCompany);
   }, [customers, selectedCompany]);
+  
   return filteredCustomers;
 };
 
 export const useItemsList = () => {
   const items = useAppStore((state) => state.items);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
+  
   const filteredItems = useMemo(() => {
-    if (!selectedCompany) return items;
+    if (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL') {
+      return items;
+    }
     return items.filter(i => i.companyId === selectedCompany || i.companyId?._id === selectedCompany);
   }, [items, selectedCompany]);
+  
   return filteredItems;
 };
 
@@ -125,123 +186,116 @@ export const useAdminStats = () => {
   const fetchAdminStats = useAppStore((s) => s.fetchAdminStats);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const user = useAppStore((s) => s.user);
-
-  const hasFetchedRef = useRef(false);
-  const prevCompanyRef = useRef(null);
-
-  const refresh = useCallback(async (force = false) => {
+  const initialized = useAppStore((s) => s.initialized);
+  
+  // Track if we've fetched for this company
+  const fetchedForCompanyRef = useRef(null);
+  const initialFetchDone = useRef(false);
+  
+  const refresh = useCallback(async () => {
     if (!user || user.role !== 'admin') return;
-    if (!selectedCompany) return;
-
-    if (!force && hasFetchedRef.current && prevCompanyRef.current === selectedCompany) {
-      return;
-    }
-
-    prevCompanyRef.current = selectedCompany;
-    hasFetchedRef.current = true;
-
-    await fetchAdminStats(selectedCompany);
+    
+    const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
+    
+    if (!companyIdParam && selectedCompany !== 'all' && selectedCompany !== 'ALL') return;
+    
+    fetchedForCompanyRef.current = selectedCompany;
+    await fetchAdminStats(companyIdParam);
   }, [fetchAdminStats, selectedCompany, user]);
-
-  // Reset guard when company changes
+  
+  // Only fetch if store hasn't already loaded stats for this company selection
   useEffect(() => {
-    if (prevCompanyRef.current !== selectedCompany) {
-      hasFetchedRef.current = false;
-      prevCompanyRef.current = selectedCompany;
-    }
-  }, [selectedCompany]);
-
-  // Auto-fetch ONLY if not already fetched for this company
-  useEffect(() => {
-    if (selectedCompany && user?.role === 'admin' && !hasFetchedRef.current) {
-      refresh();
-    }
-  }, [selectedCompany, user?.role, refresh]);
-
-  const rawTotalCustomers = adminStats?.stats?.totalCustomers || 0;
-  const rawTotalQuotations = adminStats?.stats?.totalQuotations || 0;
-  const rawTotalRevenue = adminStats?.stats?.totalRevenue || 0;
-  const rawAwardedValue = adminStats?.stats?.awardedValue || 0;
-
+    if (!initialized || user?.role !== 'admin') return;
+    if (fetchedForCompanyRef.current === selectedCompany) return;
+    if (adminStats && adminStats._selectionId === selectedCompany) return;
+    
+    refresh();
+    initialFetchDone.current = true;
+  }, [initialized, user?.role, selectedCompany, adminStats, refresh]);
+  
+  // Safely extract stats with fallbacks
+  const rawTotalCustomers = adminStats?.stats?.totalCustomers ?? adminStats?.totalCustomers ?? 0;
+  const rawTotalQuotations = adminStats?.stats?.totalQuotations ?? adminStats?.totalQuotations ?? 0;
+  const rawTotalRevenue = adminStats?.stats?.totalRevenue ?? adminStats?.totalRevenue ?? 0;
+  const rawAwardedValue = adminStats?.stats?.awardedValue ?? adminStats?.awardedValue ?? 0;
+  
+  // Determine if we're still loading (no stats and not initialized or still fetching)
+  const isLoading = statsLoading || (!adminStats && !initialized);
+  
   return {
     stats: adminStats,
-    loading: statsLoading,
+    loading: isLoading,
     refresh,
-    rawTotalCustomers,
-    rawTotalQuotations,
-    rawTotalRevenue,
-    rawAwardedValue,
     totalQuotations: rawTotalQuotations,
-    actionRequired: adminStats?.stats?.actionRequired || 0,
-    approved: adminStats?.stats?.approved || 0,
-    awarded: adminStats?.stats?.awarded || 0,
-    notAwarded: adminStats?.stats?.notAwarded || 0,
+    actionRequired: adminStats?.stats?.actionRequired ?? adminStats?.actionRequired ?? 0,
+    approved: adminStats?.stats?.approved ?? adminStats?.approved ?? 0,
+    awarded: adminStats?.stats?.awarded ?? adminStats?.awarded ?? 0,
+    notAwarded: adminStats?.stats?.notAwarded ?? adminStats?.notAwarded ?? 0,
     totalRevenue: rawTotalRevenue,
     awardedValue: rawAwardedValue,
-    conversionRate: adminStats?.stats?.conversionRate || 0,
-    rejected: adminStats?.stats?.rejected || 0,
-    conversionDetails: adminStats?.stats?.conversionRate || 0,
-    statusCounts: adminStats?.stats?.statusCounts || {},
+    conversionRate: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
+    rejected: adminStats?.stats?.rejected ?? adminStats?.rejected ?? 0,
+    conversionDetails: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
+    statusCounts: adminStats?.stats?.statusCounts ?? adminStats?.statusCounts ?? {},
     totalApprovedValue: rawTotalRevenue,
     totalAwardedValue: rawAwardedValue,
     totalCustomers: rawTotalCustomers,
-    formattedTotalCustomers: formatLargeNumber(rawTotalCustomers),
-    formattedTotalRevenue: formatCurrency(rawTotalRevenue, 'AED'),
-    formattedAwardedValue: formatCurrency(rawAwardedValue, 'AED'),
-    formattedTotalQuotations: formatLargeNumber(rawTotalQuotations),
   };
 };
 
-// ✅ Updated useOpsStats with tabCounts
+// ✅ Fixed useOpsStats - now uses store instead of local state
 export const useOpsStats = () => {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const opsStats = useAppStore((s) => s.opsStats);
+  const statsLoading = useAppStore((s) => s.statsLoading);
+  const fetchOpsStats = useAppStore((s) => s.fetchOpsStats);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
-  const addToast = useToast().addToast;
+  const user = useAppStore((s) => s.user);
+  const initialized = useAppStore((s) => s.initialized);
+  
+  // Track if we've fetched for this company
+  const fetchedForCompanyRef = useRef(null);
   
   const fetchStats = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = selectedCompany ? { companyId: selectedCompany } : {};
-      const response = await opsAPI.getOpsStats(params);
-      const statsData = response.data.stats;
-      setStats(statsData);
-    } catch (error) {
-      console.error('Error fetching ops stats:', error);
-      addToast?.('Failed to load stats', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedCompany, addToast]);
+    if (!user || user.role !== 'ops_manager') return;
+    if (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL') return;
+    
+    fetchedForCompanyRef.current = selectedCompany;
+    await fetchOpsStats(selectedCompany);
+  }, [fetchOpsStats, selectedCompany, user]);
   
+  // Only fetch if store hasn't already loaded stats for this company
   useEffect(() => {
+    if (!initialized || user?.role !== 'ops_manager') return;
+    if (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL') return;
+    if (fetchedForCompanyRef.current === selectedCompany) return;
+    if (opsStats && opsStats._companyId === selectedCompany) return;
+    
     fetchStats();
-  }, [fetchStats]);
+  }, [initialized, user?.role, selectedCompany, opsStats, fetchStats]);
   
-  // ✅ Return tabCounts from stats
-  const tabCounts = stats?.tabCounts || {
-    all: stats?.totalQuotations || 0,
-    pending: stats?.pendingReview || 0,
-    ops_approved: stats?.awaitingAdmin || 0,
-    ops_rejected: stats?.returnedByMe || 0,
-    rejected: stats?.rejectedByAdmin || 0,
-    approved: stats?.approved || 0,
-    awarded: stats?.awarded || 0,
+  const tabCounts = opsStats?.tabCounts || {
+    all: opsStats?.totalQuotations || 0,
+    pending: opsStats?.pendingReview || 0,
+    ops_approved: opsStats?.awaitingAdmin || 0,
+    ops_rejected: opsStats?.returnedByMe || 0,
+    rejected: opsStats?.rejectedByAdmin || 0,
+    approved: opsStats?.approved || 0,
+    awarded: opsStats?.awarded || 0,
   };
   
   return {
-    stats,
-    loading,
+    stats: opsStats,
+    loading: statsLoading,
     refresh: fetchStats,
-    totalQuotations: stats?.totalQuotations || 0,
-    pendingReview: stats?.pendingReview || 0,
-    awaitingAdmin: stats?.awaitingAdmin || 0,
-    returnedByMe: stats?.returnedByMe || 0,
-    rejectedByAdmin: stats?.rejectedByAdmin || 0,
-    approved: stats?.approved || 0,
-    awarded: stats?.awarded || 0,
-    totalValue: stats?.totalValue || 0,
-    tabCounts, // ✅ Added tabCounts
+    totalQuotations: opsStats?.totalQuotations || 0,
+    pendingReview: opsStats?.pendingReview || 0,
+    awaitingAdmin: opsStats?.awaitingAdmin || 0,
+    returnedByMe: opsStats?.returnedByMe || 0,
+    rejectedByAdmin: opsStats?.rejectedByAdmin || 0,
+    approved: opsStats?.approved || 0,
+    awarded: opsStats?.awarded || 0,
+    totalValue: opsStats?.totalValue || 0,
+    tabCounts,
   };
 };
 
@@ -249,7 +303,12 @@ export const useItemSync = () => {
   const syncItems = useAppStore((state) => state.syncItems);
   const refreshItems = useAppStore((state) => state.refreshItems);
   const isSyncing = useAppStore((state) => state.operationInProgress?.syncItems === true);
-  return { syncItems, refreshItems, isSyncing };
+  
+  return useMemo(() => ({ 
+    syncItems, 
+    refreshItems, 
+    isSyncing 
+  }), [syncItems, refreshItems, isSyncing]);
 };
 
 export const useItemsWithSync = () => {
@@ -259,7 +318,15 @@ export const useItemsWithSync = () => {
   const syncItems = useAppStore((state) => state.syncItems);
   const refreshItems = useAppStore((state) => state.refreshItems);
   const isSyncing = useAppStore((state) => state.operationInProgress?.syncItems === true);
-  return { items, loading, error, syncItems, refreshItems, isSyncing };
+  
+  return useMemo(() => ({ 
+    items, 
+    loading, 
+    error, 
+    syncItems, 
+    refreshItems, 
+    isSyncing 
+  }), [items, loading, error, syncItems, refreshItems, isSyncing]);
 };
 
 export const useCustomerSync = () => {
@@ -271,7 +338,7 @@ export const useCustomerSync = () => {
   const customerSyncStatus = useAppStore((state) => state.customerSyncStatus);
   const pendingSyncCustomers = useAppStore((state) => state.pendingSyncCustomers);
   
-  return {
+  return useMemo(() => ({
     syncCustomersFromZoho,
     getCustomerSyncStatus,
     getPendingSyncCustomers,
@@ -279,5 +346,50 @@ export const useCustomerSync = () => {
     isSyncing,
     customerSyncStatus,
     pendingSyncCustomers
-  };
+  }), [
+    syncCustomersFromZoho,
+    getCustomerSyncStatus,
+    getPendingSyncCustomers,
+    forceSyncCustomer,
+    isSyncing,
+    customerSyncStatus,
+    pendingSyncCustomers
+  ]);
+};
+
+// ✅ New hook for company context
+export const useCompanyContext = () => {
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+  const companies = useAppStore(s => s.companies);
+  const setSelectedCompany = useAppStore(s => s.setSelectedCompany);
+  const selectedCurrency = useAppStore(s => s.selectedCurrency);
+  const setSelectedCurrency = useAppStore(s => s.setSelectedCurrency);
+  const isSwitchingCompany = useAppStore(s => s._switchingCompany);
+
+  const currentCompany = useMemo(() => {
+    if (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL') return null;
+    return companies.find(c => c._id === selectedCompany || c.code === selectedCompany);
+  }, [companies, selectedCompany]);
+
+  return useMemo(() => ({
+    selectedCompany,
+    currentCompany,
+    companies,
+    setSelectedCompany,
+    selectedCurrency,
+    setSelectedCurrency,
+    hasCompany: !!selectedCompany && selectedCompany !== 'all' && selectedCompany !== 'ALL',
+    companyName: currentCompany?.name || '',
+    companyCode: currentCompany?.code || '',
+    companyCurrency: currentCompany?.baseCurrency || selectedCurrency || 'AED',
+    isSwitchingCompany,
+  }), [
+    selectedCompany,
+    currentCompany,
+    companies,
+    setSelectedCompany,
+    selectedCurrency,
+    setSelectedCurrency,
+    isSwitchingCompany,
+  ]);
 };

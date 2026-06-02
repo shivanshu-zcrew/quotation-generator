@@ -542,7 +542,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       });
   
       const quotation = {
-        quotationNumber,
+        quotationNumber: quotationNumber, 
         companyId: typeof selectedCompany === 'object' ? selectedCompany._id : selectedCompany,
         currencyCode: selectedCurrency,
         customerId: customer._id,

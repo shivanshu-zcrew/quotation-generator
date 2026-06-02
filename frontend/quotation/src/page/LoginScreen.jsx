@@ -1,37 +1,5 @@
 import React, { useState, useEffect } from 'react';
-
-// ─────────────────────────────────────────────────────────────
-// Role definitions
-// ─────────────────────────────────────────────────────────────
-const ROLES = [
-  {
-    key:         'user',
-    label:       'Creator',
-    sublabel:    'Create & manage quotations',
-    icon:        '✦',
-    accent:      '#00d4aa',
-    accentDim:   'rgba(0,212,170,0.12)',
-    accentBorder:'rgba(0,212,170,0.35)',
-  },
-  {
-    key:         'ops_manager',
-    label:       'Operations',
-    sublabel:    'Review & forward quotations',
-    icon:        '◈',
-    accent:      '#f59e0b',
-    accentDim:   'rgba(245,158,11,0.12)',
-    accentBorder:'rgba(245,158,11,0.35)',
-  },
-  {
-    key:         'admin',
-    label:       'Admin',
-    sublabel:    'Final approval & oversight',
-    icon:        '◆',
-    accent:      '#818cf8',
-    accentBorder:'rgba(129,140,248,0.35)',
-    accentDim:   'rgba(129,140,248,0.12)',
-  },
-];
+import { authAPI } from '../services/api';
 
 // ─────────────────────────────────────────────────────────────
 // Inject font + keyframes once
@@ -61,12 +29,6 @@ styleEl.textContent = `
 
   .login-card   { animation: loginFadeUp 0.45s cubic-bezier(.16,1,.3,1) both; }
   .login-shake  { animation: loginShake 0.4s ease; }
-
-  .role-card {
-    transition: border-color 0.2s, background 0.2s, transform 0.15s;
-    cursor: pointer;
-  }
-  .role-card:hover { transform: translateY(-2px); }
 
   .login-input {
     transition: border-color 0.2s, box-shadow 0.2s;
@@ -99,22 +61,12 @@ if (!document.head.querySelector('[data-login-styles]')) {
 // Component
 // ─────────────────────────────────────────────────────────────
 export default function LoginScreen({ onLogin, onNavigate }) {
-  const [roleKey,      setRoleKey]      = useState('user');
   const [email,        setEmail]        = useState('');
   const [password,     setPassword]     = useState('');
   const [error,        setError]        = useState('');
   const [loading,      setLoading]      = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [shake,        setShake]        = useState(false);
-
-  const role = ROLES.find((r) => r.key === roleKey);
-
-  // Clear fields when role switches
-  useEffect(() => {
-    setEmail('');
-    setPassword('');
-    setError('');
-  }, [roleKey]);
 
   // Trigger shake on error
   useEffect(() => {
@@ -139,12 +91,53 @@ export default function LoginScreen({ onLogin, onNavigate }) {
     }
 
     setLoading(true);
-    const result = await onLogin(email, password);
-    if (!result.success) {
-      setError(result.error || 'Invalid credentials.');
+
+    try {
+      const response = await authAPI.login({ email, password });
+
+      if (!response || !response.data) {
+        throw new Error('No response from server');
+      }
+
+      const userData = response.data.user || response.data;
+      const token = response.data.token || userData.token;
+
+      if (!token || !userData.role) {
+        throw new Error('Invalid server response');
+      }
+
+      // Store auth data
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify({
+        _id: userData._id || userData.id,
+        name: userData.name,
+        email: userData.email,
+        phone: userData.phone,
+        role: userData.role,
+        token,
+        companyId: userData.companyId || userData.assignedCompany || null,
+      }));
+
+      // Call parent onLogin
+      if (onLogin) {
+        await onLogin(email, password);
+      }
+      
+    } catch (err) {
+      console.error('Login error:', err);
+      
+      let errorMessage = 'Invalid credentials. Please try again.';
+      
+      if (err.response?.status === 401) {
+        errorMessage = 'Invalid email or password.';
+      } else if (err.response?.data?.message) {
+        errorMessage = err.response.data.message;
+      }
+      
+      setError(errorMessage);
+    } finally {
       setLoading(false);
     }
-    // On success App.jsx handles redirect
   };
 
   return (
@@ -152,63 +145,32 @@ export default function LoginScreen({ onLogin, onNavigate }) {
 
       {/* ── Geometric background ── */}
       <div style={S.bgGrid} aria-hidden />
-      <div style={{ ...S.bgGlow, background: `radial-gradient(ellipse 600px 400px at 60% 40%, ${role.accentDim} 0%, transparent 70%)` }} aria-hidden />
+      <div style={S.bgGlow} aria-hidden />
 
       {/* ── Card ── */}
       <div className={`login-card ${shake ? 'login-shake' : ''}`} style={S.card}>
 
-        {/* Wordmark */}
-        <div style={S.wordmark}>
-          <span style={{ ...S.wordmarkDot, backgroundColor: role.accent }} />
-          <span style={S.wordmarkText}>QuotationOS</span>
+        {/* Logo / Wordmark */}
+        <div style={S.logoSection}>
+          <div style={S.logoIcon}>
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <rect width="32" height="32" rx="8" fill="#00d4aa" fillOpacity="0.15"/>
+              <path d="M10 16L14 12L22 20L18 24L10 16Z" fill="#00d4aa" stroke="#00d4aa" strokeWidth="1.5"/>
+              <path d="M14 12L16 10L24 18L22 20L14 12Z" fill="#00d4aa" fillOpacity="0.5" stroke="#00d4aa" strokeWidth="1.5"/>
+            </svg>
+          </div>
+          <div style={S.wordmark}>
+            <span style={S.wordmarkText}>QuotationOS</span>
+          </div>
         </div>
 
         {/* Heading */}
         <div style={S.heading}>
-          <h1 style={S.h1}>Sign in</h1>
-          <p style={S.sub}>Choose your role and enter your credentials</p>
-        </div>
-
-        {/* Role selector */}
-        <div style={S.roleGrid}>
-          {ROLES.map((r) => {
-            const active = r.key === roleKey;
-            return (
-              <div
-                key={r.key}
-                className="role-card"
-                onClick={() => setRoleKey(r.key)}
-                style={{
-                  ...S.roleCard,
-                  borderColor:     active ? r.accentBorder : 'rgba(255,255,255,0.08)',
-                  backgroundColor: active ? r.accentDim    : 'rgba(255,255,255,0.03)',
-                  boxShadow:       active ? `0 0 0 1px ${r.accentBorder}` : 'none',
-                }}
-              >
-                <span style={{ ...S.roleIcon, color: active ? r.accent : '#475569' }}>
-                  {r.icon}
-                </span>
-                <span style={{ ...S.roleLabel, color: active ? '#f1f5f9' : '#64748b' }}>
-                  {r.label}
-                </span>
-                <span style={{ ...S.roleSub, color: active ? '#94a3b8' : '#334155' }}>
-                  {r.sublabel}
-                </span>
-                {active && (
-                  <span style={{ ...S.roleActiveDot, backgroundColor: r.accent }} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Divider */}
-        <div style={S.divider}>
-          <span style={S.dividerLine} />
-          <span style={{ ...S.dividerLabel, color: role.accent }}>
-            {role.label} login
-          </span>
-          <span style={S.dividerLine} />
+        <h1 style={S.h1}>
+     Sign in 
+    
+  </h1>
+  <p style={S.sub}>Access your quotation dashboard</p>
         </div>
 
         {/* Error */}
@@ -224,21 +186,27 @@ export default function LoginScreen({ onLogin, onNavigate }) {
 
           {/* Email */}
           <div style={S.fieldGroup}>
-            <label style={S.label}>Email</label>
+            <label style={S.label}>Email address</label>
             <input
               className="login-input"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
+              placeholder="name@company.com"
               disabled={loading}
               autoFocus
               style={{
                 ...S.input,
                 borderColor: error ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.1)',
               }}
-              onFocus={(e) => { e.target.style.borderColor = role.accentBorder; e.target.style.boxShadow = `0 0 0 3px ${role.accentDim}`; }}
-              onBlur={(e)  => { e.target.style.borderColor = error ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.1)'; e.target.style.boxShadow = 'none'; }}
+              onFocus={(e) => { 
+                e.target.style.borderColor = '#00d4aa'; 
+                e.target.style.boxShadow = '0 0 0 3px rgba(0,212,170,0.12)'; 
+              }}
+              onBlur={(e) => { 
+                e.target.style.borderColor = error ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.1)'; 
+                e.target.style.boxShadow = 'none'; 
+              }}
             />
           </div>
 
@@ -260,8 +228,14 @@ export default function LoginScreen({ onLogin, onNavigate }) {
                   fontFamily: showPassword ? "'DM Mono', monospace" : 'inherit',
                   letterSpacing: showPassword ? '0.05em' : '0.15em',
                 }}
-                onFocus={(e) => { e.target.style.borderColor = role.accentBorder; e.target.style.boxShadow = `0 0 0 3px ${role.accentDim}`; }}
-                onBlur={(e)  => { e.target.style.borderColor = error ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.1)'; e.target.style.boxShadow = 'none'; }}
+                onFocus={(e) => { 
+                  e.target.style.borderColor = '#00d4aa'; 
+                  e.target.style.boxShadow = '0 0 0 3px rgba(0,212,170,0.12)'; 
+                }}
+                onBlur={(e) => { 
+                  e.target.style.borderColor = error ? 'rgba(239,68,68,0.5)' : 'rgba(255,255,255,0.1)'; 
+                  e.target.style.boxShadow = 'none'; 
+                }}
               />
               <button
                 type="button"
@@ -271,12 +245,10 @@ export default function LoginScreen({ onLogin, onNavigate }) {
                 tabIndex={-1}
               >
                 {showPassword ? (
-                  // Eye-off
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
                     <path strokeLinecap="round" d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22"/>
                   </svg>
                 ) : (
-                  // Eye
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
                     <path strokeLinecap="round" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                     <circle cx="12" cy="12" r="3"/>
@@ -286,6 +258,9 @@ export default function LoginScreen({ onLogin, onNavigate }) {
             </div>
           </div>
 
+          {/* Forgot password link */}
+           
+
           {/* Submit */}
           <button
             type="submit"
@@ -293,19 +268,18 @@ export default function LoginScreen({ onLogin, onNavigate }) {
             disabled={loading}
             style={{
               ...S.submitBtn,
-              backgroundColor: role.accent,
               opacity: loading ? 0.7 : 1,
-              cursor:  loading ? 'not-allowed' : 'pointer',
+              cursor: loading ? 'not-allowed' : 'pointer',
             }}
           >
             {loading ? (
               <span style={S.btnInner}>
                 <span style={S.spinnerRing} />
-                Signing in…
+                Signing in...
               </span>
             ) : (
               <span style={S.btnInner}>
-                Continue as {role.label}
+                Sign in
                 <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7"/>
                 </svg>
@@ -316,9 +290,12 @@ export default function LoginScreen({ onLogin, onNavigate }) {
         </form>
 
         {/* Footer */}
-        <p style={S.cardFooter}>
-          © {new Date().getFullYear()} Mega Repairing Machinery Equipment LLC
-        </p>
+        <div style={S.footer}>
+          <p style={S.copyright}>
+            © {new Date().getFullYear()} Mega Repairing Machinery Equipment LLC
+          </p>
+           
+        </div>
       </div>
     </div>
   );
@@ -340,13 +317,12 @@ const S = {
     overflow: 'hidden',
   },
 
-  // Background
   bgGrid: {
     position: 'absolute',
     inset: 0,
     backgroundImage: `
-      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)
     `,
     backgroundSize: '40px 40px',
     pointerEvents: 'none',
@@ -354,128 +330,73 @@ const S = {
   bgGlow: {
     position: 'absolute',
     inset: 0,
+    background: 'radial-gradient(ellipse 600px 400px at 50% 40%, rgba(0,212,170,0.08) 0%, transparent 70%)',
     pointerEvents: 'none',
-    transition: 'background 0.5s ease',
   },
 
-  // Card
   card: {
     width: '100%',
-    maxWidth: '460px',
+    maxWidth: '440px',
     backgroundColor: '#0e1621',
     border: '1px solid rgba(255,255,255,0.07)',
-    borderRadius: '1.25rem',
-    padding: '2.5rem 2.25rem 2rem',
+    borderRadius: '1.5rem',
+    padding: '2.5rem 2rem 2rem',
     boxShadow: '0 32px 80px rgba(0,0,0,0.6)',
     position: 'relative',
     zIndex: 10,
   },
 
-  // Wordmark
-  wordmark: {
+  logoSection: {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.5rem',
+    gap: '0.75rem',
     marginBottom: '2rem',
   },
-  wordmarkDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    display: 'inline-block',
-    transition: 'background-color 0.3s',
+  logoIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wordmark: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '0.5rem',
+    flexWrap: 'wrap',
   },
   wordmarkText: {
-    fontSize: '0.78rem',
+    fontSize: '1rem',
     fontWeight: '700',
-    color: '#475569',
-    letterSpacing: '0.12em',
-    textTransform: 'uppercase',
+    color: '#f1f5f9',
+    letterSpacing: '-0.02em',
+  },
+  wordmarkBadge: {
+    fontSize: '0.65rem',
+    fontWeight: '500',
+    color: '#00d4aa',
+    backgroundColor: 'rgba(0,212,170,0.12)',
+    padding: '0.2rem 0.4rem',
+    borderRadius: '0.25rem',
+    letterSpacing: '0.02em',
   },
 
-  // Heading
-  heading: { marginBottom: '1.75rem' },
+  heading: { 
+    marginBottom: '2rem',
+  },
   h1: {
-    fontSize: '1.8rem',
+    fontSize: '1.75rem',
     fontWeight: '800',
     color: '#f1f5f9',
-    margin: '0 0 0.35rem',
+    margin: '0 0 0.5rem',
     letterSpacing: '-0.03em',
-    lineHeight: 1.1,
+    lineHeight: 1.2,
   },
   sub: {
     fontSize: '0.85rem',
-    color: '#475569',
+    color: '#64748b',
     margin: 0,
     fontWeight: '400',
   },
 
-  // Role grid
-  roleGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
-    gap: '0.6rem',
-    marginBottom: '1.5rem',
-  },
-  roleCard: {
-    position: 'relative',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '0.3rem',
-    padding: '0.9rem 0.5rem 0.75rem',
-    border: '1px solid',
-    borderRadius: '0.75rem',
-    userSelect: 'none',
-  },
-  roleIcon: {
-    fontSize: '1.3rem',
-    lineHeight: 1,
-    transition: 'color 0.2s',
-  },
-  roleLabel: {
-    fontSize: '0.8rem',
-    fontWeight: '700',
-    letterSpacing: '0.01em',
-    transition: 'color 0.2s',
-  },
-  roleSub: {
-    fontSize: '0.64rem',
-    textAlign: 'center',
-    lineHeight: 1.3,
-    transition: 'color 0.2s',
-  },
-  roleActiveDot: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-  },
-
-  // Divider
-  divider: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.75rem',
-    marginBottom: '1.25rem',
-  },
-  dividerLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-  },
-  dividerLabel: {
-    fontSize: '0.72rem',
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: '0.1em',
-    whiteSpace: 'nowrap',
-    transition: 'color 0.3s',
-  },
-
-  // Error
   errorBox: {
     display: 'flex',
     alignItems: 'center',
@@ -487,7 +408,7 @@ const S = {
     color: '#fca5a5',
     fontSize: '0.82rem',
     fontWeight: '500',
-    marginBottom: '1.1rem',
+    marginBottom: '1.5rem',
   },
   errorDot: {
     width: 6,
@@ -498,21 +419,20 @@ const S = {
     animation: 'loginPulse 1.2s ease infinite',
   },
 
-  // Form
   form: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '1rem',
+    gap: '1.25rem',
   },
   fieldGroup: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '0.4rem',
+    gap: '0.5rem',
   },
   label: {
-    fontSize: '0.78rem',
+    fontSize: '0.75rem',
     fontWeight: '600',
-    color: '#64748b',
+    color: '#94a3b8',
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
   },
@@ -527,7 +447,6 @@ const S = {
     fontFamily: 'inherit',
   },
 
-  // Password toggle
   pwToggle: {
     position: 'absolute',
     right: '0.75rem',
@@ -536,13 +455,26 @@ const S = {
     background: 'none',
     border: 'none',
     cursor: 'pointer',
-    color: '#334155',
+    color: '#475569',
     padding: '0.25rem',
     display: 'flex',
     alignItems: 'center',
   },
 
-  // Submit
+  forgotRow: {
+    textAlign: 'right',
+    marginTop: '-0.25rem',
+  },
+  forgotLink: {
+    fontSize: '0.75rem',
+    color: '#64748b',
+    textDecoration: 'none',
+    transition: 'color 0.2s',
+    ':hover': {
+      color: '#00d4aa',
+    },
+  },
+
   submitBtn: {
     width: '100%',
     padding: '0.85rem',
@@ -551,8 +483,9 @@ const S = {
     fontSize: '0.9rem',
     fontWeight: '700',
     color: '#080d14',
-    marginTop: '0.5rem',
+    marginTop: '0.25rem',
     letterSpacing: '0.01em',
+    background: 'linear-gradient(135deg, #00d4aa 0%, #00b894 100%)',
   },
   btnInner: {
     display: 'flex',
@@ -571,12 +504,42 @@ const S = {
     flexShrink: 0,
   },
 
-  // Card footer
-  cardFooter: {
-    marginTop: '2rem',
+  footer: {
+    marginTop: '2.5rem',
     textAlign: 'center',
+  },
+  copyright: {
     fontSize: '0.7rem',
     color: '#1e293b',
-    letterSpacing: '0.03em',
+    margin: '0 0 0.75rem 0',
+    letterSpacing: '0.02em',
+  },
+  footerLinks: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '0.75rem',
+    flexWrap: 'wrap',
+  },
+  footerLink: {
+    fontSize: '0.7rem',
+    color: '#334155',
+    textDecoration: 'none',
+    transition: 'color 0.2s',
+    ':hover': {
+      color: '#64748b',
+    },
+  },
+  footerDivider: {
+    fontSize: '0.7rem',
+    color: '#1e293b',
   },
 };
+
+// Add hover styles dynamically
+const styleSheet = document.createElement("style");
+styleSheet.textContent = `
+  a:hover { color: #00d4aa !important; }
+  .login-btn:hover:not(:disabled) { background: linear-gradient(135deg, #00e0b5 0%, #00c9a0 100%) !important; }
+`;
+document.head.appendChild(styleSheet);

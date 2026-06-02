@@ -46,22 +46,107 @@ export const Toast = React.memo(({ toasts, onDismiss }) => {
 });
 Toast.displayName = 'Toast';
 
-export const StatCard = React.memo(({ label, value, sub, accent, iconBg, iconColor, Icon, loading }) => (
-  <div style={{ backgroundColor:'#fff', borderRadius:14, padding:'1.25rem 1.5rem', boxShadow:'0 1px 4px rgba(0,0,0,0.07)', borderLeft:`4px solid ${accent}`, display:'flex', alignItems:'center', gap:'1rem' }}>
-    <div style={{ width:46, height:46, borderRadius:12, backgroundColor:iconBg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-      <Icon size={22} color={iconColor}/>
+export const StatCard = React.memo(({ label, value, sub, accent, iconBg, iconColor, Icon, loading }) => {
+  // When loading - show FULL CARD shimmer (entire card is a skeleton)
+  if (loading) {
+    return (
+      <div style={{
+        backgroundColor: '#fff',
+        borderRadius: 14,
+        padding: '1.25rem 1.5rem',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+        borderLeft: `4px solid #e2e8f0`, // Gray border when loading
+        display: 'flex',
+        alignItems: 'center',
+        gap: '1rem'
+      }}>
+        {/* Icon circle shimmer */}
+        <div style={{
+          width: 46,
+          height: 46,
+          borderRadius: 12,
+          background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+          backgroundSize: '200% 100%',
+          animation: 'hs-shimmer 1.4s ease infinite',
+          flexShrink: 0
+        }} />
+        
+        <div style={{ minWidth: 0, flex: 1 }}>
+          {/* Label shimmer */}
+          <div style={{
+            width: '80px',
+            height: '12px',
+            borderRadius: 4,
+            marginBottom: '8px',
+            background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+            backgroundSize: '200% 100%',
+            animation: 'hs-shimmer 1.4s ease infinite'
+          }} />
+          
+          {/* Value shimmer */}
+          <div style={{
+            width: '100px',
+            height: '28px',
+            borderRadius: 6,
+            marginTop: '4px',
+            background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+            backgroundSize: '200% 100%',
+            animation: 'hs-shimmer 1.4s ease infinite'
+          }} />
+          
+          {/* Sub text shimmer (if sub exists in original) */}
+          {sub && (
+            <div style={{
+              width: '60px',
+              height: '10px',
+              borderRadius: 4,
+              marginTop: '8px',
+              background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
+              backgroundSize: '200% 100%',
+              animation: 'hs-shimmer 1.4s ease infinite'
+            }} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Normal display when not loading
+  return (
+    <div style={{
+      backgroundColor: '#fff',
+      borderRadius: 14,
+      padding: '1.25rem 1.5rem',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+      borderLeft: `4px solid ${accent}`,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '1rem'
+    }}>
+      <div style={{
+        width: 46,
+        height: 46,
+        borderRadius: 12,
+        backgroundColor: iconBg,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0
+      }}>
+        <Icon size={22} color={iconColor} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <p style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 4px' }}>
+          {label}
+        </p>
+        <p style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', margin: 0, lineHeight: 1 }}>
+          {value}
+        </p>
+        {sub && <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: '4px 0 0' }}>{sub}</p>}
+      </div>
     </div>
-    <div style={{ minWidth:0 }}>
-      <p style={{ fontSize:'0.7rem', fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', margin:'0 0 4px' }}>{label}</p>
-      {loading ? (
-        <div style={{ height:28, width:64, borderRadius:6, marginTop:4, background:'linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)', backgroundSize:'200% 100%', animation:'hs-shimmer 1.4s ease infinite' }}/>
-      ) : (
-        <p style={{ fontSize:'1.75rem', fontWeight:800, color:'#0f172a', margin:0, lineHeight:1 }}>{value}</p>
-      )}
-      {sub && !loading && <p style={{ fontSize:'0.72rem', color:'#94a3b8', margin:'4px 0 0' }}>{sub}</p>}
-    </div>
-  </div>
-));
+  );
+});
 StatCard.displayName = 'StatCard';
 
 export const ActionBtn = React.memo(({ bg, color, onClick, disabled, title, icon: Icon, label }) => (
