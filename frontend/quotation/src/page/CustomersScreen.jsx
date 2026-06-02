@@ -1114,6 +1114,8 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const { selectedCompany: contextCompanyId } = useCompanyCurrency();
   const effectiveCompanyId = propCompanyId || contextCompanyId;
   
+  const isAllCompanies = effectiveCompanyId === 'all' || effectiveCompanyId === 'ALL';
+
   // Store subscriptions
   const customerFilters = useAppStore((state) => state.customerFilters);
   const setCustomerFilters = useAppStore((state) => state.setCustomerFilters);
@@ -1194,6 +1196,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   }, [fetchFilteredCustomers, customerFilters]);
   
   const handleOpenModal = useCallback((customer = null) => { 
+    if (isAllCompanies) {
+      showToast('Please select a specific company to add or edit customers', 'error');
+      return;
+    }
     setEditingCustomer(customer); 
     setShowModal(true); 
   }, []);
@@ -1244,6 +1250,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   }, [editingCustomer, addCustomerToStore, updateCustomerInStore, handleCloseModal]);
   
   const handleDeleteClick = (customer) => {
+    if (isAllCompanies) {
+      showToast('Please select a specific company to delete customers', 'error');
+      return;
+    }
     setDeleteModal({ open: true, customer });
   };
   
@@ -1296,6 +1306,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   };
   
   const handleExportCustomers = useCallback(async (format = 'xlsx') => {
+    if (isAllCompanies) {
+      showToast('Exporting all companies data - this may take a moment', 'info');
+    }
+    
     showToast('Preparing export...', 'info');
     try {
       const exportParams = {
@@ -1334,6 +1348,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   }, [customerFilters, effectiveCompanyId]);
   
   const handleSync = useCallback(async (fullSync = false) => {
+    if (isAllCompanies) {
+      showToast('Please select a specific company to sync customers', 'error');
+      return;
+    }
     setIsSyncing(true);
     try {
       const response = await customerAPI.syncFromZoho(fullSync, effectiveCompanyId);
@@ -1427,6 +1445,40 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   useEffect(() => {
     return () => clearTimeout(searchTimer.current);
   }, []);
+  
+
+  const AllCompaniesWarning = () => {
+    if (!isAllCompanies) return null;
+    
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        style={{
+          background: 'linear-gradient(135deg, #fef3c7, #fffbeb)',
+          borderLeft: `4px solid #f59e0b`,
+          borderRadius: '12px',
+          padding: '1rem 1.25rem',
+          marginBottom: '1.5rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          flexWrap: 'wrap'
+        }}
+      >
+        <AlertCircle size={20} color="#f59e0b" />
+        <div style={{ flex: 1 }}>
+          <p style={{ margin: 0, fontWeight: 600, color: '#92400e', fontSize: '0.875rem' }}>
+            View-Only Mode: All Companies Selected
+          </p>
+          <p style={{ margin: '4px 0 0', color: '#b45309', fontSize: '0.75rem' }}>
+            You are currently viewing customers from all companies. To add, edit, or delete customers, please select a specific company from the company selector.
+          </p>
+        </div>
+ 
+      </motion.div>
+    );
+  };
   
   // Stats data for display
   const statsData = {
@@ -1586,7 +1638,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
             </motion.button>
           </div>
         </motion.div>
-        
+        <AllCompaniesWarning/>
         {/* Stats Cards */}
         {isMobile ? (
           <MobileStatsCard stats={statsData} loading={currentLoading} />
