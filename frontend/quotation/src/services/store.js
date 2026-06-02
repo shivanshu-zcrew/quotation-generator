@@ -104,7 +104,8 @@ const initialState = {
   currencyOptions: [],
   customerStats: null,
   quotationsVersion: 0,
-  _lastRefetchTime: 0, // FIXED: Added missing property
+  _lastRefetchTime: 0, 
+  _switchingCompany: false, 
   customerFilters: {
     status: 'all',
     taxStatus: 'all',
@@ -514,7 +515,6 @@ export const useAppStore = create(
           const { selectedCompany, operationInProgress } = get();
           if (!selectedCompany) return { success: false, error: 'No company selected' };
           
-          // FIXED: Use a more reliable check with atomic operation
           if (get().operationInProgress.fetchCustomerStats) {
             return { success: false, error: 'Already fetching stats' };
           }
@@ -821,11 +821,34 @@ export const useAppStore = create(
         // ==================== COMPANY & CURRENCY ACTIONS ====================
 
         setSelectedCompany: (companyId) => {
+          // Get current company
+          const currentCompany = get().selectedCompany;
+          
+          // If same company, don't do anything
+          if (currentCompany === companyId) {
+            console.log('Company already selected, skipping');
+            return;
+          }
+          
+          // Prevent switching if already switching
+          if (get()._switchingCompany) {
+            console.log('Company switch already in progress');
+            return;
+          }
+          
+          // Set loading states
+          set({ 
+            _switchingCompany: true,
+            statsLoading: true,
+            quotationsLoading: true 
+          });
+          
+          // Save the selection
           persistSelectedCompany(companyId);
           set({ selectedCompany: companyId });
           
-          // Skip currency handling for 'all' companies
-          if (companyId !== 'all') {
+          // Handle currency for the new company (skip for 'all')
+          if (companyId !== 'all' && companyId !== 'ALL') {
             const company = get().companies.find(c => c._id === companyId || c.code === companyId);
             if (company?.baseCurrency) {
               localStorage.setItem('selectedCurrency', company.baseCurrency);
@@ -834,8 +857,21 @@ export const useAppStore = create(
             }
           }
           
-          get().fetchQuotationsForCompany(companyId);
-          get().refreshStats();
+          // Fetch all data for the new company in parallel
+          Promise.all([
+            get().fetchQuotationsForCompany(companyId),
+            get().refreshStats(),
+            get().fetchCustomerStats()
+          ]).finally(() => {
+            // Turn off loading states with a small delay to prevent flicker
+            setTimeout(() => {
+              set({ 
+                _switchingCompany: false,
+                statsLoading: false,
+                quotationsLoading: false 
+              });
+            }, 100);
+          });
         },
 
         setSelectedCurrency: (currencyCode) => {
@@ -973,7 +1009,10 @@ export const useAppStore = create(
           if (get().user?.role !== 'admin') return;
           set({ statsLoading: true });
           try {
-            const params = { companyId: companyId || get().selectedCompany };
+             const params = {};
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+              params.companyId = companyId;
+            }
             const response = await adminAPI.getAdminStats(params);
             batchUpdate(set, [['adminStats', response.data], ['statsLoading', false], ['lastError', null]]);
             return { success: true, stats: response.data };
@@ -1000,8 +1039,14 @@ export const useAppStore = create(
         refreshStats: async () => {
           const { user, selectedCompany } = get();
           if (!user) return;
-          if (user.role === 'admin') await get().fetchAdminStats(selectedCompany);
-          else if (user.role === 'ops_manager') await get().fetchOpsStats(selectedCompany);
+          
+          const companyId = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
+          
+          if (user.role === 'admin') {
+            await get().fetchAdminStats(companyId);
+          } else if (user.role === 'ops_manager') {
+            await get().fetchOpsStats(companyId);
+          }
         },
 
         // ==================== OPS ACTIONS ====================
@@ -1287,7 +1332,7 @@ export const useAppStore = create(
             setFn({ companies });
             
             // Set the selected company if we have one (for ALL roles)
-            if (companyId) {
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
               // For ops_manager, ensure they only get their assigned company
               if (userRole === 'ops_manager' && userAssignedCompany && companyId !== userAssignedCompany) {
                 // Force to their assigned company
@@ -1328,7 +1373,19 @@ export const useAppStore = create(
                 ['lastError', null]
               ]);
               
+              // ✅ Fetch quotations for the specific company
               await getFn().fetchQuotationsForCompany(companyId);
+              
+              // ✅ Fetch stats for the specific company (NOT all companies)
+              if (userRole === 'admin') {
+                await getFn().fetchAdminStats(companyId);
+              } else if (userRole === 'ops_manager') {
+                await getFn().fetchOpsStats(companyId);
+              }
+              
+              // ✅ Fetch customer stats for the specific company
+              await getFn().fetchCustomerStats();
+              
             } else if (companies.length > 0) {
               // Fallback: take first company
               const firstCompanyId = companies[0]._id;
@@ -1365,7 +1422,17 @@ export const useAppStore = create(
                 ['lastError', null]
               ]);
               
+              // ✅ Fetch quotations and stats for the first company
               await getFn().fetchQuotationsForCompany(firstCompanyId);
+              
+              if (userRole === 'admin') {
+                await getFn().fetchAdminStats(firstCompanyId);
+              } else if (userRole === 'ops_manager') {
+                await getFn().fetchOpsStats(firstCompanyId);
+              }
+              
+              await getFn().fetchCustomerStats();
+              
             } else {
               batchUpdate(setFn, [['initialized', true], ['loading', false]]);
             }

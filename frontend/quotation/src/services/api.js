@@ -309,7 +309,6 @@ export const opsAPI = {
 };
 
 // ==================== CUSTOMERS ====================
-// services/api.js - Update customerAPI
 
 export const customerAPI = {
   getAll: async (params, options = {}) => {

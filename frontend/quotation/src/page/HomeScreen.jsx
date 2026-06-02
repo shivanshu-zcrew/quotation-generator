@@ -1006,7 +1006,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             <Users size={isMobile ? 12 : 14} /> Customers
           </button>
 
-          <button
+          {/* <button
             onClick={() => onNavigate("items")}
             style={{
               backgroundColor: "#e0e7ff",
@@ -1023,7 +1023,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             }}
           >
             <ShoppingCart size={isMobile ? 12 : 14} /> Items
-          </button>
+          </button> */}
 
           <button
             onClick={() => onNavigate("addQuotation")}

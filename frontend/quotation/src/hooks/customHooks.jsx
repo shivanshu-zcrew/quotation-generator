@@ -124,7 +124,39 @@ export const useAdminStats = () => {
   const statsLoading = useAppStore((s) => s.statsLoading);
   const fetchAdminStats = useAppStore((s) => s.fetchAdminStats);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
-  const refresh = useCallback(() => fetchAdminStats(selectedCompany), [fetchAdminStats, selectedCompany]);
+  const user = useAppStore((s) => s.user);
+
+  const hasFetchedRef = useRef(false);
+  const prevCompanyRef = useRef(null);
+
+  const refresh = useCallback(async (force = false) => {
+    if (!user || user.role !== 'admin') return;
+    if (!selectedCompany) return;
+
+    if (!force && hasFetchedRef.current && prevCompanyRef.current === selectedCompany) {
+      return;
+    }
+
+    prevCompanyRef.current = selectedCompany;
+    hasFetchedRef.current = true;
+
+    await fetchAdminStats(selectedCompany);
+  }, [fetchAdminStats, selectedCompany, user]);
+
+  // Reset guard when company changes
+  useEffect(() => {
+    if (prevCompanyRef.current !== selectedCompany) {
+      hasFetchedRef.current = false;
+      prevCompanyRef.current = selectedCompany;
+    }
+  }, [selectedCompany]);
+
+  // Auto-fetch ONLY if not already fetched for this company
+  useEffect(() => {
+    if (selectedCompany && user?.role === 'admin' && !hasFetchedRef.current) {
+      refresh();
+    }
+  }, [selectedCompany, user?.role, refresh]);
 
   const rawTotalCustomers = adminStats?.stats?.totalCustomers || 0;
   const rawTotalQuotations = adminStats?.stats?.totalQuotations || 0;

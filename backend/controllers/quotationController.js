@@ -742,7 +742,7 @@ exports.updateQuotation = async (req, res) => {
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
-    existingTermsImages  // ✅ Add this to receive existing images from frontend
+    existingTermsImages  
   } = req.body;
 
   let compressedQuotationImages = quotationImages;
@@ -1010,23 +1010,64 @@ exports.updateQuotation = async (req, res) => {
       ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }), ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
       ...(tl !== undefined && { tl: tl?.trim() || '' }), ...(trn !== undefined && { trn: trn?.trim() || '' }),
       ...(remark !== undefined && { remark: remark?.trim() || '' }),
-      items: processedItems, taxPercent: tax, discountPercent: discount,
-      subtotal: totals.subtotal, subtotalInBaseCurrency: subtotalInBaseCurrency,
-      taxAmount: totals.taxAmount, taxAmountInBaseCurrency: taxAmountInBaseCurrency,
-      discountAmount: totals.discountAmount, discountAmountInBaseCurrency: discountAmountInBaseCurrency,
-      total: totals.total, totalInBaseCurrency: totalInBaseCurrency,
+      items: processedItems, 
+      taxPercent: tax, 
+      discountPercent: discount,
+      subtotal: totals.subtotal, 
+      subtotalInBaseCurrency: subtotalInBaseCurrency,
+      taxAmount: totals.taxAmount, 
+      taxAmountInBaseCurrency: taxAmountInBaseCurrency,
+      discountAmount: totals.discountAmount, 
+      discountAmountInBaseCurrency: discountAmountInBaseCurrency,
+      total: totals.total, 
+      totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
       ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions || '' }),
-      termsImages: finalTermsImages,  // ✅ Use the properly merged terms images
+      termsImages: finalTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
       storageProvider: 's3'
     };
-
-    if (newStatus === 'pending' || newStatus === 'pending_admin') {
-      updateData.opsRejectionReason = ''; updateData.rejectionReason = '';
-      updateData.opsApprovedBy = null; updateData.opsApprovedAt = null;
-      updateData.approvedBy = null; updateData.approvedAt = null;
+    
+    // ✅ Handle approval data clearing based on new status
+    if (newStatus === 'pending' || newStatus === 'ops_rejected') {
+      // Reset all approvals when moving back to pending
+      updateData.opsRejectionReason = '';
+      updateData.rejectionReason = '';
+      updateData.opsApprovedBy = null;
+      updateData.opsApprovedAt = null;
+      updateData.approvedBy = null;
+      updateData.approvedAt = null;
+    } else if (newStatus === 'pending_admin') {
+      // Admin edit - only clear admin approval, preserve ops approval
+      updateData.approvedBy = null;
+      updateData.approvedAt = null;
+      updateData.rejectionReason = '';
+      // ✅ DO NOT clear opsApprovedBy and opsApprovedAt
+    } else if (newStatus === 'rejected') {
+      // Keep rejection reasons when rejected
+      updateData.opsRejectionReason = existing.opsRejectionReason || '';
+      updateData.rejectionReason = existing.rejectionReason || '';
+    } else if (newStatus === 'ops_approved') {
+      // Ops Manager approval
+      updateData.opsApprovedBy = req.user.id;
+      updateData.opsApprovedAt = new Date();
+      updateData.opsApprovedBySnapshot = {
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        approvedAt: new Date()
+      };
+    } else if (newStatus === 'approved' || newStatus === 'awarded') {
+      // Admin approval
+      updateData.approvedBy = req.user.id;
+      updateData.approvedAt = new Date();
+      updateData.approvedBySnapshot = {
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        approvedAt: new Date()
+      };
     }
 
     if (currencyCode && currencyCode !== existing.currency?.code) {

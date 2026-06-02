@@ -271,7 +271,6 @@ export default function ViewQuotationScreen() {
     return statusMap[status] || status || 'Draft';
   }, [originalQuotation?.status]);
   
-  // Enhanced save handler with progress tracking
   const handleSaveWithProgress = useCallback(async () => {
     setSaveProgress(10);
     setSaveStep('Validating data...');
@@ -290,7 +289,6 @@ export default function ViewQuotationScreen() {
     }
   }, [handleSave, startProgressTracking, completeProgressTracking]);
   
-  // Enhanced PDF handler with progress tracking
   const handlePDFWithProgress = useCallback(async (exportType = 'with_total') => {
     setPdfProgress(10);
     setPdfStep('Preparing document...');
@@ -318,7 +316,6 @@ export default function ViewQuotationScreen() {
     setSnackbar({ show: false, message: '', type: 'error' });
   }, [setSnackbar]);
   
-  // Early returns - all hooks are already called above
   if (loading) {
     return (
       <div style={styles.loadingContainer}>

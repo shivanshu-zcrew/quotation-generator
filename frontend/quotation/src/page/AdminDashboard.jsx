@@ -297,6 +297,12 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     totalCustomers
   } = useAdminStats();
  
+  console.log('[AdminDashboard] Stats hook returned:', { 
+    hasStats: !!stats, 
+    statsLoading, 
+    selectedCompany 
+  });
+  
   // ── Company & Currency ────────────────────────────────────
   const {
     company: currentCompany,
@@ -362,10 +368,7 @@ const loadingTimeoutRef = useRef(null);
   }, [quotationsInitialized, quotationsLoading, safeQ.length, selectedCompany, refreshCompanyQuotations]);
 
   // ── Effects ───────────────────────────────────────────────
-  useEffect(() => {
-    refreshStats();
-  }, [selectedCompany, refreshStats]);
-
+ 
   const prevCompanyForPagination = useRef(selectedCompany);
 
   useEffect(() => {
@@ -791,7 +794,8 @@ const tabCounts = useMemo(() => {
 
   // ── Render helpers ────────────────────────────────────────
   const renderStatCards = () => {
-     const unifiedStatusCounts = {
+    // Create unified status counts for both mobile and desktop
+    const unifiedStatusCounts = {
       pending: actionRequired,
       in_review: 0,
       approved: approved,
@@ -839,25 +843,19 @@ const tabCounts = useMemo(() => {
       return `${num.toLocaleString()} ${currency}`;
     };
   
-   // Mobile View
-if (isMobile) {
-  return (
-    <CompactStatsCard 
-      totalRevenue={totalAwardedValue}
-      quotationsCount={totalQuotations}
-      customersCount={totalCustomers}
-      selectedCurrency={selectedCurrency}
-      loading={statsLoading}
-      // Pass all desktop stats
-      actionRequired={actionRequired}
-      approved={approved}
-      awarded={awarded}
-      rejected={rejected}
-      conversionRate={conversionDetails}
-      awardedValue={totalAwardedValue}
-    />
-  );
-}
+    // Mobile View
+    if (isMobile) {
+      return (
+        <CompactStatsCard 
+          totalRevenue={totalAwardedValue}
+          quotationsCount={totalQuotations}
+          customersCount={totalCustomers}
+          selectedCurrency={selectedCurrency}
+          statusCounts={unifiedStatusCounts}
+          loading={statsLoading}
+        />
+      );
+    }
     
     // Desktop View
     return (
@@ -1095,10 +1093,10 @@ if (isMobile) {
             alignItems: 'center',
             gap: '0.4rem'
           }}>
-            <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+            <Users size={isMobile ? 12 : 14} /> { "Customers"}
           </button>
           
-          <button onClick={handleGoToItems} className="adm-nav-btn" style={{
+          {/* <button onClick={handleGoToItems} className="adm-nav-btn" style={{
             backgroundColor: '#e0e7ff',
             color: '#4f46e5',
             border: 'none',
@@ -1112,72 +1110,84 @@ if (isMobile) {
             gap: '0.4rem'
           }}>
             <ShoppingCartIcon size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
-          </button>
+          </button> */}
 
-          <div style={{ position: 'relative' }}>
-            <button onClick={toggleExportFilters} disabled={isExporting} style={styles.exportBtn}>
-              <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
-            </button>
-            
-            {exportFilters.showFilters && (
-              <div style={styles.exportFilterDropdown}>
-                <div style={styles.filterGroup}>
-                  <label style={styles.filterLabel}>Date Range</label>
-                  <div style={styles.dateRangeRow}>
-                    <input
-                      type="date"
-                      value={exportFilters.fromDate}
-                      onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
-                      style={styles.filterInput}
-                    />
-                    <span>to</span>
-                    <input
-                      type="date"
-                      value={exportFilters.toDate}
-                      onChange={(e) => handleExportDateChange('toDate', e.target.value)}
-                      style={styles.filterInput}
-                    />
-                  </div>
-                </div>
-                
-                <div style={styles.filterGroup}>
-                  <label style={styles.filterLabel}>Status</label>
-                  <select
-                    value={exportFilters.status}
-                    onChange={(e) => handleExportDateChange('status', e.target.value)}
-                    style={styles.filterSelect}
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="pending">Pending</option>
-                    <option value="ops_approved">Awaiting Admin</option>
-                    <option value="ops_rejected">Returned by Ops</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                    <option value="awarded">Awarded</option>
-                  </select>
-                </div>
-                
-                <div style={styles.filterActions}>
-                  <button
-                    onClick={() => {
-                      setExportFilters({
-                        showFilters: false,
-                        fromDate: '',
-                        toDate: '',
-                        status: 'all',
-                      });
-                    }}
-                    style={styles.filterResetBtn}
-                  >
-                    Reset
-                  </button>
-                  <button onClick={handleExportToExcel} style={styles.filterApplyBtn}>
-                    Export Now
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+<div style={{ position: 'relative' }}>
+  <button onClick={toggleExportFilters} disabled={isExporting} style={styles.exportBtn}>
+    <Download size={14} /> Export Excel {exportFilters.showFilters ? '▲' : '▼'}
+  </button>
+  
+  {exportFilters.showFilters && (
+    <div style={isMobile ? styles.exportFilterDropdownMobile : styles.exportFilterDropdown}>
+      {/* Add a drag handle for mobile */}
+      {isMobile && (
+        <div style={{
+          width: '50px',
+          height: '4px',
+          backgroundColor: '#e2e8f0',
+          borderRadius: '999px',
+          margin: '0 auto 1rem auto',
+          cursor: 'grab'
+        }} />
+      )}
+      
+      <div style={styles.filterGroup}>
+        <label style={styles.filterLabel}>Date Range</label>
+        <div style={styles.dateRangeRow}>
+          <input
+            type="date"
+            value={exportFilters.fromDate}
+            onChange={(e) => handleExportDateChange('fromDate', e.target.value)}
+            style={styles.filterInput}
+          />
+          <span>to</span>
+          <input
+            type="date"
+            value={exportFilters.toDate}
+            onChange={(e) => handleExportDateChange('toDate', e.target.value)}
+            style={styles.filterInput}
+          />
+        </div>
+      </div>
+      
+      <div style={styles.filterGroup}>
+        <label style={styles.filterLabel}>Status</label>
+        <select
+          value={exportFilters.status}
+          onChange={(e) => handleExportDateChange('status', e.target.value)}
+          style={styles.filterSelect}
+        >
+          <option value="all">All Statuses</option>
+          <option value="pending">Pending</option>
+          <option value="ops_approved">Awaiting Admin</option>
+          <option value="ops_rejected">Returned by Ops</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="awarded">Awarded</option>
+        </select>
+      </div>
+      
+      <div style={styles.filterActions}>
+        <button
+          onClick={() => {
+            setExportFilters({
+              showFilters: false,
+              fromDate: '',
+              toDate: '',
+              status: 'all',
+            });
+          }}
+          style={styles.filterResetBtn}
+        >
+          Reset
+        </button>
+        <button onClick={handleExportToExcel} style={styles.filterApplyBtn}>
+          Export Now
+        </button>
+      </div>
+    </div>
+  )}
+</div>
 
           <button onClick={handleCreateQuotation} className="adm-nav-btn" style={{
             backgroundColor: '#10b981',
@@ -1192,7 +1202,7 @@ if (isMobile) {
             alignItems: 'center',
             gap: '0.4rem'
           }}>
-            <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
+            <FileText size={isMobile ? 12 : 14} /> {"New Quotation"}
           </button>
           
           <button onClick={handleUserStats} style={{
@@ -2135,6 +2145,22 @@ const styles = {
     minWidth: '300px',
     zIndex: 100,
     border: '1px solid #e2e8f0'
+  },
+
+  exportFilterDropdownMobile: {
+    position: 'fixed',
+    top: 'auto',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    marginTop: 0,
+    borderRadius: '16px 16px 0 0',
+    backgroundColor: 'white',
+    padding: '1rem',
+    minWidth: 'auto',
+    width: '100%',
+    maxHeight: '80vh',
+    overflowY: 'auto',
   },
   
   filterGroup: {

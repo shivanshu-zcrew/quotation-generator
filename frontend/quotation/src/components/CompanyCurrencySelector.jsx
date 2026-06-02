@@ -1,5 +1,5 @@
-// components/CompanyCurrencySelector.jsx (UPDATED WITH ALL COMPANIES OPTION - FIXED RELOAD ISSUE)
-import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
+// components/CompanyCurrencySelector.jsx (UPDATED WITH DEBOUNCE TO PREVENT BLINKING)
+import React, { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import { Building2, DollarSign, ChevronDown, RefreshCw, Layers } from 'lucide-react';
 import { useAppStore } from '../services/store';
 
@@ -16,6 +16,15 @@ const CURRENCY_METADATA = {
 };
 
 const ALL_COMPANIES_ID = 'all';
+
+// ✅ Add debounce utility
+const debounce = (fn, delay) => {
+  let timeout;
+  return (...args) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => fn(...args), delay);
+  };
+};
 
 const CompanyOption = memo(({ company }) => (
   <option key={company._id} value={company._id}>
@@ -56,6 +65,9 @@ export const CompanyCurrencySelector = memo(({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isChanging, setIsChanging] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  
+  // ✅ Add ref to track last selected company to prevent duplicate calls
+  const lastSelectedCompanyRef = useRef(selectedCompany);
 
   // Mark initial load as complete when companies are loaded
   useEffect(() => {
@@ -74,20 +86,24 @@ export const CompanyCurrencySelector = memo(({
     return company?.acceptedCurrencies || ['AED'];
   }, [companies, selectedCompany, isAllCompaniesSelected]);
 
-  const handleCompanyChange = useCallback(async (e) => {
-    const newCompanyId = e.target.value;
-    if (!newCompanyId || isChanging) return;
+  // ✅ Create the actual handler
+  const handleCompanyChangeCore = useCallback(async (newCompanyId) => {
+    // Prevent if already changing or same company
+    if (isChanging) return;
+    if (lastSelectedCompanyRef.current === newCompanyId) return;
     
     setIsChanging(true);
+    lastSelectedCompanyRef.current = newCompanyId;
+    
     try {
       if (newCompanyId === ALL_COMPANIES_ID) {
-        setSelectedCompany(ALL_COMPANIES_ID);
+        await setSelectedCompany(ALL_COMPANIES_ID);
         await refetchQuotations({ companyId: ALL_COMPANIES_ID });
         onCompanyChange?.(ALL_COMPANIES_ID, { isAllCompanies: true });
       } else {
         const company = companies?.find(c => c._id === newCompanyId || c.code === newCompanyId);
         if (company) {
-          setSelectedCompany(company._id);
+          await setSelectedCompany(company._id);
           if (company.baseCurrency) {
             setSelectedCurrency(company.baseCurrency);
             onCurrencyChange?.(company.baseCurrency);
@@ -97,11 +113,26 @@ export const CompanyCurrencySelector = memo(({
           onCompanyChange?.(company._id, { isAllCompanies: false });
         }
       }
+    } catch (error) {
+      console.error('Company switch failed:', error);
     } finally {
       setIsChanging(false);
     }
   }, [companies, setSelectedCompany, setSelectedCurrency, onCompanyChange, onCurrencyChange, 
       fetchExchangeRates, fetchQuotationsForCompany, refetchQuotations, isChanging]);
+
+  // ✅ Create debounced version
+  const debouncedHandleCompanyChange = useMemo(
+    () => debounce(handleCompanyChangeCore, 300),
+    [handleCompanyChangeCore]
+  );
+
+  // ✅ Wrapper for the select onChange
+  const handleCompanyChange = useCallback((e) => {
+    const newCompanyId = e.target.value;
+    if (!newCompanyId) return;
+    debouncedHandleCompanyChange(newCompanyId);
+  }, [debouncedHandleCompanyChange]);
 
   const handleCurrencyChange = useCallback((e) => {
     const newCurrency = e.target.value;
@@ -329,6 +360,7 @@ export const CompanyCurrencySelector = memo(({
 });
 CompanyCurrencySelector.displayName = 'CompanyCurrencySelector';
 
+ 
 export const CompanyCurrencyDisplay = memo(({ showRate = true, className = '', isMobile = false }) => {
   const { companies, selectedCompany, selectedCurrency, exchangeRates } = useAppStore();
   

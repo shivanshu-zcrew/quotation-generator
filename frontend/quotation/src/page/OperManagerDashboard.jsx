@@ -708,7 +708,7 @@ const handleApprove = useCallback(async (id) => {
     { key: 'approved',      label: 'Approved',           Icon: CheckCircle,  count: tabCountsFromStats.approved },
     { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCountsFromStats.awarded },
   ], [tabCountsFromStats]);
-  
+
   // ── Render helpers with Shimmer ──────────────────────────
   const renderStatCards = () => {
     if (isLoading) {
@@ -1087,9 +1087,9 @@ const handleApprove = useCallback(async (id) => {
               gap: '0.4rem'
             }}
           >
-            <Users size={isMobile ? 12 : 14} /> {!isMobile && "Customers"}
+            <Users size={isMobile ? 12 : 14} /> { "Customers"}
           </button>
-          <button 
+          {/* <button 
             onClick={() => navigate('/items')}
             style={{
               backgroundColor: '#e0e7ff',
@@ -1106,7 +1106,7 @@ const handleApprove = useCallback(async (id) => {
             }}
           >
             <ShoppingCart size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
-          </button>
+          </button> */}
 
           <button 
             onClick={() => navigate('/quotation/new')}
