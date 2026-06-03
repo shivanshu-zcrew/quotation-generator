@@ -229,7 +229,7 @@ const buildUpdateData = (body, existingCustomer) => {
   if (trnExpiryDate !== undefined) {
     updateData.trnExpiryDate = trnExpiryDate ? new Date(trnExpiryDate) : null;
   }
-  
+
   if (defaultCurrency !== undefined) {
     updateData.defaultCurrency = buildCurrencyObject(defaultCurrency);
   }
@@ -305,7 +305,8 @@ exports.createCustomer = async (req, res) => {
       name, email, phone, address, city, state, zipcode,
       companyName, website, notes, taxTreatment = 'non_vat_registered',
       taxRegistrationNumber = '', placeOfSupply = 'Dubai',
-      defaultCurrency = 'AED', contactPersons = [], mainContactSalutation = 'Mr.'
+      defaultCurrency = 'AED', contactPersons = [], mainContactSalutation = 'Mr.',
+      trnExpiryDate = null
     } = req.body;
 
     const { companyId, company } = await getCompanyFromRequest(req);
@@ -334,6 +335,8 @@ exports.createCustomer = async (req, res) => {
 
     const allContactPersons = buildContactPersons(name, email, phone, notes, contactPersons, mainContactSalutation);
 
+    const isVatRegistered = taxTreatment.includes('vat_registered');
+
     const customerData = {
       companyId: company._id,
       name: name.trim().toUpperCase(),
@@ -347,7 +350,10 @@ exports.createCustomer = async (req, res) => {
       website: website?.trim() || '',
       notes: notes?.trim() || '',
       taxTreatment,
-      taxRegistrationNumber: (taxTreatment.includes('vat_registered') && taxRegistrationNumber) ? taxRegistrationNumber.trim() : '',
+      taxRegistrationNumber: (isVatRegistered && taxRegistrationNumber) ? taxRegistrationNumber.trim() : '',
+      // Only keep an expiry date for VAT-registered customers (the only ones
+      // with a TRN). Blank/null means "never expires".
+      trnExpiryDate: (isVatRegistered && trnExpiryDate) ? new Date(trnExpiryDate) : null,
       placeOfSupply,
       defaultCurrency: buildCurrencyObject(defaultCurrency),
       contactPersons: allContactPersons

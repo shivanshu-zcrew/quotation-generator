@@ -156,7 +156,7 @@ let scheduledTask = null;
  * Start the daily scheduler. Default: 02:15 every day, server timezone.
  * Pass a cron expression to override.
  */
-function start(cronExpression = '30 15 * * *') {
+function start(cronExpression = '15 16 * * *') {
     if (scheduledTask) {
       logger.warn('TRN expiry job: scheduler already started');
       return scheduledTask;

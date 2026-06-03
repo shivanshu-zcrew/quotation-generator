@@ -29,6 +29,15 @@ const s3Client = new S3Client({
   },
 });
 
+const presignS3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+  requestChecksumCalculation: "WHEN_REQUIRED",
+});
+
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME;
 
 // ===================== S3 HELPER FUNCTIONS =====================
@@ -1313,14 +1322,7 @@ exports.updateQuotation = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// PRESIGNED UPLOAD URL (direct browser → S3 for item images)
-// Add this alongside your other S3 helpers / exports in the
-// quotation controller (s3Client, S3_BUCKET_NAME, PutObjectCommand,
-// getSignedUrl are already imported there).
-// ─────────────────────────────────────────────────────────────
-
-// Only allow image uploads through this endpoint.
+ 
 const PRESIGN_ALLOWED_MIME = new Set([
   'image/jpeg',
   'image/png',
@@ -1328,7 +1330,7 @@ const PRESIGN_ALLOWED_MIME = new Set([
   'image/gif',
 ]);
 
-const PRESIGN_MAX_BYTES = 15 * 1024 * 1024; // 15 MB ceiling (post-compression files are far smaller)
+const PRESIGN_MAX_BYTES = 15 * 1024 * 1024; 
  
 exports.presignItemImageUpload = async (req, res) => {
   try {
@@ -1360,8 +1362,8 @@ exports.presignItemImageUpload = async (req, res) => {
       ContentType: contentType,
     });
 
-    const expiresIn = 300; // 5 min to complete the PUT
-    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn });
+    const expiresIn = 300; 
+    const uploadUrl = await getSignedUrl(presignS3Client, command, { expiresIn });
 
     return res.status(200).json({ success: true, uploadUrl, key, expiresIn });
   } catch (err) {

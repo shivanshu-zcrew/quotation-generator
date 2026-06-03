@@ -151,7 +151,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `${prefix}-${timestamp}-${random}`;
   });
-  const [uploadingImages, setUploadingImages] = useState({});
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [quotationItems, setQuotationItems] = useState([]);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
@@ -431,107 +430,59 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     ));
   }, []);
   
-  const handleImageUpload = useCallback(async (e, itemId) => {
+  const handleImageUpload = useCallback((e, itemId) => {
     const files = Array.from(e.target.files || []);
-    e.target.value = ''; // reset input so same file can be re-picked
     if (!files.length) return;
-   
-    const itemIndex = quotationItems.findIndex((i) => i.id === itemId);
-   
-    // Count current images (already-uploaded keys + previews in flight).
-    const item = quotationItems.find((i) => i.id === itemId);
-    const currentCount =
-      (item?.imageS3Keys?.length || 0) + (itemImages[itemId]?.length || 0);
-    const slots = MAX_IMAGES_PER_ITEM - currentCount;
-   
+    
+    const currentImages = itemImages[itemId] || [];
+    const currentS3Keys = quotationItems.find(i => i.id === itemId)?.imageS3Keys?.length || 0;
+    const totalCurrent = currentImages.length + currentS3Keys;
+    const slots = MAX_IMAGES_PER_ITEM - totalCurrent;
+    
     if (slots <= 0) {
       showSnack(`Max ${MAX_IMAGES_PER_ITEM} images per item.`);
       return;
     }
-   
     const toProcess = files.slice(0, slots);
-    if (files.length > slots) {
-      showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
-    }
-   
-    // Validate types/sizes up front (pre-compression size check).
-    const valid = [];
-    for (const file of toProcess) {
+    if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
+    
+    let processed = 0;
+    toProcess.forEach(file => {
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
         showSnack(`"${file.name}" is not a supported type.`);
-        continue;
+        return;
       }
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
         showSnack(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
-        continue;
+        return;
       }
-      valid.push(file);
-    }
-    if (!valid.length) return;
-   
-    setUploadingImages((prev) => ({ ...prev, [itemId]: true }));
-   
-    // Upload each valid file directly to S3. Show a local preview immediately,
-    // then attach the returned key. If an upload fails, drop its preview.
-    for (const file of valid) {
-      const previewUrl = URL.createObjectURL(file);
-   
-      // Show preview right away.
-      setItemImages((prev) => ({
-        ...prev,
-        [itemId]: [...(prev[itemId] || []), previewUrl],
-      }));
-   
-      try {
-        const key = await uploadItemImage(file, itemIndex >= 0 ? itemIndex : undefined);
-   
-        // Attach the S3 key to the item; remove the local preview (the key now
-        // represents this image and will render via signed URL on reload).
-        setQuotationItems((prev) =>
-          prev.map((it) =>
-            it.id === itemId
-              ? { ...it, imageS3Keys: [...(it.imageS3Keys || []), key] }
-              : it
-          )
-        );
-        setItemImages((prev) => ({
-          ...prev,
-          [itemId]: (prev[itemId] || []).filter((u) => u !== previewUrl),
-        }));
-        URL.revokeObjectURL(previewUrl);
-      } catch (err) {
-        // Upload failed — remove the preview and tell the user.
-        setItemImages((prev) => ({
-          ...prev,
-          [itemId]: (prev[itemId] || []).filter((u) => u !== previewUrl),
-        }));
-        URL.revokeObjectURL(previewUrl);
-        showSnack(`Failed to upload "${file.name}": ${err.message}`, 'error');
-      }
-    }
-   
-    setUploadingImages((prev) => {
-      const { [itemId]: _, ...rest } = prev;
-      return rest;
+      
+      const reader = new FileReader();
+      reader.onload = () => {
+        processed++;
+        setItemImages(prev => ({ ...prev, [itemId]: [...(prev[itemId] || []), reader.result] }));
+        setQuotationItems(prev => prev.map(item => item.id === itemId ? { ...item, newImages: [...(item.newImages || []), reader.result] } : item));
+      };
+      reader.readAsDataURL(file);
     });
+    
     setEditingImageId(null);
-  }, [quotationItems, itemImages, showSnack]);
+    e.target.value = "";
+  }, [itemImages, quotationItems, showSnack]);
   
   const handleRemoveImage = useCallback((itemId, imageIndex) => {
     setQuotationItems(prev => prev.map(item => {
       if (item.id !== itemId) return item;
-      const keyCount = item.imageS3Keys?.length || 0;
-      if (imageIndex < keyCount) {
-        // Remove an uploaded S3 key
-        return { ...item, imageS3Keys: item.imageS3Keys.filter((_, i) => i !== imageIndex) };
+      const s3KeyCount = item.imageS3Keys?.length || 0;
+      const isExisting = imageIndex < s3KeyCount;
+      
+      if (isExisting) {
+        return { ...item, imageS3Keys: item.imageS3Keys.filter((_, idx) => idx !== imageIndex) };
       }
-      return item;
+      const newImageIndex = imageIndex - s3KeyCount;
+      return { ...item, newImages: item.newImages.filter((_, idx) => idx !== newImageIndex) };
     }));
-    // Also clear any matching local preview
-    setItemImages(prev => ({
-      ...prev,
-      [itemId]: (prev[itemId] || []).filter((_, i) => i !== (imageIndex - 0)),
-    }));
+    setItemImages(prev => ({ ...prev, [itemId]: (prev[itemId] || []).filter((_, idx) => idx !== imageIndex) }));
   }, []);
   
   const handleSubmit = useCallback(async () => {
@@ -577,7 +528,9 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
-        imageS3Keys: item.imageS3Keys || [],   // keys only — no base64
+        // Send S3 keys for existing images, base64 for new ones
+        imageS3Keys: item.imageS3Keys || [],
+        newImages: item.newImages || []
       }));
   
       const quotationImages = {};
