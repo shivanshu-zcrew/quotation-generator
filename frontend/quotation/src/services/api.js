@@ -603,6 +603,25 @@ export const quotationAPI = {
     return response;
   },
   
+  getMyQuotationsStats: async (params = {}, options = {}) => {
+    const { skipCache = false, forceRefresh = false } = options;
+    const cleanParamsObj = cleanParams(params);
+    const cacheKey = quotationCache.getKey('/quotations/my-quotations/stats', cleanParamsObj);
+    
+    if (!skipCache && !forceRefresh) {
+      const cached = quotationCache.get(cacheKey);
+      if (cached) return cached;
+    }
+    
+    const response = await api.get("/quotations/my-quotations/stats", { params: cleanParamsObj });
+    
+    if (!skipCache) {
+      quotationCache.set(cacheKey, response);
+    }
+    
+    return response;
+  },
+  
   getAll: async (params = {}, options = {}) => {
     const { skipCache = false, forceRefresh = false } = options;
     const cleanParamsObj = cleanParams(params);

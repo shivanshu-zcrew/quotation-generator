@@ -15,7 +15,6 @@ import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } f
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import useToast, { ToastContainer } from '../hooks/useToast';
 
-// Import shared components
 import {
   StatusBadge,
   RejectionNote,
@@ -63,7 +62,6 @@ const useMediaQuery = (query) => {
     const mediaQuery = window.matchMedia(query);
     const handler = (e) => setMatches(e.matches);
     
-    // Use addEventListener for better compatibility
     if (mediaQuery.addEventListener) {
       mediaQuery.addEventListener('change', handler);
     } else {
@@ -288,7 +286,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const initialized = useAppStore((s) => s.initialized);
   const awardQuotation = useAppStore((s) => s.awardQuotation);
   
-  // ── Stats hook ── Now properly integrated with store
+  // ── Stats hook ──
   const { 
     stats,
     loading: statsLoading,
@@ -306,15 +304,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     totalAwardedValue,
     totalCustomers
   } = useAdminStats();
- 
-  console.log('[AdminDashboard] Stats hook returned:', { 
-    hasStats: !!stats, 
-    statsLoading, 
-    selectedCompany,
-    initialized
-  });
 
-  // ── Company & Currency ── Use the fixed hook
+  // ── Company & Currency ──
   const {
     selectedCompany: companyId,
     currentCompany,
@@ -337,16 +328,17 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const loadingTimeoutRef = useRef(null);
   const initialLoadTriggered = useRef(false);
 
-  // ── Server-side filters state ──
-  const [serverFilters, setServerFilters] = useState({
-    status: 'all',
+  // ── Single filters state (like HomeScreen) ──
+  const [filters, setFilters] = useState({
+    status: null,      // null = all, or specific status
     search: '',
+    sortBy: 'createdAt',
+    sortDir: 'desc',
     fromDate: '',
     toDate: ''
   });
-  const [activeTab, setActiveTab] = useState('all');
+  
   const [searchInput, setSearchInput] = useState('');
-  const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
 
   // ── Action state ──
   const [exportingId, setExportingId] = useState(null);
@@ -362,22 +354,25 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     awarded: null
   });
 
+  // ── Compute active tab from filters ──
+  const activeTab = useMemo(() => {
+    return filters.status === null ? 'all' : filters.status;
+  }, [filters.status]);
+
   // ── Effect for initial company data load ──
   useEffect(() => {
-    // Only fetch if we have a company, store is initialized, and we haven't triggered yet
     if (hasCompany && initialized && !initialLoadTriggered.current && !isSwitchingCompany) {
       initialLoadTriggered.current = true;
-      // The store's _loadCompanyData already handles the initial fetch
-      // We just need to refresh to ensure filters are applied
       refreshCompanyQuotations({
-        page: currentPage,
+        page: 1,
         limit: currentLimit,
-        status: activeTab !== 'all' ? activeTab : undefined,
-        sortBy: sort.field,
-        sortDir: sort.dir
+        status: filters.status,
+        sortBy: filters.sortBy,
+        sortDir: filters.sortDir,
+        search: filters.search
       });
     }
-  }, [hasCompany, initialized, isSwitchingCompany, refreshCompanyQuotations, currentPage, currentLimit, activeTab, sort.field, sort.dir]);
+  }, [hasCompany, initialized, isSwitchingCompany, refreshCompanyQuotations, currentLimit, filters]);
 
   // ── Effect for limit based on mobile ──
   useEffect(() => {
@@ -406,8 +401,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       resetPagination();
       prevCompanyForPagination.current = selectedCompany;
       // Reset filters when company changes
-      setActiveTab('all');
-      setServerFilters({ status: 'all', search: '', fromDate: '', toDate: '' });
+      setFilters({ 
+        status: null, 
+        search: '', 
+        sortBy: 'createdAt', 
+        sortDir: 'desc',
+        fromDate: '',
+        toDate: ''
+      });
       setSearchInput('');
       initialLoadTriggered.current = false;
     }
@@ -422,39 +423,6 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
   }, []);
-
-  // ── Refresh with filters function ──
-  const refreshWithFilters = useCallback(async () => {
-    if (!hasCompany || isSwitchingCompany) return;
-    
-    await refreshCompanyQuotations({
-      page: currentPage,
-      limit: currentLimit,
-      status: serverFilters.status !== 'all' ? serverFilters.status : undefined,
-      search: serverFilters.search || undefined,
-      fromDate: serverFilters.fromDate || undefined,
-      toDate: serverFilters.toDate || undefined,
-      sortBy: sort.field,
-      sortDir: sort.dir
-    });
-  }, [refreshCompanyQuotations, currentPage, currentLimit, serverFilters, sort.field, sort.dir, hasCompany, isSwitchingCompany]);
-
-  // ── Effect for filter changes ──
-  const prevFiltersRef = useRef(serverFilters);
-  const prevSortRef = useRef(sort);
-
-  useEffect(() => {
-    if (!quotationsInitialized || !hasCompany || isSwitchingCompany) return;
-
-    const filtersChanged = JSON.stringify(prevFiltersRef.current) !== JSON.stringify(serverFilters);
-    const sortChanged = JSON.stringify(prevSortRef.current) !== JSON.stringify(sort);
-
-    if (filtersChanged || sortChanged) {
-      prevFiltersRef.current = serverFilters;
-      prevSortRef.current = sort;
-      refreshWithFilters();
-    }
-  }, [serverFilters, sort, quotationsInitialized, hasCompany, isSwitchingCompany, refreshWithFilters]);
 
   // ── Tab counts from adminStats ──
   const tabCounts = useMemo(() => {
@@ -475,40 +443,96 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const isActionLoading = useCallback((id, action) => !!actionLoadingIds[`${id}_${action}`], [actionLoadingIds]);
 
   // ── Handlers ──
+
+  // Handle tab change
+  const handleTabChange = useCallback((key) => {
+    const newStatus = key === 'all' ? null : key;
+    
+    setFilters(prev => ({ 
+      ...prev, 
+      status: newStatus,
+      sortBy: 'createdAt',
+      sortDir: 'desc'
+    }));
+    setSearchInput('');
+    
+    refreshCompanyQuotations({
+      status: newStatus,
+      sortBy: 'createdAt',
+      sortDir: 'desc',
+      page: 1,
+      limit: currentLimit,
+      search: ''
+    });
+    
+    setMobileMenuOpen(false);
+  }, [refreshCompanyQuotations, currentLimit]);
+
+  // Handle search
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
     setSearchInput(val);
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      setServerFilters(prev => ({ ...prev, search: val }));
-      goToPage(1);
+      setFilters(prev => ({ ...prev, search: val }));
+      refreshCompanyQuotations({
+        search: val,
+        status: filters.status,
+        sortBy: filters.sortBy,
+        sortDir: filters.sortDir,
+        page: 1,
+        limit: currentLimit
+      });
     }, DEBOUNCE_MS);
-  }, [goToPage]);
+  }, [refreshCompanyQuotations, filters.status, filters.sortBy, filters.sortDir, currentLimit]);
 
-  const clearSearch = useCallback(() => { 
-    setSearchInput(''); 
-    setServerFilters(prev => ({ ...prev, search: '' }));
-    goToPage(1);
-  }, [goToPage]);
-
-  const handleTabChange = useCallback((key) => {
-    setActiveTab(key);
-    setServerFilters(prev => ({ ...prev, status: key }));
+  // Clear search
+  const clearSearch = useCallback(() => {
     setSearchInput('');
-    setServerFilters(prev => ({ ...prev, search: '' }));
-    setSort({ field: 'createdAt', dir: 'desc' });
-    goToPage(1);
-    setMobileMenuOpen(false);
-  }, [goToPage]);
+    setFilters(prev => ({ ...prev, search: '' }));
+    refreshCompanyQuotations({
+      search: '',
+      status: filters.status,
+      sortBy: filters.sortBy,
+      sortDir: filters.sortDir,
+      page: 1,
+      limit: currentLimit
+    });
+    if (searchRef.current) searchRef.current.value = "";
+  }, [refreshCompanyQuotations, filters.status, filters.sortBy, filters.sortDir, currentLimit]);
 
+  // Handle sort - CRITICAL FIX
   const handleSort = useCallback((field) => {
-    setSort(prev => ({ 
-      field, 
-      dir: prev.field === field && prev.dir === 'asc' ? 'desc' : 'asc' 
+    // Map field names for API
+    let sortField = field;
+    if (field === 'customer') {
+      sortField = 'customerSnapshot.name';
+    } else if (field === 'createdby') {
+      sortField = 'createdBy.name';
+    }
+    
+    // Determine new direction
+    const newDir = filters.sortBy === sortField && filters.sortDir === 'asc' ? 'desc' : 'asc';
+    
+    // Update local state
+    setFilters(prev => ({ 
+      ...prev, 
+      sortBy: sortField, 
+      sortDir: newDir
     }));
-    goToPage(1);
-  }, [goToPage]);
+    
+    // Direct API call with all current filters
+    refreshCompanyQuotations({
+      sortBy: sortField,
+      sortDir: newDir,
+      status: filters.status,
+      search: filters.search,
+      page: 1,
+      limit: currentLimit
+    });
+  }, [refreshCompanyQuotations, filters, currentLimit]);
 
+  // Refresh handler
   const handleRefresh = useCallback(async () => {
     setRefreshProgress(10);
     setRefreshMessage('Refreshing data...');
@@ -525,8 +549,19 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     
     try {
       await fetchAllData();
-      await refreshWithFilters();
+      
+      await refreshCompanyQuotations({
+        status: filters.status,
+        search: filters.search,
+        sortBy: filters.sortBy,
+        sortDir: filters.sortDir,
+        page: currentPage,
+        limit: currentLimit,
+        forceRefresh: true
+      });
+      
       await refreshStats();
+      
       setRefreshProgress(100);
       setRefreshMessage('Complete!');
       addToast('Data refreshed', 'success');
@@ -542,7 +577,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     } finally {
       clearInterval(progressInterval);
     }
-  }, [fetchAllData, refreshWithFilters, refreshStats, addToast]);
+  }, [fetchAllData, refreshCompanyQuotations, refreshStats, addToast, filters, currentPage, currentLimit]);
 
   const handleDownload = useCallback(async (q) => {
     setExportingId(q._id);
@@ -627,8 +662,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         params.toDate = exportFilters.toDate;
       }
       
-      if (serverFilters.search && serverFilters.search.trim()) {
-        params.search = serverFilters.search;
+      if (filters.search && filters.search.trim()) {
+        params.search = filters.search;
       }
       
       setExportProgress(60);
@@ -663,7 +698,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       clearInterval(progressInterval);
       setIsExporting(false);
     }
-  }, [selectedCompany, activeTab, serverFilters.search, exportFilters, addToast]);
+  }, [selectedCompany, activeTab, filters.search, exportFilters, addToast]);
 
   const handleApprove = useCallback(async (id) => {
     setActionLoading(id, 'approve', true);
@@ -671,7 +706,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       const result = await approveQuotation(id);
       if (result?.success) {
         addToast('Quotation approved successfully', 'success');
-        await refreshWithFilters();
+        await refreshCompanyQuotations({
+          status: filters.status,
+          search: filters.search,
+          sortBy: filters.sortBy,
+          sortDir: filters.sortDir,
+          page: currentPage,
+          limit: currentLimit
+        });
         await refreshStats();
       } else {
         addToast(result?.error || 'Failed to approve quotation', 'error');
@@ -679,7 +721,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     } finally {
       setActionLoading(id, 'approve', false);
     }
-  }, [approveQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading]);
+  }, [approveQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit]);
 
   const handleReject = {
     open: useCallback((id) => setRejectModal({ open: true, id, reason: '' }), []),
@@ -696,7 +738,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         if (result?.success) {
           addToast('Quotation rejected', 'success');
           handleReject.close();
-          await refreshWithFilters();
+          await refreshCompanyQuotations({
+            status: filters.status,
+            search: filters.search,
+            sortBy: filters.sortBy,
+            sortDir: filters.sortDir,
+            page: currentPage,
+            limit: currentLimit
+          });
           await refreshStats();
         } else {
           addToast(result?.error || 'Failed to reject quotation', 'error');
@@ -704,7 +753,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       } finally {
         setActionLoading(rejectModal.id, 'reject', false);
       }
-    }, [rejectModal, rejectQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
+    }, [rejectModal, rejectQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit])
   };
 
   const handleDelete = {
@@ -717,7 +766,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         if (result?.success) {
           addToast('Quotation deleted', 'success');
           handleDelete.close();
-          await refreshWithFilters();
+          await refreshCompanyQuotations({
+            status: filters.status,
+            search: filters.search,
+            sortBy: filters.sortBy,
+            sortDir: filters.sortDir,
+            page: currentPage,
+            limit: currentLimit
+          });
           await refreshStats();
         } else {
           addToast(result?.error || 'Failed to delete quotation', 'error');
@@ -725,7 +781,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       } finally {
         setActionLoading(deleteModal.id, 'delete', false);
       }
-    }, [deleteModal, deleteQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
+    }, [deleteModal, deleteQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit])
   };
 
   const handleView = useCallback((id) => {
@@ -761,7 +817,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
               : `Quotation ${awardModal.quotation.quotationNumber} marked as Not Awarded.`,
             "success"
           );
-          await refreshWithFilters();
+          await refreshCompanyQuotations({
+            status: filters.status,
+            search: filters.search,
+            sortBy: filters.sortBy,
+            sortDir: filters.sortDir,
+            page: currentPage,
+            limit: currentLimit
+          });
           await refreshStats();
           handleAward.close();
         } else {
@@ -774,7 +837,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       } finally {
         setActionLoading(awardModal.quotation?._id, 'award', false);
       }
-    }, [awardModal.quotation, awardQuotation, addToast, refreshWithFilters, refreshStats, setActionLoading])
+    }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit])
   };
 
   const handleGoToCustomers = useCallback(() => {
@@ -830,13 +893,9 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   // ── Render helpers ──
   const renderStatCards = () => {
-    // Don't show data until initialized
     const isStatsLoading = statsLoading || !initialized;
-    
-    // Only show actual values when not loading AND initialized
     const showActualValues = !isStatsLoading && initialized;
     
-    // Use showActualValues to determine if we show real numbers or placeholders
     const displayTotalQuotations = showActualValues ? totalQuotations : null;
     const displayActionRequired = showActualValues ? actionRequired : null;
     const displayApproved = showActualValues ? approved : null;
@@ -845,49 +904,28 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     const displayRejected = showActualValues ? rejected : null;
     const displayTotalCustomers = showActualValues ? totalCustomers : null;
   
-    // Helper function to format large numbers with loading state
     const formatLargeNumber = (num, isLoading) => {
       if (isLoading) return '—';
       if (num === null || num === undefined || isNaN(num)) return '0';
       if (num === 0) return '0';
-      
       const absNum = Math.abs(num);
-      
-      if (absNum >= 1_000_000_000) {
-        return (absNum / 1_000_000_000).toFixed(1) + 'B';
-      }
-      if (absNum >= 1_000_000) {
-        return (absNum / 1_000_000).toFixed(1) + 'M';
-      }
-      if (absNum >= 1_000) {
-        return (absNum / 1_000).toFixed(1) + 'K';
-      }
-      
+      if (absNum >= 1_000_000_000) return (absNum / 1_000_000_000).toFixed(1) + 'B';
+      if (absNum >= 1_000_000) return (absNum / 1_000_000).toFixed(1) + 'M';
+      if (absNum >= 1_000) return (absNum / 1_000).toFixed(1) + 'K';
       return num.toString();
     };
   
-    // Helper function to format currency with loading state
     const formatLargeCurrency = (num, currency, isLoading) => {
       if (isLoading) return `— ${currency}`;
       if (num === null || num === undefined || isNaN(num)) return `0 ${currency}`;
       if (num === 0) return `0 ${currency}`;
-      
       const absNum = Math.abs(num);
-      
-      if (absNum >= 1_000_000_000) {
-        return `${(absNum / 1_000_000_000).toFixed(1)}B ${currency}`;
-      }
-      if (absNum >= 1_000_000) {
-        return `${(absNum / 1_000_000).toFixed(1)}M ${currency}`;
-      }
-      if (absNum >= 1_000) {
-        return `${(absNum / 1_000).toFixed(1)}K ${currency}`;
-      }
-      
+      if (absNum >= 1_000_000_000) return `${(absNum / 1_000_000_000).toFixed(1)}B ${currency}`;
+      if (absNum >= 1_000_000) return `${(absNum / 1_000_000).toFixed(1)}M ${currency}`;
+      if (absNum >= 1_000) return `${(absNum / 1_000).toFixed(1)}K ${currency}`;
       return `${num.toLocaleString()} ${currency}`;
     };
   
-    // Create unified status counts for mobile
     const unifiedStatusCounts = {
       pending: displayActionRequired,
       in_review: 0,
@@ -896,7 +934,6 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       returned: displayRejected
     };
   
-    // Mobile View
     if (isMobile) {
       return (
         <CompactStatsCard 
@@ -910,7 +947,6 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       );
     }
     
-    // Desktop View
     return (
       <>
         <div style={styles.statsRow1}>
@@ -1101,7 +1137,38 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Topbar - Responsive */}
+      <ConfirmModal
+        open={rejectModal.open}
+        title="Reject Quotation"
+        message="This quotation has been reviewed by Ops. Provide a reason for rejecting it at the admin level."
+        confirmLabel="Reject"
+        danger
+        onConfirm={handleReject.confirm}
+        onCancel={handleReject.close}
+        loading={false}
+      >
+        <textarea
+          value={rejectModal.reason}
+          onChange={(e) => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
+          rows={4}
+          placeholder="Enter rejection reason…"
+          autoFocus
+          style={styles.rejectTextarea}
+        />
+      </ConfirmModal>
+
+      <ConfirmModal
+        open={deleteModal.open}
+        title="Delete Quotation"
+        message="This action cannot be undone. The quotation and all associated images will be permanently removed."
+        confirmLabel="Delete"
+        danger
+        onConfirm={handleDelete.confirm}
+        onCancel={handleDelete.close}
+        loading={isActionLoading(deleteModal.id, 'delete')}
+      />
+
+      {/* Topbar */}
       <div style={{ ...styles.topbar, padding: isMobile ? '0.75rem 1rem' : '0 2rem', flexDirection: isMobile ? 'column' : 'row', height: isMobile ? 'auto' : 60, gap: isMobile ? '0.75rem' : 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: isMobile ? '100%' : 'auto' }}>
           <div>
@@ -1143,7 +1210,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             alignItems: 'center',
             gap: '0.4rem'
           }}>
-            <Users size={isMobile ? 12 : 14} /> { "Customers"}
+            <Users size={isMobile ? 12 : 14} /> Customers
           </button>
 
           <div style={{ position: 'relative' }}>
@@ -1235,7 +1302,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             alignItems: 'center',
             gap: '0.4rem'
           }}>
-            <FileText size={isMobile ? 12 : 14} /> {"New Quotation"}
+            <FileText size={isMobile ? 12 : 14} /> New Quotation
           </button>
           
           <button onClick={handleUserStats} style={{
@@ -1357,7 +1424,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             </div>
           </div>
 
-          {/* Refresh overlay - only show when refreshing existing data */}
+          {/* Refresh overlay */}
           {isRefreshing && safeQ.length > 0 && (
             <div style={styles.refreshOverlay}>
               <div style={styles.refreshCard}>
@@ -1367,7 +1434,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             </div>
           )}
 
-          {/* Content - Show skeleton during initial load */}
+          {/* Content */}
           {isInitialLoading ? (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -1389,9 +1456,9 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                 <div style={{ ...styles.emptyState, padding: isMobile ? '3rem 1rem' : '4rem 2rem' }}>
                   <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
                   <p style={styles.emptyStateTitle}>
-                    {serverFilters.search ? `No results for "${serverFilters.search}"` : 'No quotations found'}
+                    {filters.search ? `No results for "${filters.search}"` : 'No quotations found'}
                   </p>
-                  {serverFilters.search && (
+                  {filters.search && (
                     <button onClick={clearSearch} style={styles.emptyStateClear}>
                       Clear search
                     </button>
@@ -1408,7 +1475,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                     }}>
                       {safeQ.length === 0 ? (
                         <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
-                          No results for "<strong>{serverFilters.search}</strong>"
+                          No results for "<strong>{filters.search}</strong>"
                           <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
                         </div>
                       ) : (
@@ -1436,15 +1503,15 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                       <table style={styles.table}>
                         <thead>
                           <tr>
-                            <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
+                            <SortHeader label="Quote #" field="quotationNumber" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
+                            <SortHeader label="Customer" field="customer" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
                             <th style={styles.tableHeaderCell}>Project Name</th>
-                            <SortHeader label="Query Date" field="queryDate" sort={sort} onSort={handleSort} align="center"/>
-                            <SortHeader label="Submitted" field="date" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
-                            <SortHeader label="Created by" field="createdby" sort={sort} onSort={handleSort}/>
-                            <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
+                            <SortHeader label="Query Date" field="queryDate" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} align="center"/>
+                            <SortHeader label="Submitted" field="date" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
+                            <SortHeader label="Expiry" field="expiryDate" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
+                            <SortHeader label="Status" field="status" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
+                            <SortHeader label="Created by" field="createdby" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort}/>
+                            <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} align="right"/>
                             <th style={styles.actionsHeaderCell}>Actions</th>
                           </tr>
                         </thead>
@@ -1452,7 +1519,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                           {safeQ.length === 0 ? (
                             <tr>
                               <td colSpan={10} style={styles.noResults}>
-                                No results for "<strong>{serverFilters.search}</strong>"
+                                No results for "<strong>{filters.search}</strong>"
                                 <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
                               </td>
                             </tr>
@@ -1464,7 +1531,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                     </div>
                   )}
                   
-                  {/* Server-side Pagination */}
+                  {/* Pagination */}
                   {!isMobile && quotationsPagination && quotationsPagination.totalPages > 1 && (
                     <PaginationBar
                       total={quotationsPagination.total || 0}
@@ -1574,6 +1641,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   );
 }
 
+ 
 
 // ─────────────────────────────────────────────────────────────
 // Styles

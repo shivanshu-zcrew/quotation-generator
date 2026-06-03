@@ -482,6 +482,7 @@ exports.getMyQuotations = async (req, res) => {
  
     const totalPages = Math.ceil(total / limit);
     
+    
     res.status(200).json({
       success: true, data,
       pagination: {
@@ -494,6 +495,207 @@ exports.getMyQuotations = async (req, res) => {
   } catch (err) {
     logger.error(`Get my quotations error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching your quotations', error: err.message });
+  }
+};
+
+exports.getMyQuotationsStats = async (req, res) => {
+  const startTime = Date.now();
+  try {
+    // Get companyId from query params
+    let companyId = req.query.companyId || req.headers['x-company-id'];
+    
+    // Get user ID from request
+    const userId = req.user.id;
+    const userObjectId = mongoose.Types.ObjectId.isValid(userId) 
+      ? new mongoose.Types.ObjectId(userId) 
+      : userId;
+    
+    console.log('🔍 ===== DEBUG START =====');
+    console.log('🔍 User ID from token:', userId);
+    console.log('🔍 User ObjectId:', userObjectId);
+    console.log('🔍 User ID type:', typeof userId);
+    console.log('🔍 CompanyId from query:', companyId);
+    
+    // STEP 1: Check ALL quotations in the system
+    const allQuotationsCount = await Quotation.countDocuments();
+    console.log('📊 Total quotations in system:', allQuotationsCount);
+    
+    // STEP 2: Check quotations for this user (without company filter)
+    const userQuotationsAllCompanies = await Quotation.countDocuments({ 
+      createdBy: userObjectId 
+    });
+    console.log('📊 User quotations (all companies):', userQuotationsAllCompanies);
+    
+    // STEP 3: Check quotations for this company (any user)
+    let companyObjectId = null;
+    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(companyId)) {
+        companyObjectId = new mongoose.Types.ObjectId(companyId);
+        const companyQuotationsAllUsers = await Quotation.countDocuments({ 
+          companyId: companyObjectId 
+        });
+        console.log('📊 Company quotations (all users):', companyQuotationsAllUsers);
+      }
+    }
+    
+    // STEP 4: Check quotations for this user AND this company
+    let matchStage = { createdBy: userObjectId };
+    if (companyObjectId) {
+      matchStage.companyId = companyObjectId;
+      const userCompanyQuotations = await Quotation.countDocuments(matchStage);
+      console.log('📊 User quotations (this company):', userCompanyQuotations);
+    }
+    
+    // STEP 5: Sample one quotation to check structure
+    const sampleQuotation = await Quotation.findOne(matchStage).lean();
+    if (sampleQuotation) {
+      console.log('🔍 Sample quotation found:');
+      console.log('   - _id:', sampleQuotation._id);
+      console.log('   - quotationNumber:', sampleQuotation.quotationNumber);
+      console.log('   - createdBy:', sampleQuotation.createdBy);
+      console.log('   - createdBy type:', typeof sampleQuotation.createdBy);
+      console.log('   - companyId:', sampleQuotation.companyId);
+      console.log('   - status:', sampleQuotation.status);
+    } else {
+      console.log('⚠️ No sample quotation found for this user/company');
+      
+      // Try to find ANY quotation with this user ID (different format)
+      const userQuotationAny = await Quotation.findOne({ 
+        createdBy: userId  // Try as string
+      }).lean();
+      if (userQuotationAny) {
+        console.log('🔍 Found quotation with string user ID!');
+        console.log('   - createdBy stored as:', typeof userQuotationAny.createdBy);
+        console.log('   - createdBy value:', userQuotationAny.createdBy);
+      }
+    }
+    
+    // Build match stages
+    let quotationMatchStage = { createdBy: userObjectId };
+    let customerMatchStage = {};
+    
+    if (companyObjectId) {
+      quotationMatchStage.companyId = companyObjectId;
+      customerMatchStage.companyId = companyObjectId;
+    }
+    
+    console.log('🔍 Final quotationMatchStage:', JSON.stringify(quotationMatchStage, null, 2));
+    
+    // All statuses
+    const allStatuses = [
+      'pending', 'pending_admin', 'ops_approved', 'ops_rejected',
+      'approved', 'rejected', 'awarded', 'not_awarded'
+    ];
+    
+    // Get status counts
+    const allStatusCounts = await Quotation.aggregate([
+      { $match: { ...quotationMatchStage, status: { $in: allStatuses } } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+    
+    console.log('📊 Status counts from aggregation:', JSON.stringify(allStatusCounts, null, 2));
+    
+    // Get total value
+    const totalValueResult = await Quotation.aggregate([
+      { $match: quotationMatchStage },
+      { $group: { _id: null, total: { $sum: '$total' } } }
+    ]);
+    
+    // Get awarded value
+    const awardedValueResult = await Quotation.aggregate([
+      { $match: { ...quotationMatchStage, status: 'awarded' } },
+      { $group: { _id: null, total: { $sum: '$total' } } }
+    ]);
+    
+    // Get customers (all in company)
+    const Customer = mongoose.model('Customer');
+    const customersResult = await Customer.distinct('_id', customerMatchStage);
+    
+    // Build counts map
+    const countsMap = {};
+    allStatusCounts.forEach(item => {
+      countsMap[item._id] = item.count;
+    });
+    
+    const totalQuotations = allStatusCounts.reduce((sum, item) => sum + item.count, 0);
+    const pendingCount = (countsMap['pending'] || 0) + (countsMap['pending_admin'] || 0);
+    const opsApprovedCount = countsMap['ops_approved'] || 0;
+    const opsRejectedCount = countsMap['ops_rejected'] || 0;
+    const approvedCount = countsMap['approved'] || 0;
+    const rejectedCount = countsMap['rejected'] || 0;
+    const awardedCount = countsMap['awarded'] || 0;
+    const notAwardedCount = countsMap['not_awarded'] || 0;
+    
+    const conversionRate = totalQuotations > 0 
+      ? ((awardedCount / totalQuotations) * 100).toFixed(1)
+      : 0;
+    
+    console.log('📊 FINAL STATS:');
+    console.log('   - totalQuotations:', totalQuotations);
+    console.log('   - pending:', pendingCount);
+    console.log('   - inReview (ops_approved):', opsApprovedCount);
+    console.log('   - returned (ops_rejected):', opsRejectedCount);
+    console.log('   - approved:', approvedCount);
+    console.log('   - rejected:', rejectedCount);
+    console.log('   - awarded:', awardedCount);
+    console.log('   - totalValue:', totalValueResult[0]?.total || 0);
+    console.log('   - awardedValue:', awardedValueResult[0]?.total || 0);
+    console.log('   - totalCustomers:', customersResult.length);
+    console.log('🔍 ===== DEBUG END =====');
+    
+    const stats = {
+      totalQuotations: totalQuotations || 0,
+      pending: pendingCount || 0,
+      inReview: opsApprovedCount || 0,
+      returned: opsRejectedCount || 0,
+      approved: approvedCount || 0,
+      rejected: rejectedCount || 0,
+      awarded: awardedCount || 0,
+      notAwarded: notAwardedCount || 0,
+      totalValue: totalValueResult[0]?.total || 0,
+      awardedValue: awardedValueResult[0]?.total || 0,
+      conversionRate: parseFloat(conversionRate),
+      actionRequired: opsApprovedCount || 0,
+      totalCustomers: customersResult.length || 0,
+      isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL',
+      statusCounts: {
+        all: totalQuotations || 0,
+        pending: pendingCount || 0,
+        ops_approved: opsApprovedCount || 0,
+        ops_rejected: opsRejectedCount || 0,
+        approved: approvedCount || 0,
+        rejected: rejectedCount || 0,
+        awarded: awardedCount || 0,
+        not_awarded: notAwardedCount || 0,
+      }
+    };
+    
+    const duration = Date.now() - startTime;
+    
+    logger.info(`User quotations stats fetched`, {
+      ...stats,
+      companyId: companyId || 'all',
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (err) {
+    const duration = Date.now() - startTime;
+    logger.error('Error fetching user quotations stats', {
+      error: err.message,
+      stack: err.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id
+    });
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching quotations stats', 
+      error: err.message 
+    });
   }
 };
 
@@ -525,7 +727,7 @@ exports.createQuotation = async (req, res) => {
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
-    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions
+    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,  quotationNumber, 
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
@@ -660,7 +862,7 @@ exports.createQuotation = async (req, res) => {
     }
   }
 
-  const quotationNumber = generateQuotationNumber(company.code);
+  // const quotationNumber = generateQuotationNumber(company.code);
 
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {

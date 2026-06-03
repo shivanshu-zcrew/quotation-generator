@@ -620,11 +620,13 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       companyId,
       page = 1,
       limit = 20,
-      search = ''
+      search = '',
+      sortBy = 'createdAt',     // ← ADD THIS
+      sortDir = 'desc'           // ← ADD THIS
     } = req.query;
 
     logger.debug('Fetching all quotations for admin', {
-      filters: { status, fromDate, toDate, userId, companyId, page, limit, search },
+      filters: { status, fromDate, toDate, userId, companyId, page, limit, search, sortBy, sortDir },
       userId: req.user?.id
     });
 
@@ -662,10 +664,48 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     // Get total count for pagination
     const totalCount = await Quotation.countDocuments(query);
     
-    // Get paginated results
+    // Build sort object
+    let sortObject = {};
+    // Map frontend field names to database field names
+    switch (sortBy) {
+      case 'quotationNumber':
+        sortObject = { quotationNumber: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'customerSnapshot.name':
+      case 'customer':
+        sortObject = { 'customerSnapshot.name': sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'queryDate':
+        sortObject = { queryDate: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'date':
+        sortObject = { date: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'expiryDate':
+        sortObject = { expiryDate: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'total':
+        sortObject = { total: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'status':
+        sortObject = { status: sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'createdBy.name':
+      case 'createdby':
+        sortObject = { 'createdBySnapshot.name': sortDir === 'asc' ? 1 : -1 };
+        break;
+      case 'createdAt':
+      default:
+        sortObject = { createdAt: sortDir === 'asc' ? 1 : -1 };
+        break;
+    }
+    
+    console.log('📊 Admin sort query:', { sortBy, sortDir, sortObject }); // Debug log
+    
+    // Get paginated results with sorting
     const quotations = await fullPopulate(
       Quotation.find(query)
-        .sort({ createdAt: -1 })
+        .sort(sortObject)        // ← ADD SORTING HERE
         .skip(skip)
         .limit(parsedLimit)
     ).lean();
@@ -680,6 +720,8 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       page: parsedPage,
       limit: parsedLimit,
       totalPages,
+      sortBy,
+      sortDir,
       filters: { status, userId, companyId, search },
       duration: `${duration}ms`,
       adminId: req.user?.id
@@ -696,7 +738,7 @@ exports.getAllQuotationsAdmin = async (req, res) => {
         hasNextPage: parsedPage < totalPages,
         hasPreviousPage: parsedPage > 1
       },
-      filters: { status, fromDate, toDate, userId, companyId, search },
+      filters: { status, fromDate, toDate, userId, companyId, search, sortBy, sortDir },
       isAllCompanies: !companyId || companyId === 'all'
     });
   } catch (error) {

@@ -83,6 +83,7 @@ router.get('/:id/internal-documents/:docId/download', quotationController.getInt
 // =============================================================
 router.post('/', quotationController.createQuotation);
 router.get('/my-quotations', quotationController.getMyQuotations);
+router.get('/my-quotations/stats', quotationController.getMyQuotationsStats);
 router.get('/:id', quotationController.getQuotation);
 router.put('/:id', quotationController.updateQuotation);
 router.delete('/:id', quotationController.deleteQuotation);

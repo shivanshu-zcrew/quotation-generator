@@ -10,6 +10,10 @@ import {
   RefreshCw,
   Search,
   X,
+  Clock,
+  Shield,
+  CheckCircle,
+  Ban,
   LogOut,
   Plus,
   Calendar,
@@ -62,6 +66,9 @@ import {
 import { downloadQuotationPDF } from "../utils/pdfGenerator";
 import { htmlToSections, sectionsToHTML } from "../components/TermsCondition";
 import LoadingOverlay from "../components/LoadingOverlay";
+
+// Import the new stats hook
+import { useDashboardStats } from "../hooks/useDashboardStats";
 
 const useMediaQuery = (query) => {
   const [matches, setMatches] = useState(() => {
@@ -148,6 +155,16 @@ const STATUS_CONFIG = {
     icon: "✗",
     description: "Customer rejected",
   },
+};
+
+// Tab to status mapping
+const TAB_STATUS_MAP = {
+  all: null,
+  pending: 'pending',
+  in_review: 'ops_approved',
+  approved: 'approved',
+  awarded: 'awarded',
+  returned: 'ops_rejected'
 };
 
 const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
@@ -301,6 +318,23 @@ const PaginationBar = React.memo(({
       </span>
       
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <select
+          value={limit}
+          onChange={(e) => onLimitChange(Number(e.target.value))}
+          style={{
+            padding: '0.25rem 0.5rem',
+            borderRadius: '6px',
+            border: '1px solid #e2e8f0',
+            fontSize: '0.75rem',
+            backgroundColor: '#fff',
+            cursor: 'pointer'
+          }}
+        >
+          {PAGE_SIZE_OPTIONS.map(size => (
+            <option key={size} value={size}>{size} per page</option>
+          ))}
+        </select>
+        
         <button 
           onClick={() => onPageChange(Math.max(1, page - 1))} 
           disabled={page === 1} 
@@ -529,7 +563,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     sortBy: "date",
     sortDir: "desc",
   });
-
+  
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
   const [modalsState, setModalsState] = useState({
     exportingId: null,
     deleteModal: { open: false, quotation: null, busy: false },
@@ -537,12 +572,34 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     queryDateModal: { open: false, quotation: null },
   });
 
+  const [refreshState, setRefreshState] = useState({
+    progress: 0,
+    step: "",
+    isRefreshing: false,
+  });
   const [toasts, setToasts] = useState([]);
   const searchRef = useRef(null);
   const searchTimer = useRef(null);
   let toastIdRef = useRef(0);
 
-  // Use backend pagination hook
+  // ✅ Dashboard stats hook (global stats)
+  const { 
+    totalQuotations: globalTotalQuotations,
+    pending: globalPending,
+    inReview: globalInReview,
+    returned: globalReturned,
+    approved: globalApproved,
+    awarded: globalAwarded,
+    rejected: globalRejected,
+    awardedValue: globalAwardedValue,
+    totalCustomers: globalTotalCustomers,
+    conversionRate: globalConversionRate,
+    statusCounts: globalStatusCounts,
+    loading: globalStatsLoading,
+    refresh: refreshGlobalStats
+  } = useDashboardStats();
+
+  // Backend pagination hook (table data)
   const {
     quotations,
     quotationsLoading,
@@ -556,12 +613,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     totalPages,
     totalCount,
   } = useCompanyQuotations();
-  
-  const {
-    totalCustomers,
-    loading: statsLoading,
-    refetch: refetchCustomerStats,
-  } = useCustomerStatsWithCompany();
   
   const loadError = useAppStore((s) => s.loadError);
   const deleteQuotation = useAppStore((s) => s.deleteQuotation);
@@ -579,13 +630,27 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   } = useCompanyCurrency();
 
   const hasMountedRef = useRef(false);
-  const initialLoadComplete = useRef(false);
-
+ 
   // Determine loading states
-  const isLoading = (!quotationsInitialized || quotationsLoading || statsLoading) && !initialLoadComplete.current;
+  const isLoading = (!quotationsInitialized || globalStatsLoading) && !initialLoadComplete;
   const isRefreshing = quotationsInitialized && quotationsLoading && quotations?.length > 0;
   const showEmptyState = quotationsInitialized && !quotationsLoading && (!quotations || quotations.length === 0);
-
+  
+  // Wait for both stats and quotations to be ready
+  useEffect(() => {
+    if (quotationsInitialized && !globalStatsLoading && !initialLoadComplete) {
+      const timer = setTimeout(() => {
+        setInitialLoadComplete(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [quotationsInitialized, globalStatsLoading, initialLoadComplete]);
+  
+  // Reset loading when company changes
+  useEffect(() => {
+    setInitialLoadComplete(false);
+  }, [selectedCompany]);
+  
   // Update limit when mobile changes
   useEffect(() => {
     const newLimit = isMobile ? 10 : 20;
@@ -594,18 +659,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     }
   }, [isMobile, currentLimit, changeLimit]);
 
-  useEffect(() => {
-    if (selectedCompany && !initialLoadComplete.current && !isLoading) {
-      initialLoadComplete.current = true;
-    }
-  }, [selectedCompany, isLoading]);
-
-  useEffect(() => {
-    if (selectedCompany) {
-      refetchCustomerStats();
-    }
-  }, [selectedCompany, refetchCustomerStats]);
-
+  // Update view mode on mobile
   useEffect(() => {
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
@@ -620,7 +674,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   }, [isMobile]);
  
   const safeQ = quotations || [];
-  const hasData = safeQ.length > 0;
 
   const addToast = useCallback((message, type = "info") => {
     const id = ++toastIdRef.current;
@@ -636,45 +689,25 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     []
   );
 
-  // Calculate stats from current page data (for display only)
-  const { totalRevenue, statusCounts } = useMemo(() => {
-    let rev = 0;
-    const c = {
-      all: 0,
-      pending: 0,
-      in_review: 0,
-      approved: 0,
-      awarded: 0,
-      returned: 0,
-    };
-    for (const q of safeQ) {
-      rev += q.total || 0;
-      c.all++;
-      if (q.status === "pending" || q.status === "pending_admin") c.pending++;
-      else if (q.status === "ops_approved") c.in_review++;
-      else if (q.status === "approved") c.approved++;
-      else if (q.status === "awarded") c.awarded++;
-      else if (q.status === "ops_rejected" || q.status === "rejected") c.returned++;
-    }
-    return { totalRevenue: rev, statusCounts: c };
-  }, [safeQ]);
-
-  // Handle tab change - triggers backend filter
   const handleTabChange = useCallback((key) => {
-    const { statusFilter } = TAB_KEYS[key];
-    const newStatus = Array.isArray(statusFilter) ? statusFilter[0] : statusFilter;
+    const newStatus = TAB_STATUS_MAP[key];
     
-    setFilters(prev => ({ ...prev, status: newStatus || null }));
+    setFilters(prev => ({ 
+      ...prev, 
+      status: newStatus,
+      sortBy: 'date',
+      sortDir: 'desc'
+    }));
+    
     refreshCompanyQuotations({ 
-      status: newStatus || null,
+      status: newStatus,
       page: 1,
-      ...(filters.search && { search: filters.search }),
-      sortBy: filters.sortBy,
-      sortDir: filters.sortDir,
+      sortBy: 'date',
+      sortDir: 'desc',
+      search: filters.search
     });
-  }, [refreshCompanyQuotations, filters]);
-
-  // Handle search - triggers backend filter
+  }, [refreshCompanyQuotations, filters.search]);
+  // Handle search
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
     setFilters(prev => ({ ...prev, search: val }));
@@ -702,7 +735,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     if (searchRef.current) searchRef.current.value = "";
   }, [refreshCompanyQuotations, filters.status, filters.sortBy, filters.sortDir]);
 
-  // Handle sort - triggers backend sort
+  // Handle sort
   const handleSort = useCallback((field) => {
     const newDir = filters.sortBy === field && filters.sortDir === "asc" ? "desc" : "asc";
     const sortField = field === "customer" ? "customerSnapshot.name" : field;
@@ -743,49 +776,50 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   );
 
   const handleRefresh = useCallback(async () => {
+    setRefreshState({
+      progress: 10,
+      step: "Refreshing data...",
+      isRefreshing: true,
+    });
+  
+    const progressInterval = setInterval(() => {
+      setRefreshState(prev => ({
+        ...prev,
+        progress: prev.progress >= 90 ? 90 : prev.progress + 10,
+      }));
+    }, 500);
+  
     try {
-      setUiState((prev) => ({
-        ...prev,
-        saveProgress: 10,
-        saveStep: "Refreshing data...",
-      }));
-
-      const progressInterval = setInterval(() => {
-        setUiState((prev) => ({
-          ...prev,
-          saveProgress: prev.saveProgress >= 90 ? 90 : prev.saveProgress + 10,
-        }));
-      }, 500);
-
-      await fetchAllData();
-      refreshCompanyData?.();
-      await refreshCompanyQuotations({ forceRefresh: true });
-
-      setUiState((prev) => ({
-        ...prev,
-        saveProgress: 100,
-        saveStep: "Complete!",
-      }));
+      await Promise.all([
+        refreshGlobalStats(),
+        refreshCompanyQuotations({ forceRefresh: true })
+      ]);
+  
+      setRefreshState({
+        progress: 100,
+        step: "Complete!",
+        isRefreshing: true,
+      });
       addToast("Data refreshed", "success");
-
+  
       setTimeout(() => {
-        setUiState((prev) => ({
-          ...prev,
-          saveProgress: 0,
-          saveStep: "",
-        }));
+        setRefreshState({
+          progress: 0,
+          step: "",
+          isRefreshing: false,
+        });
       }, 1000);
-
-      clearInterval(progressInterval);
     } catch (err) {
-      setUiState((prev) => ({
-        ...prev,
-        saveProgress: 0,
-        saveStep: "",
-      }));
+      setRefreshState({
+        progress: 0,
+        step: "",
+        isRefreshing: false,
+      });
       addToast(err.message || "Refresh failed", "error");
+    } finally {
+      clearInterval(progressInterval);
     }
-  }, [fetchAllData, refreshCompanyData, addToast, refreshCompanyQuotations]);
+  }, [refreshGlobalStats, refreshCompanyQuotations, addToast]);
 
   const buildQuotationForPDF = useCallback(async (quotation) => {
     if (quotation.termsAndConditions && quotation.termsAndConditions.includes("<img")) {
@@ -848,12 +882,15 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     if (result?.success) {
       addToast(`Quotation ${quotation.quotationNumber} deleted.`, "success");
       setModalsState((prev) => ({ ...prev, deleteModal: { open: false, quotation: null, busy: false } }));
-      await refreshCompanyQuotations({ forceRefresh: true });
+      await Promise.all([
+        refreshCompanyQuotations({ forceRefresh: true }),
+        refreshGlobalStats()
+      ]);
     } else {
       addToast(result?.error || "Delete failed", "error");
       setModalsState((prev) => ({ ...prev, deleteModal: { ...prev.deleteModal, busy: false } }));
     }
-  }, [modalsState.deleteModal, deleteQuotation, addToast, refreshCompanyQuotations]);
+  }, [modalsState.deleteModal, deleteQuotation, addToast, refreshCompanyQuotations, refreshGlobalStats]);
 
   const confirmAward = useCallback(
     async (awarded, awardNote) => {
@@ -870,14 +907,17 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             : `"${quotation.quotationNumber}" marked as Not Awarded.`,
           "success"
         );
-        await refreshCompanyQuotations({ forceRefresh: true });
+        await Promise.all([
+          refreshCompanyQuotations({ forceRefresh: true }),
+          refreshGlobalStats()
+        ]);
         setModalsState((prev) => ({ ...prev, awardModal: { open: false, quotation: null, busy: false } }));
       } else {
         addToast(result?.error || "Failed to update", "error");
         setModalsState((prev) => ({ ...prev, awardModal: { ...prev.awardModal, busy: false } }));
       }
     },
-    [modalsState.awardModal, awardQuotation, addToast, refreshCompanyQuotations]
+    [modalsState.awardModal, awardQuotation, addToast, refreshCompanyQuotations, refreshGlobalStats]
   );
 
   useEffect(() => {
@@ -893,15 +933,17 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
+  // TABS use GLOBAL stats
   const TABS = useMemo(
-    () =>
-      Object.entries(TAB_KEYS).map(([key, { label, Icon }]) => ({
-        key,
-        label,
-        Icon,
-        count: statusCounts[key] ?? 0,
-      })),
-    [statusCounts]
+    () => [
+      { key: 'all', label: 'All', Icon: FileText, count: globalTotalQuotations },
+      { key: 'pending', label: 'Pending', Icon: Clock, count: globalPending },
+      { key: 'in_review', label: 'In Review', Icon: Shield, count: globalInReview },
+      { key: 'approved', label: 'Approved', Icon: CheckCircle, count: globalApproved },
+      { key: 'awarded', label: 'Awarded', Icon: Award, count: globalAwarded },
+      { key: 'returned', label: 'Returned', Icon: Ban, count: globalReturned },
+    ],
+    [globalTotalQuotations, globalPending, globalInReview, globalApproved, globalAwarded, globalReturned]
   );
 
   const SkeletonLoader = () => (
@@ -921,7 +963,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             <SkeletonRow key={i} />
           ))}
         </tbody>
-       </table>
+      </table>
     </div>
   );
 
@@ -1002,26 +1044,38 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           </div>
         )}
 
-        {/* Stats Section - Fixed to show proper shimmer */}
-        {isLoading ? (
+        {/* Stats Section - Show shimmer until initial load complete */}
+        {!initialLoadComplete ? (
           <ShimmerStatsCard isMobile={isMobile} />
         ) : (
           isMobile ? (
             <CompactStatsCard 
-              totalRevenue={totalRevenue} 
-              quotationsCount={totalCount} 
-              customersCount={totalCustomers} 
+              totalRevenue={globalAwardedValue} 
+              quotationsCount={globalTotalQuotations} 
+              customersCount={globalTotalCustomers} 
               selectedCurrency={selectedCurrency} 
-              statusCounts={statusCounts} 
+              statusCounts={{
+                pending: globalPending,
+                in_review: globalInReview,
+                approved: globalApproved,
+                awarded: globalAwarded,
+                returned: globalReturned
+              }} 
               loading={false}
             />
           ) : (
             <DesktopStatsGrid 
-              totalRevenue={totalRevenue} 
-              quotationsCount={totalCount} 
-              customersCount={totalCustomers} 
+              totalRevenue={globalAwardedValue} 
+              quotationsCount={globalTotalQuotations} 
+              customersCount={globalTotalCustomers} 
               selectedCurrency={selectedCurrency} 
-              statusCounts={statusCounts} 
+              statusCounts={{
+                pending: globalPending,
+                in_review: globalInReview,
+                approved: globalApproved,
+                awarded: globalAwarded,
+                returned: globalReturned
+              }} 
               loading={false}
             />
           )
@@ -1034,8 +1088,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             {/* Tabs */}
             <div style={{ display: "flex", gap: "0.2rem", padding: "0.35rem", backgroundColor: "#f1f5f9", borderRadius: 10, overflowX: isMobile ? "auto" : "visible", width: isMobile ? "100%" : "auto" }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
-                const active = (key === "all" && !filters.status) || (filters.status === TAB_KEYS[key]?.statusFilter);
-                const isPending = key === "pending";
+const active = (key === "all" && !filters.status) || (filters.status === TAB_STATUS_MAP[key]); 
+               const isPending = key === "pending";
                 const isReturned = key === "returned";
                 const hasAlert = (isPending || isReturned) && count > 0;
                 const alertColor = isPending ? "#f59e0b" : "#ec4899";
@@ -1043,7 +1097,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                   <button key={key} onClick={() => handleTabChange(key)} style={{ padding: isMobile ? "0.3rem 0.6rem" : "0.4rem 0.875rem", borderRadius: 8, border: "none", cursor: "pointer", fontSize: isMobile ? "0.7rem" : "0.8rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.35rem", backgroundColor: active ? "#fff" : "transparent", color: active ? "#0f172a" : "#64748b", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.1)" : "none", whiteSpace: "nowrap" }}>
                     <I size={isMobile ? 11 : 13} />
                     {!isMobile && label}
-                    <span style={{ backgroundColor: active ? (hasAlert ? alertColor : "#0f172a") : (hasAlert ? alertColor : "#e2e8f0"), color: active || hasAlert ? "#fff" : "#64748b", borderRadius: 999, padding: isMobile ? "1px 5px" : "1px 7px", fontSize: isMobile ? "0.6rem" : "0.68rem", fontWeight: 700 }}>{isLoading ? "…" : count}</span>
+                    <span style={{ backgroundColor: active ? (hasAlert ? alertColor : "#0f172a") : (hasAlert ? alertColor : "#e2e8f0"), color: active || hasAlert ? "#fff" : "#64748b", borderRadius: 999, padding: isMobile ? "1px 5px" : "1px 7px", fontSize: isMobile ? "0.6rem" : "0.68rem", fontWeight: 700 }}>{!initialLoadComplete ? "…" : count}</span>
                   </button>
                 );
               })}
@@ -1063,7 +1117,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                   placeholder="Search… (press /)" 
                   defaultValue={filters.search} 
                   onChange={handleSearchChange} 
-                  disabled={isLoading} 
+                  disabled={!initialLoadComplete} 
                 />
                 {filters.search && <button onClick={clearSearch} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0 }}><X size={isMobile ? 13 : 13} /></button>}
               </div>
@@ -1083,9 +1137,9 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           )}
 
           {/* Content */}
-          {isLoading && <SkeletonLoader />}
-
-          {!isLoading && (
+          {!initialLoadComplete ? (
+            <SkeletonLoader />
+          ) : (
             <>
               {showEmptyState ? (
                 <div style={{ textAlign: "center", padding: isMobile ? "3rem 1rem" : "4rem 2rem", color: "#94a3b8" }}>
@@ -1182,8 +1236,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                       {canAward && <ActionBtn bg="#d1fae5" color="#065f46" onClick={() => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation: q, busy: false } }))} icon={Award} label="Award" title="Mark awarded / not awarded" />}
                                       {canDelete && <ActionBtn bg="#fff1f2" color="#e11d48" onClick={() => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation: q, busy: false } }))} icon={Trash2} label="Del" title="Delete quotation" />}
                                     </div>
-                                   </td>
-                                 </tr>
+                                  </td>
+                                </tr>
                               );
                             })}
                           </tbody>
@@ -1209,13 +1263,19 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       {/* Loading Overlays */}
       {uiState.saveProgress > 0 && <LoadingOverlay type="saving" step={uiState.saveStep} progress={uiState.saveProgress} />}
       {uiState.pdfProgress > 0 && <LoadingOverlay type="pdf" step={uiState.pdfStep} progress={uiState.pdfProgress} />}
-
+      {refreshState.isRefreshing && refreshState.progress > 0 && (
+        <LoadingOverlay 
+          type="processing"  
+          step={refreshState.step} 
+          progress={refreshState.progress} 
+        />
+      )}
       <QueryDateUpdater 
         open={modalsState.queryDateModal.open} 
         onClose={() => setModalsState((prev) => ({ ...prev, queryDateModal: { open: false, quotation: null } }))} 
         onUpdate={handleUpdateQueryDate} 
         quotations={safeQ} 
-        loading={statsLoading} 
+        loading={globalStatsLoading} 
       />
     </div>
   );

@@ -115,6 +115,10 @@ const initialState = {
   quotationsVersion: 0,
   _lastRefetchTime: 0, 
   _switchingCompany: false, 
+  dashboardStats: null,
+  statsLoading: false,
+  statsError: null,
+  lastStatsFetch: 0,
   customerFilters: {
     status: 'all',
     taxStatus: 'all',
@@ -204,6 +208,90 @@ export const useAppStore = create(
           clearAuthData();
           set(initialState);
         },
+
+        // ==================== CREATOR DASHBOARD STATS ACTIONS ====================
+
+fetchDashboardStats: async (companyId = null, options = {}) => {
+  const { user, selectedCompany } = get();
+  const { skipCache = false, forceRefresh = false } = options;
+  
+  if (!user) return { success: false, error: 'No user logged in' };
+  
+  // Check cache if not forcing refresh
+  const now = Date.now();
+  const lastFetch = get().lastStatsFetch;
+  if (!forceRefresh && !skipCache && lastFetch && (now - lastFetch) < 30000) {
+    // Return cached stats if less than 30 seconds old
+    const cachedStats = get().dashboardStats;
+    if (cachedStats && cachedStats._selectionId === (companyId || 'all')) {
+      return { success: true, stats: cachedStats };
+    }
+  }
+  
+  set({ statsLoading: true, statsError: null });
+  
+  try {
+    // Determine which company ID to use
+    let targetCompanyId = companyId;
+    if (targetCompanyId === undefined || targetCompanyId === null) {
+      targetCompanyId = selectedCompany;
+    }
+    
+    const params = {};
+    if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
+      params.companyId = targetCompanyId;
+    }
+    
+    console.log('fetchDashboardStats - params:', params);
+    console.log('fetchDashboardStats - user role:', user.role);
+    
+    let response;
+    
+    // Call the appropriate stats API based on user role
+    if (user.role === 'admin') {
+      response = await adminAPI.getAdminStats(params);
+    } else if (user.role === 'ops_manager') {
+      response = await opsAPI.getOpsDashboardStats(params);
+    } else {
+      // Sales/User role - use the new stats endpoint
+      response = await quotationAPI.getMyQuotationsStats(params);
+    }
+    
+    const statsData = response.data?.stats || response.data;
+    
+    // Add metadata to track what selection these stats belong to
+    const statsWithMeta = {
+      ...statsData,
+      _selectionId: targetCompanyId || 'all',
+      _fetchedAt: Date.now()
+    };
+    
+    batchUpdate(set, [
+      ['dashboardStats', statsWithMeta],
+      ['statsLoading', false],
+      ['statsError', null],
+      ['lastStatsFetch', Date.now()]
+    ]);
+    
+    return { success: true, stats: statsData };
+  } catch (error) {
+    console.error('fetchDashboardStats error:', error);
+    batchUpdate(set, [
+      ['statsLoading', false],
+      ['statsError', error.message]
+    ]);
+    return { success: false, error: error.message };
+  }
+},
+
+refreshDashboardStats: async (companyId = null) => {
+  return await get().fetchDashboardStats(companyId, { forceRefresh: true });
+},
+
+clearStatsCache: () => {
+  set({ dashboardStats: null, lastStatsFetch: 0, statsError: null });
+},
+
 
         // ==================== QUOTATIONS ACTIONS ====================
 
@@ -963,6 +1051,7 @@ export const useAppStore = create(
   
   const fetchPromises = [
     get().fetchQuotationsForCompany(companyId, 1, 20, { signal: abortController.signal }),
+    get().fetchDashboardStats(companyIdForApi, { forceRefresh: true }),
     get().refreshStats(),
     get().fetchCustomerStats()
   ];
@@ -1561,6 +1650,7 @@ refreshStats: async () => {
               // Fetch dependent dashboard data concurrently
               const dashboardFetchers = [
                 getFn().fetchQuotationsForCompany(companyId),
+                getFn().fetchDashboardStats(companyId),  
                 getFn().fetchCustomerStats()
               ];
               
@@ -1617,6 +1707,7 @@ refreshStats: async () => {
               // Fetch dependent dashboard data concurrently
               const dashboardFetchers = [
                 getFn().fetchQuotationsForCompany(firstCompanyId),
+                getFn().fetchDashboardStats(firstCompanyId), 
                 getFn().fetchCustomerStats()
               ];
               
