@@ -84,7 +84,6 @@ const initialState = {
   quotationsInitialized: false,
   quotationsLoading: false,
   quotationsPagination: null,
-  // ADD THIS - quotationsFilters
   quotationsFilters: {
     status: 'all',
     search: '',
@@ -99,7 +98,8 @@ const initialState = {
   supportedCurrencies: null,
   adminStats: null,
   opsStats: null,
-  statsLoading: false,
+  // FIX #2: customersPagination is a top-level key (was incorrectly nested in customerFilters)
+  customersPagination: null,
   selectedCompany: getSelectedCompany(),
   selectedCurrency: localStorage.getItem('selectedCurrency') || 'AED',
   currentDocuments: [],
@@ -113,9 +113,10 @@ const initialState = {
   currencyOptions: [],
   customerStats: null,
   quotationsVersion: 0,
-  _lastRefetchTime: 0, 
-  _switchingCompany: false, 
+  _lastRefetchTime: 0,
+  _switchingCompany: false,
   dashboardStats: null,
+  // FIX #1: statsLoading / statsError / lastStatsFetch declared once here
   statsLoading: false,
   statsError: null,
   lastStatsFetch: 0,
@@ -134,8 +135,17 @@ const initialState = {
     lastActivityFrom: null,
     lastActivityTo: null,
     zohoSyncStatus: 'all',
-    customersPagination: null,
   },
+};
+
+// Default quotation filters (used for resets)
+const DEFAULT_QUOTATIONS_FILTERS = {
+  status: 'all',
+  search: '',
+  sortBy: null,
+  sortDir: null,
+  fromDate: null,
+  toDate: null,
 };
 
 // ==================== ZUSTAND STORE ====================
@@ -147,17 +157,17 @@ export const useAppStore = create(
         ...initialState,
 
         // ==================== AUTH ACTIONS ====================
-        
+
         handleLogin: async (email, password) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, login: true } }));
           try {
             const res = await authAPI.login({ email, password });
             if (!res.data) throw new Error('No data received');
-            
+
             const userData = res.data.user || res.data;
             const token = res.data.token || userData.token;
             if (!token || !userData.role) throw new Error('Invalid response');
-            
+
             const user = {
               _id: userData._id || userData.id,
               name: userData.name,
@@ -167,18 +177,18 @@ export const useAppStore = create(
               token,
               companyId: userData.companyId || userData.assignedCompany || null,
             };
-            
+
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(user));
-            
+
             batchUpdate(set, [['user', user], ['lastError', null], ['loading', true]]);
-            
+
             // Clear any existing company selection
             persistSelectedCompany(null);
             set({ selectedCompany: null });
-            
+
             await get()._loadCompanyData();
-            
+
             return { success: true, role: user.role };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -211,109 +221,108 @@ export const useAppStore = create(
 
         // ==================== CREATOR DASHBOARD STATS ACTIONS ====================
 
-fetchDashboardStats: async (companyId = null, options = {}) => {
-  const { user, selectedCompany } = get();
-  const { skipCache = false, forceRefresh = false } = options;
-  
-  if (!user) return { success: false, error: 'No user logged in' };
-  
-  // Check cache if not forcing refresh
-  const now = Date.now();
-  const lastFetch = get().lastStatsFetch;
-  if (!forceRefresh && !skipCache && lastFetch && (now - lastFetch) < 30000) {
-    // Return cached stats if less than 30 seconds old
-    const cachedStats = get().dashboardStats;
-    if (cachedStats && cachedStats._selectionId === (companyId || 'all')) {
-      return { success: true, stats: cachedStats };
-    }
-  }
-  
-  set({ statsLoading: true, statsError: null });
-  
-  try {
-    // Determine which company ID to use
-    let targetCompanyId = companyId;
-    if (targetCompanyId === undefined || targetCompanyId === null) {
-      targetCompanyId = selectedCompany;
-    }
-    
-    const params = {};
-    if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
-      params.companyId = targetCompanyId;
-    }
-    
-    console.log('fetchDashboardStats - params:', params);
-    console.log('fetchDashboardStats - user role:', user.role);
-    
-    let response;
-    
-    // Call the appropriate stats API based on user role
-    if (user.role === 'admin') {
-      response = await adminAPI.getAdminStats(params);
-    } else if (user.role === 'ops_manager') {
-      response = await opsAPI.getOpsDashboardStats(params);
-    } else {
-      // Sales/User role - use the new stats endpoint
-      response = await quotationAPI.getMyQuotationsStats(params);
-    }
-    
-    const statsData = response.data?.stats || response.data;
-    
-    // Add metadata to track what selection these stats belong to
-    const statsWithMeta = {
-      ...statsData,
-      _selectionId: targetCompanyId || 'all',
-      _fetchedAt: Date.now()
-    };
-    
-    batchUpdate(set, [
-      ['dashboardStats', statsWithMeta],
-      ['statsLoading', false],
-      ['statsError', null],
-      ['lastStatsFetch', Date.now()]
-    ]);
-    
-    return { success: true, stats: statsData };
-  } catch (error) {
-    console.error('fetchDashboardStats error:', error);
-    batchUpdate(set, [
-      ['statsLoading', false],
-      ['statsError', error.message]
-    ]);
-    return { success: false, error: error.message };
-  }
-},
+        fetchDashboardStats: async (companyId = null, options = {}) => {
+          const { user, selectedCompany } = get();
+          const { skipCache = false, forceRefresh = false } = options;
+          console.log('🔄 fetchDashboardStats START:', { companyId, options, timestamp: new Date().toISOString() });
+          if (!user) return { success: false, error: 'No user logged in' };
 
-refreshDashboardStats: async (companyId = null) => {
-  return await get().fetchDashboardStats(companyId, { forceRefresh: true });
-},
+          // Check cache if not forcing refresh
+          const now = Date.now();
+          const lastFetch = get().lastStatsFetch;
+          if (!forceRefresh && !skipCache && lastFetch && (now - lastFetch) < 30000) {
+            // Return cached stats if less than 30 seconds old
+            const cachedStats = get().dashboardStats;
+            if (cachedStats && cachedStats._selectionId === (companyId || 'all')) {
+              return { success: true, stats: cachedStats };
+            }
+          }
 
-clearStatsCache: () => {
-  set({ dashboardStats: null, lastStatsFetch: 0, statsError: null });
-},
+          set({ statsLoading: true, statsError: null });
 
+          try {
+            // Determine which company ID to use
+            let targetCompanyId = companyId;
+            if (targetCompanyId === undefined || targetCompanyId === null) {
+              targetCompanyId = selectedCompany;
+            }
+
+            const params = {};
+            if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
+              params.companyId = targetCompanyId;
+            }
+
+            console.log('fetchDashboardStats - params:', params);
+            console.log('fetchDashboardStats - user role:', user.role);
+
+            let response;
+
+            // Call the appropriate stats API based on user role
+            if (user.role === 'admin') {
+              response = await adminAPI.getAdminStats(params);
+            } else if (user.role === 'ops_manager') {
+              response = await opsAPI.getOpsStats(params);
+            } else {
+              // Sales/User role - use the new stats endpoint
+              response = await quotationAPI.getMyQuotationsStats(params);
+            }
+
+            const statsData = response.data?.stats || response.data;
+
+            // Add metadata to track what selection these stats belong to
+            const statsWithMeta = {
+              ...statsData,
+              _selectionId: targetCompanyId || 'all',
+              _fetchedAt: Date.now()
+            };
+
+            batchUpdate(set, [
+              ['dashboardStats', statsWithMeta],
+              ['statsLoading', false],
+              ['statsError', null],
+              ['lastStatsFetch', Date.now()]
+            ]);
+            console.log('✅ fetchDashboardStats COMPLETE:', { statsData, timestamp: new Date().toISOString() });
+            return { success: true, stats: statsData };
+          } catch (error) {
+            console.error('fetchDashboardStats error:', error);
+            batchUpdate(set, [
+              ['statsLoading', false],
+              ['statsError', error.message]
+            ]);
+            return { success: false, error: error.message };
+          }
+        },
+
+        refreshDashboardStats: async (companyId = null) => {
+          return await get().fetchDashboardStats(companyId, { forceRefresh: true });
+        },
+
+        clearStatsCache: () => {
+          set({ dashboardStats: null, lastStatsFetch: 0, statsError: null });
+        },
 
         // ==================== QUOTATIONS ACTIONS ====================
 
         fetchQuotationsForCompany: async (companyId, page = 1, limit = 20, options = {}) => {
           const { user } = get();
           if (!user) return { success: false, error: 'No user logged in' };
-          
+
           const { skipCache = false, forceRefresh = false, signal } = options;
-          
+
           set({ quotationsLoading: true, loadError: null });
-          
+
           try {
-            const params = { 
-              page: parseInt(page, 10), 
+            const params = {
+              page: parseInt(page, 10),
               limit: parseInt(limit, 10),
             };
-            
+
             // Only add companyId if it's not 'all'
             if (companyId && companyId !== 'all' && companyId !== 'ALL') {
               params.companyId = companyId;
             }
-            
+
             // Add current filters if they exist
             const state = get();
             if (state.quotationsFilters?.status && state.quotationsFilters.status !== 'all') {
@@ -328,12 +337,12 @@ clearStatsCache: () => {
             if (state.quotationsFilters?.sortDir) {
               params.sortDir = state.quotationsFilters.sortDir;
             }
-            
+
             let result;
-            
+
             // Pass cache options to API calls
             const cacheOptions = { skipCache, forceRefresh, signal };
-            
+
             if (user.role === 'admin') {
               result = await adminAPI.getAllQuotations(params, cacheOptions);
             } else if (user.role === 'ops_manager') {
@@ -341,12 +350,12 @@ clearStatsCache: () => {
             } else {
               result = await quotationAPI.getMyQuotations(params, cacheOptions);
             }
-            
+
             // Check if operation was aborted
             if (signal?.aborted) {
               return { success: false, aborted: true };
             }
-            
+
             // Extract data and pagination from response
             const quotationsData = result?.data?.data || result?.data?.quotations || [];
             const pagination = result?.data?.pagination || {
@@ -357,7 +366,7 @@ clearStatsCache: () => {
               hasNextPage: false,
               hasPreviousPage: false
             };
-            
+
             batchUpdate(set, [
               ['quotations', quotationsData],
               ['quotationsPagination', pagination],
@@ -366,14 +375,14 @@ clearStatsCache: () => {
               ['lastError', null],
               ['quotationsVersion', get().quotationsVersion + 1]
             ]);
-            
+
             return { success: true, quotations: quotationsData, pagination };
           } catch (error) {
             // Don't treat abort as error
             if (error.name === 'AbortError' || signal?.aborted) {
               return { success: false, aborted: true };
             }
-            
+
             console.error('fetchQuotationsForCompany error:', error);
             batchUpdate(set, [
               ['quotationsLoading', false],
@@ -387,7 +396,7 @@ clearStatsCache: () => {
         refetchQuotations: async (options = {}) => {
           const { selectedCompany, user, quotationsPagination } = get();
           if (!user) return { success: false };
-          
+
           // Prevent rapid consecutive calls
           const now = Date.now();
           const lastCall = get()._lastRefetchTime || 0;
@@ -395,25 +404,25 @@ clearStatsCache: () => {
             return { success: false, message: 'Throttled' };
           }
           set({ _lastRefetchTime: now });
-          
+
           // Use provided page/limit or current pagination values
           const usePage = options.page !== undefined ? options.page : (quotationsPagination?.page || 1);
           const useLimit = options.limit !== undefined ? options.limit : (quotationsPagination?.limit || 20);
-          
+
           let companyId = options.companyId !== undefined ? options.companyId : selectedCompany;
-          
+
           set({ loading: true });
-          
+
           try {
-            const params = { 
+            const params = {
               page: parseInt(usePage, 10),
               limit: parseInt(useLimit, 10)
             };
-            
+
             if (companyId && companyId !== 'all' && companyId !== 'ALL') {
               params.companyId = companyId;
             }
-            
+
             // Add all possible parameters
             if (options.status) params.status = options.status;
             if (options.search) params.search = options.search;
@@ -421,13 +430,13 @@ clearStatsCache: () => {
             if (options.toDate) params.toDate = options.toDate;
             if (options.sortBy) params.sortBy = options.sortBy;
             if (options.sortDir) params.sortDir = options.sortDir;
-            
+
             // Add force refresh option to bypass cache
             const cacheOptions = { forceRefresh: options.forceRefresh || false };
-            
+
             let quotationsData = [];
             let pagination = null;
-            
+
             if (user.role === 'admin') {
               const r = await adminAPI.getAllQuotations(params, cacheOptions);
               quotationsData = r?.data?.data || r?.data?.quotations || [];
@@ -441,9 +450,9 @@ clearStatsCache: () => {
               quotationsData = r?.data?.data || r?.data || [];
               pagination = r?.data?.pagination;
             }
-            
+
             const safeQuotationsData = Array.isArray(quotationsData) ? quotationsData : [];
-            
+
             set(state => ({
               quotations: safeQuotationsData,
               quotationsPagination: pagination || {
@@ -458,7 +467,7 @@ clearStatsCache: () => {
               loading: false,
               lastError: null
             }));
-            
+
             return { success: true, data: safeQuotationsData, pagination };
           } catch (error) {
             console.error('refetchQuotations error:', error);
@@ -481,7 +490,7 @@ clearStatsCache: () => {
 
         // Add method to set quotation filters
         setQuotationsFilters: (filters) => {
-          set(state => ({ 
+          set(state => ({
             quotationsFilters: { ...state.quotationsFilters, ...filters },
             quotationsVersion: state.quotationsVersion + 1
           }));
@@ -489,12 +498,20 @@ clearStatsCache: () => {
           get().refetchQuotations({ ...filters, page: 1, forceRefresh: true });
         },
 
+        // FIX #5: explicit reset back to defaults (was previously merging {} = no-op)
+        resetQuotationsFilters: () => {
+          set(state => ({
+            quotationsFilters: { ...DEFAULT_QUOTATIONS_FILTERS },
+            quotationsVersion: state.quotationsVersion + 1
+          }));
+          get().refetchQuotations({ ...DEFAULT_QUOTATIONS_FILTERS, page: 1, forceRefresh: true });
+        },
 
         addQuotation: async (data) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, addQuotation: true } }));
           try {
             const response = await quotationAPI.create({ ...data, companyId: data.companyId || get().selectedCompany });
-            
+
             if (response?.data?.success) {
               const newQuotation = response.data.quotation;
               if (newQuotation) {
@@ -516,7 +533,7 @@ clearStatsCache: () => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateQuotation_${id}`]: true } }));
           try {
             const result = await quotationAPI.update(id, data);
-            
+
             if (result?.data?.success) {
               const updatedQuotation = result.data.quotation;
               set(state => ({
@@ -556,7 +573,7 @@ clearStatsCache: () => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, [`award_${id}`]: true } }));
           try {
             const res = await quotationAPI.awardQuotation(id, awarded, awardNote);
-            
+
             if (res?.data?.success) {
               const updatedQuotation = res.data.quotation;
               set(state => ({
@@ -645,7 +662,7 @@ clearStatsCache: () => {
             if (companyIdParam === 'all' || companyIdParam === 'ALL') {
               companyIdParam = undefined; // Don't send companyId to get all companies
             }
-            
+
             const params = {
               page: paginationOptions.page || 1,
               limit: paginationOptions.limit || 20,
@@ -653,7 +670,7 @@ clearStatsCache: () => {
               sortOrder: paginationOptions.sortOrder || 'asc',
               ...filters
             };
-            
+
             // Only add companyId if it's defined and not 'all'
             if (companyIdParam && companyIdParam !== 'all') {
               params.companyId = companyIdParam;
@@ -690,9 +707,9 @@ clearStatsCache: () => {
         },
 
         fetchCustomerStats: async (appliedFilters = null, forceRefresh = false) => {
-          const { selectedCompany, operationInProgress } = get();
+          const { selectedCompany } = get();
           if (!selectedCompany) return { success: false, error: 'No company selected' };
-          
+
           if (get().operationInProgress.fetchCustomerStats) {
             return { success: false, error: 'Already fetching stats' };
           }
@@ -705,14 +722,14 @@ clearStatsCache: () => {
             if (companyIdParam === 'all' || companyIdParam === 'ALL') {
               companyIdParam = undefined;
             }
-            
+
             const params = {};
-            
+
             // Only add companyId if it's defined and not 'all'
             if (companyIdParam && companyIdParam !== 'all') {
               params.companyId = companyIdParam;
             }
-            
+
             if (appliedFilters) {
               const filterMap = {
                 status: 'status', taxStatus: 'taxStatus', placeOfSupply: 'placeOfSupply',
@@ -726,8 +743,9 @@ clearStatsCache: () => {
 
             console.log('fetchCustomerStats - params:', params);
 
-            const res = await customerAPI.getStats(params);
-            
+            // FIX #3: forceRefresh now actually forwarded to the API
+            const res = await customerAPI.getStats(params, { forceRefresh });
+
             if (res.data?.success) {
               set({ customerStats: res.data.stats || res.data, lastError: null });
               return { success: true, stats: res.data.stats || res.data };
@@ -748,35 +766,36 @@ clearStatsCache: () => {
             const taxTreatment = data.taxTreatment || 'gcc_non_vat_registered';
             const trnValidation = get().validateTrn(data.taxRegistrationNumber, taxTreatment);
             if (!trnValidation.valid) throw new Error(trnValidation.error);
-            
+
             // Use the companyId from the data (passed from modal)
             let companyId = data.companyId;
-            
+
             // Validate companyId
             if (!companyId) {
               throw new Error('Company ID is required. Please select a company.');
             }
-            
+
             if (companyId === 'all' || companyId === 'ALL') {
               throw new Error('Please select a specific company, not "All Companies"');
             }
-            
+
             // Validate ObjectId format
             const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(companyId);
             if (!isValidObjectId) {
               throw new Error('Invalid company ID format');
             }
-            
+
             // Create customer with the companyId from the form data
             const res = await customerAPI.create({ ...data, companyId });
             const newCustomer = extractResponseData(res);
-            
+
             set(s => ({ customers: [...s.customers, newCustomer], lastError: null }));
             if (typeof customerAPI.clearCustomerCache === 'function') {
               customerAPI.clearCustomerCache();
             }
-            
-            await get().fetchCustomerStats(true);
+
+            // FIX #3: correct arg order (appliedFilters=null, forceRefresh=true)
+            await get().fetchCustomerStats(null, true);
             return { success: true, customer: newCustomer };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -793,18 +812,19 @@ clearStatsCache: () => {
             if (data.companyId === 'all' || data.companyId === 'ALL') {
               delete data.companyId; // Remove companyId from update
             }
-            
+
             const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
             set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
-            
+
             const res = await customerAPI.update(id, data);
             const finalCustomer = extractResponseData(res);
             set(s => ({ customers: s.customers.map(c => c._id === id ? finalCustomer : c) }));
-            
+
             if (typeof customerAPI.clearCustomerCache === 'function') {
               customerAPI.clearCustomerCache();
             }
-            get().fetchCustomerStats(true);
+            // FIX #3: correct arg order
+            get().fetchCustomerStats(null, true);
             return { success: true, customer: finalCustomer };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -823,7 +843,8 @@ clearStatsCache: () => {
               if (typeof customerAPI.clearCustomerCache === 'function') {
                 customerAPI.clearCustomerCache();
               }
-              await get().fetchCustomerStats(true);
+              // FIX #3: correct arg order
+              await get().fetchCustomerStats(null, true);
               return { success: true };
             }
             throw new Error(response.data?.message || 'Failed to delete customer');
@@ -839,7 +860,7 @@ clearStatsCache: () => {
           if (get().operationInProgress.syncCustomers) {
             return { success: false, error: 'Sync already in progress' };
           }
-          
+
           set(s => ({ operationInProgress: { ...s.operationInProgress, syncCustomers: true } }));
           try {
             const response = await customerAPI.syncFromZoho(fullSync);
@@ -847,7 +868,8 @@ clearStatsCache: () => {
               if (typeof customerAPI.clearCustomerCache === 'function') {
                 customerAPI.clearCustomerCache();
               }
-              await get().fetchCustomerStats(true);
+              // FIX #3: correct arg order
+              await get().fetchCustomerStats(null, true);
               await get().fetchAllData();
               return { success: true, stats: response.data.stats };
             }
@@ -941,9 +963,9 @@ clearStatsCache: () => {
           if (get().operationInProgress.syncItems) {
             return { success: false, error: 'Item sync already in progress' };
           }
-          
+
           set(s => ({ operationInProgress: { ...s.operationInProgress, syncItems: true }, lastError: null }));
-          
+
           try {
             const response = await itemAPI.syncItems();
             if (!response.data.success) throw new Error(response.data.message || 'Sync failed');
@@ -965,7 +987,7 @@ clearStatsCache: () => {
                     isResolved = true;
                     clearInterval(pollHandle);
                     clearTimeout(timeoutHandle);
-                    
+
                     if (statusRes.data.status.lastSyncResult?.success) {
                       await get().refreshItems();
                       set(s => ({ operationInProgress: { ...s.operationInProgress, syncItems: false } }));
@@ -998,115 +1020,114 @@ clearStatsCache: () => {
 
         // ==================== COMPANY & CURRENCY ACTIONS ====================
 
- setSelectedCompany: (companyId) => {
-  // Get current company
-  const currentCompany = get().selectedCompany;
-  
-  // If same company, don't do anything
-  if (currentCompany === companyId) {
-    console.log('Company already selected, skipping');
-    return;
-  }
-  
-  // Prevent switching if already switching
-  if (get()._switchingCompany) {
-    console.log('Company switch already in progress');
-    return;
-  }
-  
-  // Create an abort controller for this switch operation
-  const abortController = new AbortController();
-  const switchId = Date.now();
-  
-  // Store the abort controller in state for potential cleanup
-  set({ 
-    _switchingCompany: true,
-    _currentSwitchId: switchId,
-    statsLoading: true, 
-    quotationsLoading: true,
-    _abortController: abortController
-  });
-  
-  // Save the selection
-  persistSelectedCompany(companyId);
-  set({ selectedCompany: companyId });
-  
-  // Handle currency for the new company (skip for 'all')
-  if (companyId !== 'all' && companyId !== 'ALL') {
-    const company = get().companies.find(c => c._id === companyId || c.code === companyId);
-    if (company?.baseCurrency) {
-      localStorage.setItem('selectedCurrency', company.baseCurrency);
-      set({ selectedCurrency: company.baseCurrency });
-      get().fetchExchangeRates(company.baseCurrency);
-    }
-  } else {
-    // For 'all' companies, maybe use a default currency or keep existing
-    // Don't change currency when viewing all companies
-    console.log('Viewing all companies - keeping current currency');
-  }
-  
-  // Create promise with abort capability
-  // For 'all', pass null to API calls
-  const companyIdForApi = (companyId === 'all' || companyId === 'ALL') ? null : companyId;
-  
-  const fetchPromises = [
-    get().fetchQuotationsForCompany(companyId, 1, 20, { signal: abortController.signal }),
-    get().fetchDashboardStats(companyIdForApi, { forceRefresh: true }),
-    get().refreshStats(),
-    get().fetchCustomerStats()
-  ];
-  
-  // Race against abort signal
-  const abortPromise = new Promise((_, reject) => {
-    abortController.signal.addEventListener('abort', () => {
-      reject(new DOMException('Company switch aborted', 'AbortError'));
-    });
-  });
-  
-  Promise.race([
-    Promise.all(fetchPromises),
-    abortPromise
-  ])
-    .then(() => {
-      // Check if this is still the current switch
-      if (get()._currentSwitchId === switchId && !abortController.signal.aborted) {
-        // Small delay to prevent flicker
-        setTimeout(() => {
-          // Double-check we haven't started another switch
-          if (get()._currentSwitchId === switchId) {
-            set({ 
-              _switchingCompany: false,
-              _currentSwitchId: null,
-              statsLoading: false, 
-              quotationsLoading: false,
-              _abortController: null
-            });
+        setSelectedCompany: (companyId) => {
+          // Get current company
+          const currentCompany = get().selectedCompany;
+
+          // If same company, don't do anything
+          if (currentCompany === companyId) {
+            console.log('Company already selected, skipping');
+            return;
           }
-        }, 100);
-      }
-    })
-    .catch((error) => {
-      // Only handle error if this is still the current switch and not an abort
-      if (get()._currentSwitchId === switchId && error.name !== 'AbortError') {
-        console.error('Company switch failed:', error);
-        set({ 
-          _switchingCompany: false,
-          _currentSwitchId: null,
-          statsLoading: false, 
-          quotationsLoading: false,
-          lastError: AppError.from(error),
-          _abortController: null
-        });
-      }
-    });
-},
-        
+
+          // Prevent switching if already switching
+          if (get()._switchingCompany) {
+            console.log('Company switch already in progress');
+            return;
+          }
+
+          // Create an abort controller for this switch operation
+          const abortController = new AbortController();
+          const switchId = Date.now();
+
+          // Store the abort controller in state for potential cleanup
+          set({
+            _switchingCompany: true,
+            _currentSwitchId: switchId,
+            statsLoading: true,
+            quotationsLoading: true,
+            _abortController: abortController
+          });
+
+          // Save the selection
+          persistSelectedCompany(companyId);
+          set({ selectedCompany: companyId });
+
+          // Handle currency for the new company (skip for 'all')
+          if (companyId !== 'all' && companyId !== 'ALL') {
+            const company = get().companies.find(c => c._id === companyId || c.code === companyId);
+            if (company?.baseCurrency) {
+              localStorage.setItem('selectedCurrency', company.baseCurrency);
+              set({ selectedCurrency: company.baseCurrency });
+              get().fetchExchangeRates(company.baseCurrency);
+            }
+          } else {
+            // For 'all' companies, keep the existing currency
+            console.log('Viewing all companies - keeping current currency');
+          }
+
+          // Create promise with abort capability
+          // For 'all', pass null to API calls
+          const companyIdForApi = (companyId === 'all' || companyId === 'ALL') ? null : companyId;
+
+          const fetchPromises = [
+            get().fetchQuotationsForCompany(companyId, 1, 20, { signal: abortController.signal }),
+            get().fetchDashboardStats(companyIdForApi, { forceRefresh: true }),
+            get().refreshStats(),
+            get().fetchCustomerStats()
+          ];
+
+          // Race against abort signal
+          const abortPromise = new Promise((_, reject) => {
+            abortController.signal.addEventListener('abort', () => {
+              reject(new DOMException('Company switch aborted', 'AbortError'));
+            });
+          });
+
+          Promise.race([
+            Promise.all(fetchPromises),
+            abortPromise
+          ])
+            .then(() => {
+              // Check if this is still the current switch
+              if (get()._currentSwitchId === switchId && !abortController.signal.aborted) {
+                // Small delay to prevent flicker
+                setTimeout(() => {
+                  // Double-check we haven't started another switch
+                  if (get()._currentSwitchId === switchId) {
+                    set({
+                      _switchingCompany: false,
+                      _currentSwitchId: null,
+                      statsLoading: false,
+                      quotationsLoading: false,
+                      _abortController: null
+                    });
+                  }
+                }, 100);
+              }
+            })
+            .catch((error) => {
+              // Only handle error if this is still the current switch and not an abort
+              if (get()._currentSwitchId === switchId && error.name !== 'AbortError') {
+                console.error('Company switch failed:', error);
+                set({
+                  _switchingCompany: false,
+                  _currentSwitchId: null,
+                  statsLoading: false,
+                  quotationsLoading: false,
+                  lastError: AppError.from(error),
+                  _abortController: null
+                });
+              }
+            });
+        },
+
         // Add a method to abort company switch if needed
         abortCompanySwitch: () => {
           const abortController = get()._abortController;
           if (abortController) {
             abortController.abort();
-            set({ 
+            set({
               _switchingCompany: false,
               _currentSwitchId: null,
               statsLoading: false,
@@ -1247,82 +1268,84 @@ clearStatsCache: () => {
 
         // ==================== STATS ACTIONS ====================
 
-   // In store.js - Update fetchAdminStats
-fetchAdminStats: async (companyId = null) => {
-  if (get().user?.role !== 'admin') return;
-  set({ statsLoading: true });
-  try {
-    const params = {};
-    // Only add companyId if it's not null, 'all', or 'ALL'
-    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-      params.companyId = companyId;
-    }
-    // If companyId is null, undefined, 'all', or 'ALL' - don't send companyId param
-    // This will fetch stats for ALL companies
-    
-    console.log('fetchAdminStats - params:', params);
-    
-    const response = await adminAPI.getAdminStats(params);
-    
-    // Store with selection ID to track what was fetched
-    const statsWithMeta = {
-      ...response.data,
-      _selectionId: companyId || 'all',
-      _fetchedAt: Date.now()
-    };
-    
-    batchUpdate(set, [['adminStats', statsWithMeta], ['statsLoading', false], ['lastError', null]]);
-    return { success: true, stats: response.data };
-  } catch (error) {
-    console.error('fetchAdminStats error:', error);
-    batchUpdate(set, [['statsLoading', false], ['lastError', AppError.from(error)]]);
-    return { success: false, error: getErrorMessage(error) };
-  }
-},
+        fetchAdminStats: async (companyId = null, options = {}) => {
+          if (get().user?.role !== 'admin') return;
+          const { forceRefresh = false } = options;
+          set({ statsLoading: true });
+          try {
+            const params = {};
+            // Only add companyId if it's not null, 'all', or 'ALL'
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+              params.companyId = companyId;
+            }
+            // If companyId is null/undefined/'all'/'ALL' - don't send companyId param,
+            // which fetches stats for ALL companies.
 
- fetchOpsStats: async (companyId = null) => {
-  if (get().user?.role !== 'ops_manager') return;
-  set({ statsLoading: true });
-  try {
-    const params = {};
-    // Only add companyId if it's not null, 'all', or 'ALL'
-    if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-      params.companyId = companyId;
-    }
-    
-    console.log('fetchOpsStats - params:', params);
-    
-    const response = await opsAPI.getOpsStats(params);
-    
-    // Store with selection ID
-    const statsWithMeta = {
-      ...response.data.stats,
-      _selectionId: companyId || 'all',
-      _fetchedAt: Date.now()
-    };
-    
-    batchUpdate(set, [['opsStats', statsWithMeta], ['statsLoading', false], ['lastError', null]]);
-    return { success: true, stats: response.data.stats };
-  } catch (error) {
-    console.error('fetchOpsStats error:', error);
-    batchUpdate(set, [['statsLoading', false], ['lastError', AppError.from(error)]]);
-    return { success: false, error: getErrorMessage(error) };
-  }
-},
- 
-refreshStats: async () => {
-  const { user, selectedCompany } = get();
-  if (!user) return;
-  
-  // Handle 'all' companies - pass null to fetch all companies
-  const companyId = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
-  
-  if (user.role === 'admin') {
-    await get().fetchAdminStats(companyId);
-  } else if (user.role === 'ops_manager') {
-    await get().fetchOpsStats(companyId);
-  }
-},
+            console.log('fetchAdminStats - params:', params);
+
+            const response = await adminAPI.getAdminStats(params, { forceRefresh });
+
+            // Store with selection ID to track what was fetched
+            const statsWithMeta = {
+              ...response.data,
+              _selectionId: companyId || 'all',
+              _fetchedAt: Date.now()
+            };
+
+            batchUpdate(set, [['adminStats', statsWithMeta], ['statsLoading', false], ['lastError', null]]);
+            return { success: true, stats: response.data };
+          } catch (error) {
+            console.error('fetchAdminStats error:', error);
+            batchUpdate(set, [['statsLoading', false], ['lastError', AppError.from(error)]]);
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
+
+        // FIX #4: now accepts options and forwards forceRefresh (was silently dropped)
+        fetchOpsStats: async (companyId = null, options = {}) => {
+          if (get().user?.role !== 'ops_manager') return;
+          const { forceRefresh = false } = options;
+          set({ statsLoading: true });
+          try {
+            const params = {};
+            // Only add companyId if it's not null, 'all', or 'ALL'
+            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
+              params.companyId = companyId;
+            }
+
+            console.log('fetchOpsStats - params:', params);
+
+            const response = await opsAPI.getOpsStats(params, { forceRefresh });
+
+            // Store with selection ID
+            const statsWithMeta = {
+              ...response.data.stats,
+              _selectionId: companyId || 'all',
+              _fetchedAt: Date.now()
+            };
+
+            batchUpdate(set, [['opsStats', statsWithMeta], ['statsLoading', false], ['lastError', null]]);
+            return { success: true, stats: response.data.stats };
+          } catch (error) {
+            console.error('fetchOpsStats error:', error);
+            batchUpdate(set, [['statsLoading', false], ['lastError', AppError.from(error)]]);
+            return { success: false, error: getErrorMessage(error) };
+          }
+        },
+
+        refreshStats: async () => {
+          const { user, selectedCompany } = get();
+          if (!user) return;
+
+          // Handle 'all' companies - pass null to fetch all companies
+          const companyId = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
+
+          if (user.role === 'admin') {
+            await get().fetchAdminStats(companyId);
+          } else if (user.role === 'ops_manager') {
+            await get().fetchOpsStats(companyId);
+          }
+        },
 
         // ==================== OPS ACTIONS ====================
 
@@ -1356,7 +1379,7 @@ refreshStats: async () => {
 
         fetchAllOpsQuotations: async (params = {}) => {
           if (get().user?.role !== 'ops_manager') return { success: false, error: 'Unauthorized' };
-          
+
           set({ loading: true, loadError: null });
           try {
             const requestParams = {
@@ -1366,7 +1389,7 @@ refreshStats: async () => {
               fromDate: params.fromDate,
               toDate: params.toDate
             };
-            
+
             const response = await opsAPI.getAllQuotations(requestParams);
             batchUpdate(set, [
               ['quotations', response.data.quotations || []],
@@ -1383,7 +1406,7 @@ refreshStats: async () => {
 
         refreshOpsQuotations: async (params = {}) => {
           if (get().user?.role !== 'ops_manager') return { success: false, error: 'Unauthorized' };
-          
+
           set({ loading: true });
           try {
             const requestParams = {
@@ -1392,7 +1415,7 @@ refreshStats: async () => {
               search: params.search,
               _t: Date.now()
             };
-            
+
             const response = await opsAPI.getAllQuotations(requestParams);
             batchUpdate(set, [
               ['quotations', response.data.quotations || []],
@@ -1407,7 +1430,49 @@ refreshStats: async () => {
           }
         },
 
+        // FIX #4: forceRefresh now reaches fetchOpsStats correctly
+        refreshOpsStats: async (companyId = null) => {
+          return await get().fetchOpsStats(companyId, { forceRefresh: true });
+        },
+
         // ==================== DATA FETCHING ====================
+
+        // Shared helper: fetch the base reference data for a company.
+        // Used by fetchAllData and _loadCompanyData to avoid duplication.
+        _fetchCompanyBaseData: async (companyId) => {
+          const [
+            customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes
+          ] = await Promise.all([
+            customerAPI.getAll({ companyId }).catch(() => ({ data: [] })),
+            itemAPI.getAll({ companyId }).catch(() => ({ data: [] })),
+            exchangeRateAPI.getRates().catch(() => ({ data: null })),
+            exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
+            customerAPI.getGccCountries().catch(() => ({ data: [] })),
+            customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
+            customerAPI.getCurrencies().catch(() => ({ data: [] })),
+          ]);
+
+          batchUpdate(set, [
+            ['customers', parseData(customersRes.data)],
+            ['items', parseData(itemsRes.data)],
+            ['exchangeRates', ratesRes.data],
+            ['supportedCurrencies', currenciesRes.data?.currencies || null],
+            ['gccCountries', gccRes.data || []],
+            ['taxTreatments', taxRes.data || []],
+            ['currencyOptions', currencyOptsRes.data || []],
+            ['lastError', null]
+          ]);
+        },
+
+        // Shared helper: apply a company's currency to state + persist it,
+        // and refresh exchange rates for that currency.
+        _applyCompanyCurrency: async (company) => {
+          if (company?.baseCurrency) {
+            localStorage.setItem('selectedCurrency', company.baseCurrency);
+            set({ selectedCurrency: company.baseCurrency });
+            await get().fetchExchangeRates(company.baseCurrency);
+          }
+        },
 
         fetchAllData: async (skipCache = false) => {
           const { user, selectedCompany } = get();
@@ -1415,9 +1480,9 @@ refreshStats: async () => {
             set({ customers: [], items: [], quotations: [], opsReviewHistory: [], companies: [], exchangeRates: null, loading: false, initialized: true });
             return;
           }
-          
+
           set({ loading: true, loadError: null });
-          
+
           try {
             const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
               customerAPI.getAll({ companyId: selectedCompany }, { skipCache }).catch(() => ({ data: [] })),
@@ -1429,9 +1494,9 @@ refreshStats: async () => {
               customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
               customerAPI.getCurrencies().catch(() => ({ data: [] })),
             ]);
-        
+
             const companies = companiesRes.data?.companies || [];
-            
+
             // If no company selected but companies exist, select the first one
             let finalSelectedCompany = selectedCompany;
             if (!finalSelectedCompany && companies.length > 0) {
@@ -1439,7 +1504,7 @@ refreshStats: async () => {
               persistSelectedCompany(finalSelectedCompany);
               set({ selectedCompany: finalSelectedCompany });
             }
-            
+
             batchUpdate(set, [
               ['customers', parseData(customersRes.data)],
               ['items', parseData(itemsRes.data)],
@@ -1453,16 +1518,13 @@ refreshStats: async () => {
               ['lastError', null],
               ['initialized', true]
             ]);
-        
+
             if (companies.length > 0 && !finalSelectedCompany) {
               const defaultId = companies[0]._id;
               persistSelectedCompany(defaultId);
               set({ selectedCompany: defaultId });
               const company = companies.find(c => c._id === defaultId);
-              if (company?.baseCurrency) {
-                localStorage.setItem('selectedCurrency', company.baseCurrency);
-                set({ selectedCurrency: company.baseCurrency });
-              }
+              await get()._applyCompanyCurrency(company);
               await get().fetchQuotationsForCompany(defaultId);
             } else if (finalSelectedCompany) {
               await get().fetchQuotationsForCompany(finalSelectedCompany);
@@ -1470,7 +1532,7 @@ refreshStats: async () => {
           } catch (error) {
             batchUpdate(set, [['loadError', getErrorMessage(error)], ['lastError', AppError.from(error)], ['initialized', true]]);
           } finally {
-            // FIXED: Only update loading if it's currently true
+            // Only update loading if it's currently true
             if (get().loading) {
               set({ loading: false });
             }
@@ -1570,172 +1632,93 @@ refreshStats: async () => {
 
         // ==================== PRIVATE HELPERS ====================
 
+        // FIX #7: the two near-identical branches (selected-company vs fallback-first-company)
+        // are unified into a single code path. We resolve the target company first, then run
+        // one shared load sequence.
         _loadCompanyData: async () => {
-          const setFn = set;
-          const getFn = get;
-          
+          console.log('🚀 _loadCompanyData START:', { timestamp: new Date().toISOString() });
+
           try {
             const companiesRes = await companyAPI.getAll();
             const companies = companiesRes.data?.companies || [];
-            const user = getFn().user;
+            const user = get().user;
             const userRole = user?.role;
             const userAssignedCompany = user?.companyId || user?.assignedCompany;
-            
-            let companyId = getFn().selectedCompany;
-            
-            // If no company is selected, automatically select one
+
+            // Update store with companies
+            set({ companies });
+
+            // ---- Resolve the target company (single source of truth) ----
+            let companyId = get().selectedCompany;
+
             if (!companyId) {
               if (userAssignedCompany) {
-                // User has assigned company - use that
-                const assignedCompany = companies.find(c => 
+                const assignedCompany = companies.find(c =>
                   c._id === userAssignedCompany || c.code === userAssignedCompany
                 );
                 if (assignedCompany) {
                   companyId = assignedCompany._id;
-                  persistSelectedCompany(companyId);
                 }
               }
-              
-              // If still no company (no assigned or assigned not found), take first company
+              // If still nothing, fall back to the first company
               if (!companyId && companies.length > 0) {
                 companyId = companies[0]._id;
-                persistSelectedCompany(companyId);
               }
             }
-            
-            // Update store with companies
-            setFn({ companies });
-            
-            // Set the selected company if we have one (for ALL roles)
-            if (companyId && companyId !== 'all' && companyId !== 'ALL') {
-              // For ops_manager, ensure they only get their assigned company
-              if (userRole === 'ops_manager' && userAssignedCompany && companyId !== userAssignedCompany) {
-                // Force to their assigned company
-                companyId = userAssignedCompany;
-                persistSelectedCompany(companyId);
-              }
-              
-              setFn({ selectedCompany: companyId });
-              
-              const company = companies.find(c => c._id === companyId);
-              if (company?.baseCurrency) {
-                localStorage.setItem('selectedCurrency', company.baseCurrency);
-                setFn({ selectedCurrency: company.baseCurrency });
-                await getFn().fetchExchangeRates(company.baseCurrency);
-              }
-              
-              // Fetch all base data for this company
-              const [customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
-                customerAPI.getAll({ companyId: companyId }).catch(() => ({ data: [] })),
-                itemAPI.getAll({ companyId: companyId }).catch(() => ({ data: [] })),
-                exchangeRateAPI.getRates().catch(() => ({ data: null })),
-                exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
-                customerAPI.getGccCountries().catch(() => ({ data: [] })),
-                customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
-                customerAPI.getCurrencies().catch(() => ({ data: [] })),
-              ]);
-              
-              // Update store with base data (DO NOT turn off loading yet)
-              batchUpdate(setFn, [
-                ['customers', parseData(customersRes.data)],
-                ['items', parseData(itemsRes.data)],
-                ['exchangeRates', ratesRes.data],
-                ['supportedCurrencies', currenciesRes.data?.currencies || null],
-                ['gccCountries', gccRes.data || []],
-                ['taxTreatments', taxRes.data || []],
-                ['currencyOptions', currencyOptsRes.data || []],
-                ['lastError', null]
-              ]);
-              
-              // Fetch dependent dashboard data concurrently
-              const dashboardFetchers = [
-                getFn().fetchQuotationsForCompany(companyId),
-                getFn().fetchDashboardStats(companyId),  
-                getFn().fetchCustomerStats()
-              ];
-              
-              if (userRole === 'admin') {
-                dashboardFetchers.push(getFn().fetchAdminStats(companyId));
-              } else if (userRole === 'ops_manager') {
-                dashboardFetchers.push(getFn().fetchOpsStats(companyId));
-              }
-              
-              await Promise.all(dashboardFetchers);
 
-              // NOW turn off global loading
-              batchUpdate(setFn, [
-                ['initialized', true],
-                ['loading', false]
-              ]);
-              
-            } else if (companies.length > 0) {
-              // Fallback: take first company
-              const firstCompanyId = companies[0]._id;
-              persistSelectedCompany(firstCompanyId);
-              setFn({ selectedCompany: firstCompanyId });
-              
-              const company = companies.find(c => c._id === firstCompanyId);
-              if (company?.baseCurrency) {
-                localStorage.setItem('selectedCurrency', company.baseCurrency);
-                setFn({ selectedCurrency: company.baseCurrency });
-                await getFn().fetchExchangeRates(company.baseCurrency);
-              }
-              
-              // Fetch base data for fallback company
-              const [customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
-                customerAPI.getAll({ companyId: firstCompanyId }).catch(() => ({ data: [] })),
-                itemAPI.getAll({ companyId: firstCompanyId }).catch(() => ({ data: [] })),
-                exchangeRateAPI.getRates().catch(() => ({ data: null })),
-                exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
-                customerAPI.getGccCountries().catch(() => ({ data: [] })),
-                customerAPI.getTaxTreatments().catch(() => ({ data: [] })),
-                customerAPI.getCurrencies().catch(() => ({ data: [] })),
-              ]);
-              
-              // Update store with base data (DO NOT turn off loading yet)
-              batchUpdate(setFn, [
-                ['customers', parseData(customersRes.data)],
-                ['items', parseData(itemsRes.data)],
-                ['exchangeRates', ratesRes.data],
-                ['supportedCurrencies', currenciesRes.data?.currencies || null],
-                ['gccCountries', gccRes.data || []],
-                ['taxTreatments', taxRes.data || []],
-                ['currencyOptions', currencyOptsRes.data || []],
-                ['lastError', null]
-              ]);
-              
-              // Fetch dependent dashboard data concurrently
-              const dashboardFetchers = [
-                getFn().fetchQuotationsForCompany(firstCompanyId),
-                getFn().fetchDashboardStats(firstCompanyId), 
-                getFn().fetchCustomerStats()
-              ];
-              
-              if (userRole === 'admin') {
-                dashboardFetchers.push(getFn().fetchAdminStats(firstCompanyId));
-              } else if (userRole === 'ops_manager') {
-                dashboardFetchers.push(getFn().fetchOpsStats(firstCompanyId));
-              }
-              
-              await Promise.all(dashboardFetchers);
-
-              // NOW turn off global loading
-              batchUpdate(setFn, [
-                ['initialized', true],
-                ['loading', false]
-              ]);
-              
-            } else {
-              batchUpdate(setFn, [['initialized', true], ['loading', false]]);
+            // ops_manager can only ever load their assigned company
+            if (userRole === 'ops_manager' && userAssignedCompany &&
+                companyId && companyId !== 'all' && companyId !== 'ALL' &&
+                companyId !== userAssignedCompany) {
+              companyId = userAssignedCompany;
             }
+
+            const hasConcreteCompany = !!companyId && companyId !== 'all' && companyId !== 'ALL';
+
+            if (!hasConcreteCompany) {
+              // Nothing to load (no companies at all)
+              batchUpdate(set, [['initialized', true], ['loading', false]]);
+              console.log('✅ _loadCompanyData COMPLETE - no company to load:', { timestamp: new Date().toISOString() });
+              return;
+            }
+
+            // ---- Single shared load path ----
+            persistSelectedCompany(companyId);
+            set({ selectedCompany: companyId });
+
+            const company = companies.find(c => c._id === companyId);
+            await get()._applyCompanyCurrency(company);
+
+            // Base reference data (does NOT turn off loading yet)
+            await get()._fetchCompanyBaseData(companyId);
+
+            // Dependent dashboard data, fetched concurrently
+            const dashboardFetchers = [
+              get().fetchQuotationsForCompany(companyId),
+              get().fetchDashboardStats(companyId),
+              get().fetchCustomerStats()
+            ];
+
+            if (userRole === 'admin') {
+              dashboardFetchers.push(get().fetchAdminStats(companyId));
+            } else if (userRole === 'ops_manager') {
+              dashboardFetchers.push(get().fetchOpsStats(companyId));
+            }
+
+            await Promise.all(dashboardFetchers);
+
+            // NOW turn off global loading
+            batchUpdate(set, [['initialized', true], ['loading', false]]);
+
+            console.log('✅ _loadCompanyData COMPLETE - initialized set to true:', { timestamp: new Date().toISOString() });
           } catch (err) {
             console.error('Load company data error:', err);
-            batchUpdate(setFn, [['loading', false], ['lastError', AppError.from(err)], ['initialized', true]]);
+            batchUpdate(set, [['loading', false], ['lastError', AppError.from(err)], ['initialized', true]]);
           }
         },
       }),
-      { 
-        name: 'app-store', 
+      {
+        name: 'app-store',
         partialize: (state) => ({
           user: state.user,
           selectedCompany: state.selectedCompany,
@@ -1764,49 +1747,50 @@ export const useCompanyQuotations = () => {
   const quotationsInitialized = useAppStore((state) => state.quotationsInitialized);
   const fetchQuotationsForCompany = useAppStore((state) => state.fetchQuotationsForCompany);
   const setQuotationsFilters = useAppStore((state) => state.setQuotationsFilters);
+  const resetQuotationsFilters = useAppStore((state) => state.resetQuotationsFilters);
   const quotationsFilters = useAppStore((state) => state.quotationsFilters);
-  
+
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [localFilters, setLocalFilters] = useState({});
   const isRefreshingRef = useRef(false);
   const initialLoadDone = useRef(false);
   const previousCompanyRef = useRef(selectedCompany);
-  
+
   // Create stable references for filters
   const localFiltersRef = useRef(localFilters);
   const pageRef = useRef(page);
   const limitRef = useRef(limit);
-  
+
   // Update refs when values change
   useEffect(() => {
     localFiltersRef.current = localFilters;
   }, [localFilters]);
-  
+
   useEffect(() => {
     pageRef.current = page;
   }, [page]);
-  
+
   useEffect(() => {
     limitRef.current = limit;
   }, [limit]);
-  
+
   // Create a stable refresh callback that uses refs
   const refresh = useCallback(async (options = {}) => {
     if (!selectedCompany) return { success: false };
     if (isRefreshingRef.current) return { success: false, message: 'Already refreshing' };
-    
+
     isRefreshingRef.current = true;
-    
+
     try {
       const usePage = options.page !== undefined ? options.page : pageRef.current;
       const useLimit = options.limit !== undefined ? options.limit : limitRef.current;
       const useFilters = options.filters !== undefined ? options.filters : localFiltersRef.current;
-      
+
       const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? 'all' : selectedCompany;
-      
-      const result = await refetchQuotations({ 
-        companyId: companyIdParam, 
+
+      const result = await refetchQuotations({
+        companyId: companyIdParam,
         page: usePage,
         limit: useLimit,
         status: options.status || useFilters.status,
@@ -1816,21 +1800,21 @@ export const useCompanyQuotations = () => {
         sortBy: options.sortBy,
         sortDir: options.sortDir,
         forceRefresh: options.forceRefresh || false,
-        ...options 
+        ...options
       });
-      
+
       // Update state from result pagination
       if (result?.pagination) {
         if (result.pagination.page !== pageRef.current) setPage(result.pagination.page);
         if (result.pagination.limit !== limitRef.current) setLimit(result.pagination.limit);
       }
-      
+
       return result;
     } finally {
       isRefreshingRef.current = false;
     }
   }, [selectedCompany, refetchQuotations]);
-  
+
   // Reset page when company changes
   useEffect(() => {
     if (previousCompanyRef.current !== selectedCompany) {
@@ -1839,25 +1823,25 @@ export const useCompanyQuotations = () => {
       initialLoadDone.current = false;
     }
   }, [selectedCompany]);
-  
+
   // Auto-fetch when dependencies change - using refs to avoid circular dependency
   useEffect(() => {
     if (!selectedCompany || !quotationsInitialized) return;
-    
+
     // Only auto-refresh if initial load is done
     if (!initialLoadDone.current) return;
-    
+
     const timeoutId = setTimeout(() => {
-      refresh({ 
-        page: pageRef.current, 
-        limit: limitRef.current, 
-        ...localFiltersRef.current 
+      refresh({
+        page: pageRef.current,
+        limit: limitRef.current,
+        ...localFiltersRef.current
       });
     }, 100);
-    
+
     return () => clearTimeout(timeoutId);
   }, [selectedCompany, page, limit, localFilters, quotationsInitialized, refresh]);
-  
+
   // Initial load - only runs once
   useEffect(() => {
     if (selectedCompany && !initialLoadDone.current && !loading && !quotationsInitialized) {
@@ -1868,22 +1852,22 @@ export const useCompanyQuotations = () => {
       initialLoadDone.current = true;
     }
   }, [selectedCompany, loading, quotationsInitialized, fetchQuotationsForCompany, page, limit]);
-  
+
   const filteredQuotations = useMemo(() => {
     return Array.isArray(quotations) ? quotations : [];
   }, [quotations]);
-  
+
   const goToPage = useCallback((newPage) => {
     if (newPage === page) return;
     setPage(newPage);
   }, [page]);
-  
+
   const changeLimit = useCallback((newLimit) => {
     if (newLimit === limit) return;
     setLimit(newLimit);
     setPage(1);
   }, [limit]);
-  
+
   const updateFilters = useCallback((newFilters) => {
     setLocalFilters(prev => ({ ...prev, ...newFilters }));
     setPage(1);
@@ -1892,16 +1876,17 @@ export const useCompanyQuotations = () => {
       setQuotationsFilters(newFilters);
     }
   }, [setQuotationsFilters]);
-  
+
+  // FIX #5: reset now actually clears filters back to defaults
   const resetPagination = useCallback(() => {
     setPage(1);
     setLocalFilters({});
-    if (setQuotationsFilters) {
-      setQuotationsFilters({});
+    if (resetQuotationsFilters) {
+      resetQuotationsFilters();
     }
     refresh({ page: 1, limit, forceRefresh: true });
-  }, [refresh, limit, setQuotationsFilters]);
-  
+  }, [refresh, limit, resetQuotationsFilters]);
+
   const clearCache = useCallback(async () => {
     const clearQuotationsCache = useAppStore.getState().clearQuotationsCache;
     if (clearQuotationsCache) {
@@ -1931,9 +1916,18 @@ export const useCompanyQuotations = () => {
   };
 };
 
+// FIX #6: select store actions individually (stable refs) instead of destructuring
+// the whole store object, which returned new references every render and caused the
+// hook to re-run/re-render on unrelated store changes.
 export const useDocuments = (quotationId) => {
-  const { currentDocuments, documentLoading, fetchDocuments, uploadDocuments,
-    updateDocumentDescription, deleteDocument, downloadDocument, clearCurrentDocuments } = useAppStore();
+  const currentDocuments = useAppStore(s => s.currentDocuments);
+  const documentLoading = useAppStore(s => s.documentLoading);
+  const fetchDocuments = useAppStore(s => s.fetchDocuments);
+  const uploadDocuments = useAppStore(s => s.uploadDocuments);
+  const updateDocumentDescription = useAppStore(s => s.updateDocumentDescription);
+  const deleteDocument = useAppStore(s => s.deleteDocument);
+  const downloadDocument = useAppStore(s => s.downloadDocument);
+  const clearCurrentDocuments = useAppStore(s => s.clearCurrentDocuments);
   const previousQuotationId = useRef();
 
   useEffect(() => {

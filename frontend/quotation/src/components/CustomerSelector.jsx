@@ -61,28 +61,45 @@ const CustomerSelector = ({
   // =========================
   // Display Customers
   // =========================
+  // Source-of-truth logic:
+  //  - term >= 2 chars  -> server search results (even if empty; no fallback to full list)
+  //  - term == 1 char   -> client-side filter of already-loaded customers
+  //  - empty term       -> full loaded list
+  // Then inactive customers are removed regardless of source.
   const displayCustomers = useMemo(() => {
-    if (isSearching && searchResults.length > 0) {
-      return searchResults;
-    }
+    let list;
 
-    if (searchTerm.trim().length > 0) {
-      const term = searchTerm.toLowerCase().trim();
+    const term = searchTerm.toLowerCase().trim();
 
-      return customers.filter(
+    if (term.length >= 2) {
+      // A server search is/was triggered for queries >= 2 chars.
+      // While the request is in flight, show [] so the loading state renders
+      // instead of stale data. Once it resolves, show the real results
+      // (including a genuine empty result — do NOT fall back to all customers).
+      list = isSearching ? [] : searchResults;
+    } else if (term.length > 0) {
+      // 1-char query: server search not triggered, filter loaded list locally.
+      list = customers.filter(
         (customer) =>
           customer.name?.toLowerCase().includes(term) ||
           customer.email?.toLowerCase().includes(term) ||
           customer.phone?.includes(term)
       );
+    } else {
+      // No query: show everything loaded.
+      list = customers;
     }
 
-    return customers;
+    // Exclude explicitly deactivated customers (e.g. TRN-expired).
+    // `!== false` keeps legacy records where isActive is missing/undefined.
+    return list.filter((c) => c.isActive !== false);
   }, [customers, searchTerm, isSearching, searchResults]);
 
   // =========================
   // Selected Customer
   // =========================
+  // Looks at the full (unfiltered) list so a previously-selected customer
+  // still shows in the trigger even if they are now inactive.
   const selectedCustomer = useMemo(() => {
     return customers.find((c) => c._id === value) || null;
   }, [customers, value]);

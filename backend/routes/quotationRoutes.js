@@ -90,6 +90,7 @@ router.delete('/:id', quotationController.deleteQuotation);
 router.post('/generate-pdf', quotationController.generatePDF);
 router.patch('/:id/query-date', quotationController.updateQueryDate);
 router.patch('/:id/award', quotationController.awardQuotation);
+router.post('/presign-image', quotationController.presignItemImageUpload);
 
 // =============================================================
 // ADMIN ONLY ROUTES

@@ -80,7 +80,7 @@ export default function LoginScreen({ onLogin, onNavigate }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-
+  
     if (!email.trim() || !password.trim()) {
       setError('Please fill in both fields.');
       return;
@@ -89,52 +89,16 @@ export default function LoginScreen({ onLogin, onNavigate }) {
       setError('Enter a valid email address.');
       return;
     }
-
+  
     setLoading(true);
-
     try {
-      const response = await authAPI.login({ email, password });
-
-      if (!response || !response.data) {
-        throw new Error('No response from server');
+      // Delegate entirely to the parent (which calls store.handleLogin -> _loadCompanyData -> navigate)
+      const result = await onLogin(email, password);
+      if (result && result.success === false) {
+        setError(result.error || 'Invalid credentials. Please try again.');
       }
-
-      const userData = response.data.user || response.data;
-      const token = response.data.token || userData.token;
-
-      if (!token || !userData.role) {
-        throw new Error('Invalid server response');
-      }
-
-      // Store auth data
-      localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify({
-        _id: userData._id || userData.id,
-        name: userData.name,
-        email: userData.email,
-        phone: userData.phone,
-        role: userData.role,
-        token,
-        companyId: userData.companyId || userData.assignedCompany || null,
-      }));
-
-      // Call parent onLogin
-      if (onLogin) {
-        await onLogin(email, password);
-      }
-      
     } catch (err) {
-      console.error('Login error:', err);
-      
-      let errorMessage = 'Invalid credentials. Please try again.';
-      
-      if (err.response?.status === 401) {
-        errorMessage = 'Invalid email or password.';
-      } else if (err.response?.data?.message) {
-        errorMessage = err.response.data.message;
-      }
-      
-      setError(errorMessage);
+      setError(err?.message || 'Invalid credentials. Please try again.');
     } finally {
       setLoading(false);
     }

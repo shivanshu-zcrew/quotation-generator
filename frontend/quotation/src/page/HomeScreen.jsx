@@ -278,19 +278,19 @@ const PageBtn = React.memo(({ n, current, onPage }) => (
 ));
 
 // Pagination Bar Component - Uses backend pagination
-const PaginationBar = React.memo(({ 
-  total, 
-  page, 
-  limit, 
+const PaginationBar = React.memo(({
+  total,
+  page,
+  limit,
   totalPages,
-  onPageChange, 
-  onLimitChange 
+  onPageChange,
+  onLimitChange
 }) => {
   if (totalPages <= 1 && total <= PAGE_SIZE_OPTIONS[0]) return null;
-  
+
   const start = (page - 1) * limit + 1;
   const end = Math.min(page * limit, total);
-  
+
   const pages = useMemo(() => {
     const p = [];
     const startPage = Math.max(1, page - 2);
@@ -298,25 +298,25 @@ const PaginationBar = React.memo(({
     for (let i = startPage; i <= endPage; i++) p.push(i);
     return p;
   }, [page, totalPages]);
-  
+
   const showStartEllipsis = pages[0] > 1;
   const showEndEllipsis = pages[pages.length - 1] < totalPages;
-  
+
   return (
-    <div style={{ 
-      padding: '0.75rem 1.5rem', 
-      borderTop: '1px solid #f1f5f9', 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'space-between', 
-      flexWrap: 'wrap', 
+    <div style={{
+      padding: '0.75rem 1.5rem',
+      borderTop: '1px solid #f1f5f9',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
       gap: '0.75rem',
       backgroundColor: '#ffffff'
     }}>
       <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
         Showing <strong>{start}–{end}</strong> of <strong>{total}</strong>
       </span>
-      
+
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <select
           value={limit}
@@ -334,37 +334,37 @@ const PaginationBar = React.memo(({
             <option key={size} value={size}>{size} per page</option>
           ))}
         </select>
-        
-        <button 
-          onClick={() => onPageChange(Math.max(1, page - 1))} 
-          disabled={page === 1} 
-          style={{ 
-            width: 30, 
-            height: 30, 
-            border: '1px solid #e2e8f0', 
-            borderRadius: 7, 
-            background: '#fff', 
-            cursor: page === 1 ? 'not-allowed' : 'pointer', 
-            opacity: page === 1 ? 0.4 : 1, 
-            display: 'flex', 
-            alignItems: 'center', 
+
+        <button
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+          style={{
+            width: 30,
+            height: 30,
+            border: '1px solid #e2e8f0',
+            borderRadius: 7,
+            background: '#fff',
+            cursor: page === 1 ? 'not-allowed' : 'pointer',
+            opacity: page === 1 ? 0.4 : 1,
+            display: 'flex',
+            alignItems: 'center',
             justifyContent: 'center',
           }}
         >
           <ChevronLeft size={14}/>
         </button>
-        
+
         {showStartEllipsis && (
           <>
             <PageBtn n={1} current={page} onPage={onPageChange} />
             {pages[0] > 2 && <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>…</span>}
           </>
         )}
-        
+
         {pages.map(n => (
           <PageBtn key={n} n={n} current={page} onPage={onPageChange} />
         ))}
-        
+
         {showEndEllipsis && (
           <>
             {pages[pages.length - 1] < totalPages - 1 && (
@@ -373,20 +373,20 @@ const PaginationBar = React.memo(({
             <PageBtn n={totalPages} current={page} onPage={onPageChange} />
           </>
         )}
-        
-        <button 
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))} 
-          disabled={page === totalPages} 
-          style={{ 
-            width: 30, 
-            height: 30, 
-            border: '1px solid #e2e8f0', 
-            borderRadius: 7, 
-            background: '#fff', 
-            cursor: page === totalPages ? 'not-allowed' : 'pointer', 
-            opacity: page === totalPages ? 0.5 : 1, 
-            display: 'flex', 
-            alignItems: 'center', 
+
+        <button
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+          style={{
+            width: 30,
+            height: 30,
+            border: '1px solid #e2e8f0',
+            borderRadius: 7,
+            background: '#fff',
+            cursor: page === totalPages ? 'not-allowed' : 'pointer',
+            opacity: page === totalPages ? 0.5 : 1,
+            display: 'flex',
+            alignItems: 'center',
             justifyContent: 'center',
           }}
         >
@@ -453,12 +453,12 @@ const ShimmerStatsCard = ({ isMobile }) => {
       </div>
     );
   }
-  
+
   return (
     <div style={{ marginBottom: "1.5rem" }}>
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(4, 1fr)', 
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
         gap: '1rem',
         marginBottom: '1rem'
       }}>
@@ -547,7 +547,10 @@ const ShimmerStatsCard = ({ isMobile }) => {
 
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const isMobile = useMediaQuery("(max-width: 768px)");
- 
+  useEffect(() => {
+    console.log('🟪 HomeScreen MOUNT');
+    return () => console.log('🟪 HomeScreen UNMOUNT');
+  }, []);
   const [uiState, setUiState] = useState({
     mobileMenuOpen: false,
     viewMode: "table",
@@ -563,8 +566,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     sortBy: "date",
     sortDir: "desc",
   });
-  
-  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+
   const [modalsState, setModalsState] = useState({
     exportingId: null,
     deleteModal: { open: false, quotation: null, busy: false },
@@ -582,8 +584,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const searchTimer = useRef(null);
   let toastIdRef = useRef(0);
 
-  // ✅ Dashboard stats hook (global stats)
-  const { 
+  // Dashboard stats hook (global stats)
+  const {
     totalQuotations: globalTotalQuotations,
     pending: globalPending,
     inReview: globalInReview,
@@ -594,9 +596,9 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     awardedValue: globalAwardedValue,
     totalCustomers: globalTotalCustomers,
     conversionRate: globalConversionRate,
-    statusCounts: globalStatusCounts,
     loading: globalStatsLoading,
-    refresh: refreshGlobalStats
+    refresh: refreshGlobalStats,
+    stats: dashboardStats,
   } = useDashboardStats();
 
   // Backend pagination hook (table data)
@@ -604,7 +606,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     quotations,
     quotationsLoading,
     quotationsInitialized,
-    pagination,
     refresh: refreshCompanyQuotations,
     goToPage,
     changeLimit,
@@ -613,7 +614,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     totalPages,
     totalCount,
   } = useCompanyQuotations();
-  
+
   const loadError = useAppStore((s) => s.loadError);
   const deleteQuotation = useAppStore((s) => s.deleteQuotation);
   const awardQuotation = useAppStore((s) => s.awardQuotation);
@@ -622,7 +623,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const clearError = useAppStore((s) => s.clearError);
   const updateQueryDate = useAppStore((s) => s.updateQueryDate);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
-  
+  const initialized = useAppStore((s) => s.initialized);
+
   const {
     company: currentCompany,
     selectedCurrency,
@@ -630,27 +632,48 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   } = useCompanyCurrency();
 
   const hasMountedRef = useRef(false);
- 
-  // Determine loading states
-  const isLoading = (!quotationsInitialized || globalStatsLoading) && !initialLoadComplete;
-  const isRefreshing = quotationsInitialized && quotationsLoading && quotations?.length > 0;
-  const showEmptyState = quotationsInitialized && !quotationsLoading && (!quotations || quotations.length === 0);
-  
-  // Wait for both stats and quotations to be ready
+
+  // ============================================================
+  // SECTION-LEVEL READINESS (prevents the login shimmer->content blink)
+  //
+  // Instead of gating the whole page on one global flag, each section
+  // (stats card + table) becomes ready the moment ITS OWN data lands,
+  // and latches so a later background refresh never reverts it to a
+  // skeleton. The latches re-arm only on a genuine company switch.
+  // ============================================================
+  const statsReady = dashboardStats?._selectionId != null;
+  const tableReady = quotationsInitialized;
+
+  const statsLatchRef = useRef(false);
+  const tableLatchRef = useRef(false);
+  if (statsReady) statsLatchRef.current = true;
+  if (tableReady) tableLatchRef.current = true;
+
+  // Re-arm both shimmers only on a real company-to-company switch — never
+  // on the initial null -> first company resolution during login.
+  const prevCompanyRef = useRef(selectedCompany);
   useEffect(() => {
-    if (quotationsInitialized && !globalStatsLoading && !initialLoadComplete) {
-      const timer = setTimeout(() => {
-        setInitialLoadComplete(true);
-      }, 100);
-      return () => clearTimeout(timer);
+    const prev = prevCompanyRef.current;
+    prevCompanyRef.current = selectedCompany;
+    if (prev && selectedCompany && prev !== selectedCompany) {
+      statsLatchRef.current = false;
+      tableLatchRef.current = false;
     }
-  }, [quotationsInitialized, globalStatsLoading, initialLoadComplete]);
-  
-  // Reset loading when company changes
-  useEffect(() => {
-    setInitialLoadComplete(false);
   }, [selectedCompany]);
-  
+
+  const showStatsShimmer = !statsLatchRef.current && !statsReady;
+  const showTableShimmer = !tableLatchRef.current && !tableReady;
+
+  // Names kept for the rest of the JSX:
+  // - isInitialLoading gates the TABLE skeleton only
+  // - isRefreshing drives the in-place overlay (never the skeleton)
+  const isInitialLoading = showTableShimmer;
+  const isRefreshing = tableLatchRef.current && quotationsLoading;
+  const showEmptyState =
+    tableLatchRef.current && !quotationsLoading && (!quotations || quotations.length === 0);
+
+  const safeQ = quotations || [];
+
   // Update limit when mobile changes
   useEffect(() => {
     const newLimit = isMobile ? 10 : 20;
@@ -672,8 +695,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       }));
     }
   }, [isMobile]);
- 
-  const safeQ = quotations || [];
 
   const addToast = useCallback((message, type = "info") => {
     const id = ++toastIdRef.current;
@@ -689,17 +710,41 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     []
   );
 
+  // Handle tab change
   const handleTabChange = useCallback((key) => {
-    const newStatus = TAB_STATUS_MAP[key];
-    
-    setFilters(prev => ({ 
-      ...prev, 
+    let newStatus = null;
+
+    switch (key) {
+      case 'all':
+        newStatus = null;
+        break;
+      case 'pending':
+        newStatus = 'pending';
+        break;
+      case 'in_review':
+        newStatus = 'ops_approved';
+        break;
+      case 'approved':
+        newStatus = 'approved';
+        break;
+      case 'awarded':
+        newStatus = 'awarded';
+        break;
+      case 'returned':
+        newStatus = 'ops_rejected';
+        break;
+      default:
+        newStatus = null;
+    }
+
+    setFilters(prev => ({
+      ...prev,
       status: newStatus,
       sortBy: 'date',
       sortDir: 'desc'
     }));
-    
-    refreshCompanyQuotations({ 
+
+    refreshCompanyQuotations({
       status: newStatus,
       page: 1,
       sortBy: 'date',
@@ -707,13 +752,26 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       search: filters.search
     });
   }, [refreshCompanyQuotations, filters.search]);
+
+  const getStatusForTab = (tabKey) => {
+    switch (tabKey) {
+      case 'all': return null;
+      case 'pending': return 'pending';
+      case 'in_review': return 'ops_approved';
+      case 'approved': return 'approved';
+      case 'awarded': return 'awarded';
+      case 'returned': return 'ops_rejected';
+      default: return null;
+    }
+  };
+
   // Handle search
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
     setFilters(prev => ({ ...prev, search: val }));
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
-      refreshCompanyQuotations({ 
+      refreshCompanyQuotations({
         search: val,
         status: filters.status,
         page: 1,
@@ -725,7 +783,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const clearSearch = useCallback(() => {
     setFilters(prev => ({ ...prev, search: "" }));
-    refreshCompanyQuotations({ 
+    refreshCompanyQuotations({
       search: "",
       status: filters.status,
       page: 1,
@@ -735,13 +793,29 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     if (searchRef.current) searchRef.current.value = "";
   }, [refreshCompanyQuotations, filters.status, filters.sortBy, filters.sortDir]);
 
-  // Handle sort
+  // Handle sort - FIXED for Customer column
   const handleSort = useCallback((field) => {
-    const newDir = filters.sortBy === field && filters.sortDir === "asc" ? "desc" : "asc";
-    const sortField = field === "customer" ? "customerSnapshot.name" : field;
-    
-    setFilters(prev => ({ ...prev, sortBy: sortField, sortDir: newDir }));
-    refreshCompanyQuotations({ 
+    let sortField = field;
+    if (field === 'customer') {
+      sortField = 'customerSnapshot.name';
+    }
+
+    const currentSortField = filters.sortBy;
+
+    let newDir = 'asc';
+    if (currentSortField === sortField) {
+      newDir = filters.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      newDir = 'asc';
+    }
+
+    setFilters(prev => ({
+      ...prev,
+      sortBy: sortField,
+      sortDir: newDir
+    }));
+
+    refreshCompanyQuotations({
       sortBy: sortField,
       sortDir: newDir,
       status: filters.status,
@@ -781,27 +855,27 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       step: "Refreshing data...",
       isRefreshing: true,
     });
-  
+
     const progressInterval = setInterval(() => {
       setRefreshState(prev => ({
         ...prev,
         progress: prev.progress >= 90 ? 90 : prev.progress + 10,
       }));
     }, 500);
-  
+
     try {
       await Promise.all([
         refreshGlobalStats(),
         refreshCompanyQuotations({ forceRefresh: true })
       ]);
-  
+
       setRefreshState({
         progress: 100,
         step: "Complete!",
         isRefreshing: true,
       });
       addToast("Data refreshed", "success");
-  
+
       setTimeout(() => {
         setRefreshState({
           progress: 0,
@@ -875,10 +949,10 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const confirmDelete = useCallback(async () => {
     const { quotation } = modalsState.deleteModal;
     if (!quotation) return;
-    
+
     setModalsState((prev) => ({ ...prev, deleteModal: { ...prev.deleteModal, busy: true } }));
     const result = await deleteQuotation(quotation._id);
-    
+
     if (result?.success) {
       addToast(`Quotation ${quotation.quotationNumber} deleted.`, "success");
       setModalsState((prev) => ({ ...prev, deleteModal: { open: false, quotation: null, busy: false } }));
@@ -972,6 +1046,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       <style>{`
         @keyframes hs-spin { to{transform:rotate(360deg)} }
         @keyframes hs-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+        @keyframes hs-fade-in { from{opacity:0} to{opacity:1} }
+        .hs-fade-in { animation: hs-fade-in 0.18s ease both; }
         .hs-row:hover td { background:#f8fafc !important; }
       `}</style>
 
@@ -1044,41 +1120,43 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           </div>
         )}
 
-        {/* Stats Section - Show shimmer until initial load complete */}
-        {!initialLoadComplete ? (
+        {/* Stats Section - gated on its OWN readiness (statsReady), not the global flag */}
+        {showStatsShimmer ? (
           <ShimmerStatsCard isMobile={isMobile} />
         ) : (
-          isMobile ? (
-            <CompactStatsCard 
-              totalRevenue={globalAwardedValue} 
-              quotationsCount={globalTotalQuotations} 
-              customersCount={globalTotalCustomers} 
-              selectedCurrency={selectedCurrency} 
-              statusCounts={{
-                pending: globalPending,
-                in_review: globalInReview,
-                approved: globalApproved,
-                awarded: globalAwarded,
-                returned: globalReturned
-              }} 
-              loading={false}
-            />
-          ) : (
-            <DesktopStatsGrid 
-              totalRevenue={globalAwardedValue} 
-              quotationsCount={globalTotalQuotations} 
-              customersCount={globalTotalCustomers} 
-              selectedCurrency={selectedCurrency} 
-              statusCounts={{
-                pending: globalPending,
-                in_review: globalInReview,
-                approved: globalApproved,
-                awarded: globalAwarded,
-                returned: globalReturned
-              }} 
-              loading={false}
-            />
-          )
+          <div className="hs-fade-in">
+            {isMobile ? (
+              <CompactStatsCard
+                totalRevenue={globalAwardedValue}
+                quotationsCount={globalTotalQuotations}
+                customersCount={globalTotalCustomers}
+                selectedCurrency={selectedCurrency}
+                statusCounts={{
+                  pending: globalPending,
+                  in_review: globalInReview,
+                  approved: globalApproved,
+                  awarded: globalAwarded,
+                  returned: globalReturned
+                }}
+                loading={false}
+              />
+            ) : (
+              <DesktopStatsGrid
+                totalRevenue={globalAwardedValue}
+                quotationsCount={globalTotalQuotations}
+                customersCount={globalTotalCustomers}
+                selectedCurrency={selectedCurrency}
+                statusCounts={{
+                  pending: globalPending,
+                  in_review: globalInReview,
+                  approved: globalApproved,
+                  awarded: globalAwarded,
+                  returned: globalReturned
+                }}
+                loading={false}
+              />
+            )}
+          </div>
         )}
 
         {/* Main Table/Card Container */}
@@ -1088,8 +1166,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
             {/* Tabs */}
             <div style={{ display: "flex", gap: "0.2rem", padding: "0.35rem", backgroundColor: "#f1f5f9", borderRadius: 10, overflowX: isMobile ? "auto" : "visible", width: isMobile ? "100%" : "auto" }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
-const active = (key === "all" && !filters.status) || (filters.status === TAB_STATUS_MAP[key]); 
-               const isPending = key === "pending";
+                const active = (key === "all" && !filters.status) || (filters.status === getStatusForTab(key));
+                const isPending = key === "pending";
                 const isReturned = key === "returned";
                 const hasAlert = (isPending || isReturned) && count > 0;
                 const alertColor = isPending ? "#f59e0b" : "#ec4899";
@@ -1097,7 +1175,7 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
                   <button key={key} onClick={() => handleTabChange(key)} style={{ padding: isMobile ? "0.3rem 0.6rem" : "0.4rem 0.875rem", borderRadius: 8, border: "none", cursor: "pointer", fontSize: isMobile ? "0.7rem" : "0.8rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.35rem", backgroundColor: active ? "#fff" : "transparent", color: active ? "#0f172a" : "#64748b", boxShadow: active ? "0 1px 3px rgba(0,0,0,0.1)" : "none", whiteSpace: "nowrap" }}>
                     <I size={isMobile ? 11 : 13} />
                     {!isMobile && label}
-                    <span style={{ backgroundColor: active ? (hasAlert ? alertColor : "#0f172a") : (hasAlert ? alertColor : "#e2e8f0"), color: active || hasAlert ? "#fff" : "#64748b", borderRadius: 999, padding: isMobile ? "1px 5px" : "1px 7px", fontSize: isMobile ? "0.6rem" : "0.68rem", fontWeight: 700 }}>{!initialLoadComplete ? "…" : count}</span>
+                    <span style={{ backgroundColor: active ? (hasAlert ? alertColor : "#0f172a") : (hasAlert ? alertColor : "#e2e8f0"), color: active || hasAlert ? "#fff" : "#64748b", borderRadius: 999, padding: isMobile ? "1px 5px" : "1px 7px", fontSize: isMobile ? "0.6rem" : "0.68rem", fontWeight: 700 }}>{showStatsShimmer ? "…" : count}</span>
                   </button>
                 );
               })}
@@ -1111,13 +1189,13 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
 
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: isMobile ? "0.5rem 0.75rem" : "0.4rem 0.75rem", flex: isMobile ? 1 : "auto" }}>
                 <Search size={isMobile ? 14 : 14} color="#94a3b8" />
-                <input 
-                  ref={searchRef} 
-                  style={{ border: "none", background: "transparent", outline: "none", fontSize: isMobile ? "0.875rem" : "0.875rem", color: "#0f172a", width: isMobile ? "100%" : 210 }} 
-                  placeholder="Search… (press /)" 
-                  defaultValue={filters.search} 
-                  onChange={handleSearchChange} 
-                  disabled={!initialLoadComplete} 
+                <input
+                  ref={searchRef}
+                  style={{ border: "none", background: "transparent", outline: "none", fontSize: isMobile ? "0.875rem" : "0.875rem", color: "#0f172a", width: isMobile ? "100%" : 210 }}
+                  placeholder="Search… (press /)"
+                  defaultValue={filters.search}
+                  onChange={handleSearchChange}
+                  disabled={isInitialLoading}
                 />
                 {filters.search && <button onClick={clearSearch} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 0 }}><X size={isMobile ? 13 : 13} /></button>}
               </div>
@@ -1127,7 +1205,7 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
           </div>
 
           {/* Loading Overlay for Refresh */}
-          {isRefreshing && !isLoading && (
+          {isRefreshing && !isInitialLoading && (
             <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(255,255,255,0.72)", zIndex: 10, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 14, backdropFilter: "blur(1px)" }}>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem", background: "white", padding: isMobile ? "1rem 1.5rem" : "1.25rem 2rem", borderRadius: 12, boxShadow: "0 4px 24px rgba(15,23,42,0.12)", border: "1px solid #e2e8f0" }}>
                 <RefreshCw size={isMobile ? 20 : 24} color="#6366f1" style={{ animation: "hs-spin 0.8s linear infinite" }} />
@@ -1137,10 +1215,10 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
           )}
 
           {/* Content */}
-          {!initialLoadComplete ? (
+          {isInitialLoading ? (
             <SkeletonLoader />
           ) : (
-            <>
+            <div className="hs-fade-in">
               {showEmptyState ? (
                 <div style={{ textAlign: "center", padding: isMobile ? "3rem 1rem" : "4rem 2rem", color: "#94a3b8" }}>
                   <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: "1rem" }} />
@@ -1168,13 +1246,13 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
                         />
                       ))}
                       {totalCount > 0 && (
-                        <PaginationBar 
-                          total={totalCount} 
-                          page={currentPage} 
-                          limit={currentLimit} 
-                          totalPages={totalPages} 
-                          onPageChange={handlePageChange} 
-                          onLimitChange={handleLimitChange} 
+                        <PaginationBar
+                          total={totalCount}
+                          page={currentPage}
+                          limit={currentLimit}
+                          totalPages={totalPages}
+                          onPageChange={handlePageChange}
+                          onLimitChange={handleLimitChange}
                         />
                       )}
                     </div>
@@ -1215,7 +1293,7 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
                                     <div style={{ fontWeight: 600, color: "#0f172a", fontSize: "0.875rem" }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || "N/A"}</div>
                                     {q.contact && <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: 2 }}>{q.contact}</div>}
                                     <RejectionNote quotation={q} />
-                                   </td>
+                                  </td>
                                   <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }}><div style={{ fontSize: "0.875rem", color: "#0f172a" }}>{q.projectName || "—"}</div></td>
                                   <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle", textAlign: "center" }}>
                                     {q.queryDate ? (
@@ -1223,11 +1301,11 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
                                         <Calendar size={12} /> {fmtDate(q.queryDate)} {queryDatePassed && " ⚠️"}
                                       </span>
                                     ) : "—"}
-                                   </td>
+                                  </td>
                                   <td style={{ padding: "0.85rem 1rem", fontSize: "0.8rem", color: "#64748b", verticalAlign: "middle", whiteSpace: "nowrap" }}>{fmtDate(q.date)}</td>
                                   <td style={{ padding: "0.85rem 1rem", fontSize: "0.8rem", verticalAlign: "middle", whiteSpace: "nowrap" }}>
                                     <span style={{ color: expired ? "#dc2626" : expiring ? "#d97706" : "#64748b", fontWeight: expired || expiring ? 600 : 400 }}>{fmtDate(q.expiryDate)}</span>
-                                   </td>
+                                  </td>
                                   <td style={{ padding: "0.85rem 1rem", fontSize: "0.875rem", fontWeight: 700, color: "#0f172a", verticalAlign: "middle", textAlign: "right", whiteSpace: "nowrap" }}>{fmtCurrency(q.total, selectedCurrency)}</td>
                                   <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }}><EnhancedStatusBadge status={q.status} quotation={q} /></td>
                                   <td style={{ padding: "0.75rem 1rem", verticalAlign: "middle" }}>
@@ -1243,19 +1321,19 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
                           </tbody>
                         </table>
                       </div>
-                      <PaginationBar 
-                        total={totalCount} 
-                        page={currentPage} 
-                        limit={currentLimit} 
-                        totalPages={totalPages} 
-                        onPageChange={handlePageChange} 
-                        onLimitChange={handleLimitChange} 
+                      <PaginationBar
+                        total={totalCount}
+                        page={currentPage}
+                        limit={currentLimit}
+                        totalPages={totalPages}
+                        onPageChange={handlePageChange}
+                        onLimitChange={handleLimitChange}
                       />
                     </>
                   )}
                 </>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -1264,18 +1342,18 @@ const active = (key === "all" && !filters.status) || (filters.status === TAB_STA
       {uiState.saveProgress > 0 && <LoadingOverlay type="saving" step={uiState.saveStep} progress={uiState.saveProgress} />}
       {uiState.pdfProgress > 0 && <LoadingOverlay type="pdf" step={uiState.pdfStep} progress={uiState.pdfProgress} />}
       {refreshState.isRefreshing && refreshState.progress > 0 && (
-        <LoadingOverlay 
-          type="processing"  
-          step={refreshState.step} 
-          progress={refreshState.progress} 
+        <LoadingOverlay
+          type="processing"
+          step={refreshState.step}
+          progress={refreshState.progress}
         />
       )}
-      <QueryDateUpdater 
-        open={modalsState.queryDateModal.open} 
-        onClose={() => setModalsState((prev) => ({ ...prev, queryDateModal: { open: false, quotation: null } }))} 
-        onUpdate={handleUpdateQueryDate} 
-        quotations={safeQ} 
-        loading={globalStatsLoading} 
+      <QueryDateUpdater
+        open={modalsState.queryDateModal.open}
+        onClose={() => setModalsState((prev) => ({ ...prev, queryDateModal: { open: false, quotation: null } }))}
+        onUpdate={handleUpdateQueryDate}
+        quotations={safeQ}
+        loading={globalStatsLoading}
       />
     </div>
   );

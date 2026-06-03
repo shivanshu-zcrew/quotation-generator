@@ -524,23 +524,28 @@ const handleTabChange = useCallback((key) => {
     sortDir: 'desc'
   });
 }, [refreshCompanyQuotations]);
-
-// Replace handleSort
+ 
 const handleSort = useCallback((field) => {
+   let sortField = field;
+  if (field === 'customer') {
+    sortField = 'customer';
+  } else if (field === 'createdBy') {
+    sortField = 'createdBy';
+  }
+  
   const newDir = sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc';
   setSort({ field, dir: newDir });
   
-  // ✅ Pass sort to refresh with page 1
   refreshCompanyQuotations({ 
     page: 1, 
-    sortBy: field, 
+    sortBy: sortField, 
     sortDir: newDir,
     status: activeTab === 'all' ? undefined : activeTab,
     search: search
   });
 }, [refreshCompanyQuotations, activeTab, search, sort]);
 
-// Replace handleRefresh
+
 const handleRefresh = useCallback(async () => {
   if (refreshInProgress.current) {
     addToast('Refresh already in progress', 'info');
@@ -574,7 +579,14 @@ const handleApprove = useCallback(async (id) => {
     if (result?.success) {
       addToast('Quotation approved and forwarded to admin', 'success');
       await Promise.all([
-        refreshCompanyQuotations({ page: currentPage, limit: currentLimit }), // ✅ Pass pagination
+        refreshCompanyQuotations({
+          page: currentPage,
+          limit: currentLimit,
+          status: activeTab === 'all' ? undefined : activeTab,
+          search,
+          sortBy: sort.field,
+          sortDir: sort.dir,
+        }),
         refreshStats()
       ]);
     } else {
@@ -603,7 +615,14 @@ const handleApprove = useCallback(async (id) => {
           addToast('Quotation rejected', 'success');
           handleReject.close();
           await Promise.all([
-            refreshCompanyQuotations({ page: currentPage, limit: currentLimit }),
+            refreshCompanyQuotations({
+              page: currentPage,
+              limit: currentLimit,
+              status: activeTab === 'all' ? undefined : activeTab,
+              search,
+              sortBy: sort.field,
+              sortDir: sort.dir,
+            }),
             refreshStats()
           ]);
         } else {
@@ -669,7 +688,14 @@ const handleApprove = useCallback(async (id) => {
           "success"
         );
         await Promise.all([
-          refreshCompanyQuotations({ page: currentPage, limit: currentLimit }),
+          refreshCompanyQuotations({
+            page: currentPage,
+            limit: currentLimit,
+            status: activeTab === 'all' ? undefined : activeTab,
+            search,
+            sortBy: sort.field,
+            sortDir: sort.dir,
+          }),
           refreshStats()
         ]);
         handleAwardClose();

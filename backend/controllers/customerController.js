@@ -200,7 +200,7 @@ const buildUpdateData = (body, existingCustomer) => {
   const {
     name, email, phone, address, city, state, zipcode,
     companyName, website, notes, taxTreatment, taxRegistrationNumber,
-    placeOfSupply, defaultCurrency, contactPersons, mainContactSalutation
+    placeOfSupply, defaultCurrency, contactPersons, mainContactSalutation,trnExpiryDate
   } = body;
 
   if (name !== undefined) updateData.name = name.trim().toUpperCase();
@@ -226,6 +226,10 @@ const buildUpdateData = (body, existingCustomer) => {
       : '';
   }
 
+  if (trnExpiryDate !== undefined) {
+    updateData.trnExpiryDate = trnExpiryDate ? new Date(trnExpiryDate) : null;
+  }
+  
   if (defaultCurrency !== undefined) {
     updateData.defaultCurrency = buildCurrencyObject(defaultCurrency);
   }

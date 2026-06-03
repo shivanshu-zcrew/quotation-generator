@@ -173,6 +173,7 @@ const initializeApp = async () => {
   }
 };
 
+
 // ── Start Server (for local development only) ────────────────────────────
 const PORT = process.env.PORT || 5000;
 
@@ -182,8 +183,16 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
     logger.info(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
   
-  // Initialize app after server starts
-  initializeApp();
+  initializeApp().then(() => {
+    require('./cron/trnExpiryJob').start();
+  });
+
+  // if (true) {
+  //   require('./cron/trnExpiryJob')
+  //     .runTrnExpiryDeactivation()
+  //     .then((r) => logger.info('Manual TRN run result', r))
+  //     .catch((e) => logger.error('Manual TRN run error', e));
+  // }
   
   // ── Graceful Shutdown ─────────────────────────────────────────────────
   const gracefulShutdown = async (signal) => {

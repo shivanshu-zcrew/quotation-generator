@@ -621,7 +621,7 @@ export const quotationAPI = {
     
     return response;
   },
-  
+
   getAll: async (params = {}, options = {}) => {
     const { skipCache = false, forceRefresh = false } = options;
     const cleanParamsObj = cleanParams(params);
@@ -663,6 +663,9 @@ export const quotationAPI = {
     return response;
   },
   
+  presignItemImage: (contentType, fileName, itemIndex, size) =>
+    api.post('/quotations/presign-image', { contentType, fileName, itemIndex, size }),
+    
   delete: async (id) => {
     const response = await api.delete(`/quotations/${id}`);
     deduplicator.clear(`/quotations/${id}`);

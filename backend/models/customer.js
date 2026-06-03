@@ -193,6 +193,10 @@ const customerSchema = new mongoose.Schema(
     lastModifiedTime: { 
       type: String 
     },
+    trnExpiryDate: {
+      type: Date,
+      default: null,
+    },
     isActive: { 
       type: Boolean, 
       default: true,

@@ -5,30 +5,46 @@ import { useEffect, useCallback, useRef } from 'react';
 export const useDashboardStats = () => {
   const dashboardStats = useAppStore((s) => s.dashboardStats);
   const statsLoading = useAppStore((s) => s.statsLoading);
-  const fetchDashboardStats = useAppStore((s) => s.fetchDashboardStats);
   const refreshDashboardStats = useAppStore((s) => s.refreshDashboardStats);
   const selectedCompany = useAppStore((s) => s.selectedCompany);
   const user = useAppStore((s) => s.user);
   const initialized = useAppStore((s) => s.initialized);
-  
+
+  const fetchedForCompanyRef = useRef(null);
+
   const refresh = useCallback(async () => {
     if (!user) return;
-    const companyId = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
+    const companyId =
+      (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
     return await refreshDashboardStats(companyId);
   }, [refreshDashboardStats, selectedCompany, user]);
-  
-  // Auto-fetch on company change
+
   useEffect(() => {
-    if (user && initialized && selectedCompany) {
-      refresh();
+    if (!user || !initialized || !selectedCompany) {
+      console.log('🟩 STATS EFFECT skip-early', { user: !!user, initialized, selectedCompany });
+      return;
     }
-  }, [user, initialized, selectedCompany]);
+    const currentCompanyId =
+      selectedCompany === 'all' || selectedCompany === 'ALL' ? 'all' : selectedCompany;
+
+    if (dashboardStats?._selectionId === currentCompanyId) {
+      console.log('🟩 STATS EFFECT skip-match', { currentCompanyId, selectionId: dashboardStats?._selectionId });
+      fetchedForCompanyRef.current = currentCompanyId;
+      return;
+    }
+    if (fetchedForCompanyRef.current === currentCompanyId) {
+      console.log('🟩 STATS EFFECT skip-ref', { currentCompanyId });
+      return;
+    }
+    console.log('🟩 STATS EFFECT FETCH', { currentCompanyId, selectionId: dashboardStats?._selectionId });
+    fetchedForCompanyRef.current = currentCompanyId;
+    refresh();
+  }, [user, initialized, selectedCompany, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
   
   return {
     stats: dashboardStats,
     loading: statsLoading,
     refresh,
-    // Convenience getters for user/sales dashboard
     totalQuotations: dashboardStats?.totalQuotations || 0,
     pending: dashboardStats?.pending || 0,
     inReview: dashboardStats?.inReview || 0,

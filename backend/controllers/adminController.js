@@ -124,43 +124,36 @@ exports.getOpsPendingQuotations = async (req, res) => {
 exports.getAllOpsQuotations = async (req, res) => {
   const startTime = Date.now();
   try {
-    const { 
-      status, 
-      search, 
-      fromDate, 
+    const {
+      status,
+      search,
+      fromDate,
       toDate,
       page = 1,
-      limit = 20
+      limit = 20,
+      sortBy = 'createdAt',
+      sortDir = 'desc'
     } = req.query;
-    
+
     const parsedPage = Math.max(1, parseInt(page, 10) || 1);
     const parsedLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const skip = (parsedPage - 1) * parsedLimit;
-    
-    // ✅ Get companyId from query params or headers
+
     let companyId = req.query.companyId || req.headers['x-company-id'];
-    
-    logger.debug('Fetching all ops quotations with filters and pagination', {
-      filters: { status, search, fromDate, toDate, page: parsedPage, limit: parsedLimit, companyId },
-      userId: req.user?.id
-    });
-    
-    // ✅ Build query with company filter
+
+    // Build query
     const query = {};
-    
-    // ✅ Add company filter if provided (and not 'all')
+
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
         query.companyId = companyId;
       }
     }
-    
-    // ✅ Add status filter
-    query.status = { 
-      $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded'] 
+
+    query.status = {
+      $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded']
     };
-    
-    // ✅ Handle status filter
+
     if (status && status !== 'all') {
       if (status === 'pending') {
         query.status = { $in: ['pending', 'pending_admin'] };
@@ -168,8 +161,7 @@ exports.getAllOpsQuotations = async (req, res) => {
         query.status = status;
       }
     }
-    
-    // ✅ Handle search
+
     if (search && search.trim()) {
       const searchRegex = new RegExp(search.trim(), 'i');
       query.$or = [
@@ -178,59 +170,94 @@ exports.getAllOpsQuotations = async (req, res) => {
         { projectName: searchRegex }
       ];
     }
-    
-    // ✅ Handle date filters
+
     if (fromDate || toDate) {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
       if (toDate) query.createdAt.$lte = new Date(toDate);
     }
-    
-    console.log('🔍 getAllOpsQuotations query:', JSON.stringify(query, null, 2));
-    
-    const [quotations, totalCount] = await Promise.all([
+
+    // Build sort object (with _id tiebreaker for stable pagination on
+    // non-unique sort fields).
+    let sortObject = {};
+    switch (sortBy) {
+      case 'quotationNumber':
+        sortObject = { quotationNumber: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'customer':
+        sortObject = { 'customerSnapshot.name': sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'date':
+        sortObject = { date: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'expiryDate':
+        sortObject = { expiryDate: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'status':
+        sortObject = { status: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'createdBy':
+        sortObject = { 'createdBySnapshot.name': sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'total':
+        sortObject = { total: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+      case 'createdAt':
+      default:
+        sortObject = { createdAt: sortDir === 'asc' ? 1 : -1, _id: 1 };
+        break;
+    }
+
+    // Fetch page, total count, and per-status counts — all computed in the DB.
+    // The status counts use an aggregation instead of loading every matching
+    // document into memory (the old `Quotation.find(query).lean()` approach
+    // allocated the whole filtered collection on every request).
+    const [quotations, totalCount, statusAgg] = await Promise.all([
       fullPopulate(
         Quotation.find(query)
-          .sort({ createdAt: -1 })
+          .sort(sortObject)
           .skip(skip)
           .limit(parsedLimit)
       ).lean(),
-      Quotation.countDocuments(query)
+      Quotation.countDocuments(query),
+      Quotation.aggregate([
+        { $match: query },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ])
     ]);
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     const totalPages = Math.ceil(totalCount / parsedLimit);
-    
-    // Calculate counts from the filtered query (for display)
-    const allQuotationsForCounts = await Quotation.find(query).lean();
+
+    const cmap = {};
+    statusAgg.forEach((s) => { cmap[s._id] = s.count; });
+
     const counts = {
       all: totalCount,
-      pending: allQuotationsForCounts.filter(q => q.status === 'pending' || q.status === 'pending_admin').length,
-      ops_approved: allQuotationsForCounts.filter(q => q.status === 'ops_approved').length,
-      ops_rejected: allQuotationsForCounts.filter(q => q.status === 'ops_rejected').length,
-      rejected: allQuotationsForCounts.filter(q => q.status === 'rejected').length,
-      approved: allQuotationsForCounts.filter(q => q.status === 'approved').length,
-      awarded: allQuotationsForCounts.filter(q => q.status === 'awarded').length,
+      pending: (cmap['pending'] || 0) + (cmap['pending_admin'] || 0),
+      ops_approved: cmap['ops_approved'] || 0,
+      ops_rejected: cmap['ops_rejected'] || 0,
+      rejected: cmap['rejected'] || 0,
+      approved: cmap['approved'] || 0,
+      awarded: cmap['awarded'] || 0,
     };
-    
+
     const duration = Date.now() - startTime;
-    LoggerHelper.logDBQuery('Quotation', 'find with filters and pagination', query, duration);
-    logger.info(`Fetched ${sanitizedQuotations.length} quotations for ops (page ${parsedPage}/${totalPages})`, {
+    logger.info(`Fetched ${sanitizedQuotations.length} ops quotations (page ${parsedPage}/${totalPages})`, {
       totalCount,
       page: parsedPage,
-      limit: parsedLimit,
       totalPages,
-      filters: { status, search, fromDate, toDate, companyId },
-      counts,
-      duration: `${duration}ms`
+      sortBy,
+      sortDir,
+      duration: `${duration}ms`,
+      userId: req.user?.id
     });
-    
+
     res.json({
       success: true,
       quotations: sanitizedQuotations,
       counts,
       total: totalCount,
-      companyId: companyId || null,
       pagination: {
         page: parsedPage,
         limit: parsedLimit,

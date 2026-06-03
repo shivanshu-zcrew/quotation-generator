@@ -1013,6 +1013,18 @@ class ZohoBooksService {
     return result;
   }
 
+  async markContactInactive(contactId) {
+    const result = await this._request('POST', `/contacts/${contactId}/inactive`);
+    if (result.success) {
+      this._clearCache(this.CACHE_KEYS.CONTACT(contactId, this.currentCompanyId));
+      await this.clearContactsCache();
+      logger.info(`Contact marked inactive in Zoho: ${contactId}`, { contactId, companyId: this.currentCompanyId });
+      return { success: true, message: 'Contact marked inactive in Zoho Books' };
+    }
+    logger.error(`Failed to mark contact inactive in Zoho: ${result.error}`, { contactId });
+    return { success: false, error: result.error, details: result.details };
+  }
+  
   async clearContactsCache() {
     const { companyId } = this.getCompanyContext();
     this._clearCache(this.CACHE_KEYS.ALL_CONTACTS(companyId));

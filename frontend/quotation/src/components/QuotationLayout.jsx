@@ -738,8 +738,6 @@ export default function QuotationLayout({
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
   
-  if (!quotationData) return null;
-
   const displayCurrency = useMemo(() => {
     if (!isEditing || quotationData.currency?.code) return quotationData.currency?.code || 'AED';
     if (quotationData.currency?.code) return quotationData.currency.code;
@@ -1076,7 +1074,7 @@ export default function QuotationLayout({
   }, [onDataChange, setHeaderErrors, headerErrors]);
 
   const isMobile = useMediaQuery('(max-width: 768px)');
-
+  if (!quotationData) return null; 
   if (isMobile) {
     return <MobileQuotationLayout 
       isEditing={isEditing}

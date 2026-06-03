@@ -55,8 +55,10 @@ function RequireOpsManager({ children }) {
 
 function GuestOnly({ children }) {
   useAppStore((s) => s.user);
+  const loading = useAppStore((s) => s.loading);
   const user = getUser();
   const token = localStorage.getItem('token');
+  if (loading) return children;            // don't bounce mid-login
   if (user && token) return <Navigate to={getHomePath(user.role)} replace />;
   if (!token && user) useAppStore.getState().handleLogout();
   if (token && !user) { localStorage.removeItem('token'); localStorage.removeItem('user'); }
@@ -134,16 +136,16 @@ function LoginRoute() {
   const handleLogin = useAppStore((s) => s.handleLogin);
   const [busy, setBusy] = useState(false);
   const from = location.state?.from?.pathname;
+
   const login = async (email, password) => {
     if (busy) return { success: false, error: 'Login in progress' };
     setBusy(true);
     try {
       const result = await handleLogin(email, password);
       if (!result.success) return result;
-      await new Promise(r => setTimeout(r, 100));
-      const user = useAppStore.getState().user;
-      if (!user?.role) return { success: false, error: 'Invalid user data' };
-      navigate(from || getHomePath(user.role), { replace: true });
+      const role = result.role || useAppStore.getState().user?.role;
+      if (!role) return { success: false, error: 'Invalid user data' };
+       navigate(from || getHomePath(role), { replace: true });
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message || 'Login failed' };
@@ -151,6 +153,7 @@ function LoginRoute() {
       setBusy(false);
     }
   };
+
   return <LoginScreen onLogin={login} onNavigate={(s) => navigate(`/${s}`)} />;
 }
 

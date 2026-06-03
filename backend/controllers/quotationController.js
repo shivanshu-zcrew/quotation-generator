@@ -462,42 +462,51 @@ exports.getMyQuotations = async (req, res) => {
     const { page, limit, skip } = parsePagination(req.query);
     const { companyId = null } = req.query;
     const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
- 
+
     let filter = { createdBy: req.user.id };
     if (!isAllCompanies) filter.companyId = companyId;
     if (req.query.status) filter.status = req.query.status;
-    
+
     if (req.query.search) {
       const re = new RegExp(req.query.search.trim(), 'i');
       filter.$or = [{ quotationNumber: re }, { 'customerSnapshot.name': re }];
     }
- 
+
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
- 
+
+    // _id tiebreaker keeps ordering stable across pages when the sort
+    // field has duplicate values (prevents rows duplicating/disappearing).
+    const sortObject = { [sortField]: sortDir, _id: 1 };
+
     const [data, total] = await Promise.all([
-      fullPopulate(Quotation.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limit)).lean(),
+      fullPopulate(Quotation.find(filter).sort(sortObject).skip(skip).limit(limit)).lean(),
       Quotation.countDocuments(filter),
     ]);
- 
+
     const totalPages = Math.ceil(total / limit);
-    
-    
+
     res.status(200).json({
-      success: true, data,
+      success: true,
+      data,
       pagination: {
-        page: parseInt(req.query.page) || 1, limit, total, totalPages,
-        hasNextPage: parseInt(req.query.page) < totalPages,
-        hasPreviousPage: parseInt(req.query.page) > 1
+        // Use the normalized `page` from parsePagination — NOT req.query.page,
+        // which is NaN when page is omitted and breaks hasNextPage on page 1.
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
       },
-      isAllCompanies, companyId: isAllCompanies ? 'ALL' : companyId
+      isAllCompanies,
+      companyId: isAllCompanies ? 'ALL' : companyId,
     });
   } catch (err) {
     logger.error(`Get my quotations error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching your quotations', error: err.message });
   }
 };
-
 exports.getMyQuotationsStats = async (req, res) => {
   const startTime = Date.now();
   try {
@@ -1301,6 +1310,63 @@ exports.updateQuotation = async (req, res) => {
   } catch (err) {
     logger.error(`Update quotation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error updating quotation', error: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// PRESIGNED UPLOAD URL (direct browser → S3 for item images)
+// Add this alongside your other S3 helpers / exports in the
+// quotation controller (s3Client, S3_BUCKET_NAME, PutObjectCommand,
+// getSignedUrl are already imported there).
+// ─────────────────────────────────────────────────────────────
+
+// Only allow image uploads through this endpoint.
+const PRESIGN_ALLOWED_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
+
+const PRESIGN_MAX_BYTES = 15 * 1024 * 1024; // 15 MB ceiling (post-compression files are far smaller)
+ 
+exports.presignItemImageUpload = async (req, res) => {
+  try {
+    const { contentType, fileName = '', itemIndex, size } = req.body || {};
+
+    if (!contentType || !PRESIGN_ALLOWED_MIME.has(contentType)) {
+      return res.status(400).json({
+        success: false,
+        message: `Unsupported content type. Allowed: ${[...PRESIGN_ALLOWED_MIME].join(', ')}`,
+      });
+    }
+
+    if (size != null && (typeof size !== 'number' || size > PRESIGN_MAX_BYTES)) {
+      return res.status(400).json({
+        success: false,
+        message: `File too large. Max ${Math.round(PRESIGN_MAX_BYTES / 1024 / 1024)}MB`,
+      });
+    }
+
+    // Build a safe, unique key. Mirror the existing folder convention.
+    const ext = (contentType.split('/')[1] || 'jpg').replace(/[^a-z0-9]/gi, '') || 'jpg';
+    const safeIdx = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex + 1 : 'x';
+    const unique = `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+    const key = `quotations/items/item_${safeIdx}/${unique}.${ext}`;
+
+    const command = new PutObjectCommand({
+      Bucket: S3_BUCKET_NAME,
+      Key: key,
+      ContentType: contentType,
+    });
+
+    const expiresIn = 300; // 5 min to complete the PUT
+    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn });
+
+    return res.status(200).json({ success: true, uploadUrl, key, expiresIn });
+  } catch (err) {
+    logger.error(`Presign image upload error: ${err.message}`);
+    return res.status(500).json({ success: false, message: 'Failed to create upload URL', error: err.message });
   }
 };
 

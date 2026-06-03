@@ -198,6 +198,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     website: '',
     notes: '',
     taxTreatment: 'non_vat_registered',
+    trnExpiryDate: '',     
     taxRegistrationNumber: '',
     placeOfSupply: 'Dubai',
     defaultCurrency: 'AED',
@@ -259,6 +260,9 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           notes: initialData.notes || '',
           taxTreatment: initialData.taxTreatment || 'non_vat_registered',
           taxRegistrationNumber: initialData.taxRegistrationNumber || '',
+          trnExpiryDate: initialData.trnExpiryDate
+            ? new Date(initialData.trnExpiryDate).toISOString().split('T')[0]
+            : '',
           placeOfSupply: initialData.placeOfSupply || 'Dubai',
           defaultCurrency: initialData.defaultCurrency?.code || 'AED',
           contactPersons: initialData.contactPersons?.slice(1) || [],
@@ -268,7 +272,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         setFormData({
           name: '', email: '', phone: '', address: '', city: '', state: '', zipcode: '',
           companyName: '', website: '', notes: '', taxTreatment: 'non_vat_registered',
-          taxRegistrationNumber: '', placeOfSupply: 'Dubai', defaultCurrency: 'AED',
+          taxRegistrationNumber: '',trnExpiryDate: '', placeOfSupply: 'Dubai', defaultCurrency: 'AED',
           contactPersons: [], mainContactSalutation: 'Mr.'
         });
       }
@@ -317,6 +321,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         ...prev,
         [name]: value,
         taxRegistrationNumber: '',
+        trnExpiryDate: '',   
         placeOfSupply: defaultPlace
       }));
       if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
@@ -760,7 +765,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                             return (
                               <div
                                 key={treatment.value}
-                                onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '' }))}
+                                onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '', trnExpiryDate: '' }))}
                                 style={{
                                   padding: isMobile ? '0.75rem 0.5rem' : '1rem',
                                   borderRadius: '12px',
@@ -803,6 +808,24 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                                 style={{ ...inputStyle, background: 'white', fontFamily: 'monospace' }}
                               />
                               {errors.taxRegistrationNumber && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.taxRegistrationNumber}</p>}
+
+                               {/* TRN Expiry Date */}
+                               <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
+                                <label style={{ ...labelStyle, color: '#0c4a6e' }}>
+                                  TRN Expiry Date
+                                </label>
+                                <input
+                                  type="date"
+                                  name="trnExpiryDate"
+                                  value={formData.trnExpiryDate}
+                                  onChange={handleChange}
+                                  style={{ ...inputStyle, background: 'white' }}
+                                />
+                                <p style={{ color: '#64748b', fontSize: '0.65rem', marginTop: '0.25rem', margin: '0.25rem 0 0' }}>
+                                  Leave blank if the TRN does not expire. When this date passes, the customer is automatically deactivated.
+                                </p>
+                              </div>
+                              
                             </div>
                           </motion.div>
                         )}
