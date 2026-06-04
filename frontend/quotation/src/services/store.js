@@ -860,23 +860,21 @@ export const useAppStore = create(
           if (get().operationInProgress.syncCustomers) {
             return { success: false, error: 'Sync already in progress' };
           }
-
+ 
           set(s => ({ operationInProgress: { ...s.operationInProgress, syncCustomers: true } }));
           try {
             const response = await customerAPI.syncFromZoho(fullSync);
-            if (response.data.success) {
-              if (typeof customerAPI.clearCustomerCache === 'function') {
-                customerAPI.clearCustomerCache();
-              }
-              // FIX #3: correct arg order
-              await get().fetchCustomerStats(null, true);
-              await get().fetchAllData();
-              return { success: true, stats: response.data.stats };
+ 
+           
+            if (response?.data?.success) {
+              return { success: true, started: true, message: response.data.message };
             }
-            throw new Error(response.data.message || 'Sync failed');
+            throw new Error(response?.data?.message || 'Failed to start sync');
           } catch (error) {
+            const status = error?.response?.status;
+            const msg = error?.response?.data?.message || getErrorMessage(error);
             set({ lastError: AppError.from(error) });
-            return { success: false, error: getErrorMessage(error) };
+            return { success: false, error: msg, alreadyRunning: status === 409 };
           } finally {
             set(s => ({ operationInProgress: { ...s.operationInProgress, syncCustomers: false } }));
           }

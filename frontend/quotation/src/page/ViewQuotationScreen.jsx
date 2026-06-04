@@ -514,6 +514,7 @@ export default function ViewQuotationScreen() {
   companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
   companyTradeLicense={originalQuotation?.companySnapshot?.crNumber || ''}
   companyTaxRegistration={originalQuotation?.companySnapshot?.vatNumber || ''}
+  selectedCurrency={originalQuotation?.currency?.code} 
         />
         
         {/* Document Preview Modal */}

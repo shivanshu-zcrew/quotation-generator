@@ -15,13 +15,14 @@ import { useAppStore } from '../services/store';
 // ============================================================
 const DOCUMENT_CONFIG = {
   MAX_SIZE_MB: 10,
+  MAX_FILES: 5,
   ALLOWED_TYPES: [
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
     'application/pdf', 'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'text/plain', 'application/zip', 'application/x-zip-compressed'
+    'text/plain'
   ]
 };
 
@@ -589,7 +590,22 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
   const [docDescriptions, setDocDescriptions] = useState({});
   const [uploading, setUploading] = useState(false);
 
+  // Helper: detect zip by MIME or extension (browsers sometimes send
+  // application/octet-stream for .zip, so check the name too).
+  const isZipFile = useCallback((file) => {
+    const name = (file.name || '').toLowerCase();
+    const type = (file.type || '').toLowerCase();
+    return name.endsWith('.zip')
+      || type === 'application/zip'
+      || type === 'application/x-zip-compressed'
+      || type === 'multipart/x-zip';
+  }, []);
+
   const validateFile = useCallback((file) => {
+    if (isZipFile(file)) {
+      alert(`ZIP files are not allowed for internal documents.`);
+      return false;
+    }
     if (file.size > DOCUMENT_CONFIG.MAX_SIZE_MB * 1024 * 1024) {
       alert(`File "${file.name}" exceeds ${DOCUMENT_CONFIG.MAX_SIZE_MB}MB limit`);
       return false;
@@ -599,13 +615,28 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
       return false;
     }
     return true;
-  }, []);
+  }, [isZipFile]);
 
   const handleFileSelect = useCallback((e) => {
     const files = Array.from(e.target.files);
+    e.target.value = ''; // allow re-selecting the same file after a removal
     const validFiles = files.filter(validateFile);
-    setSelectedFiles(prev => [...prev, ...validFiles]);
-  }, [validateFile]);
+    if (!validFiles.length) return;
+
+    setSelectedFiles(prev => {
+      // Cap total selected + already-saved documents at MAX_FILES.
+      const currentTotal = prev.length + documents.length;
+      const slots = DOCUMENT_CONFIG.MAX_FILES - currentTotal;
+      if (slots <= 0) {
+        alert(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} internal documents allowed. You already have ${currentTotal}.`);
+        return prev;
+      }
+      if (validFiles.length > slots) {
+        alert(`Only ${slots} more document(s) allowed — adding the first ${slots}.`);
+      }
+      return [...prev, ...validFiles.slice(0, slots)];
+    });
+  }, [validateFile, documents.length]);
 
   const handleUpload = useCallback(async () => {
     if (selectedFiles.length === 0 || !onUpload) return;
@@ -630,11 +661,18 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
 
       {isEditing && (
         <div style={{ marginBottom: '1.5rem' }}>
-          <input type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} id="internal-doc-upload" />
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain"
+            onChange={handleFileSelect}
+            style={{ display: 'none' }}
+            id="internal-doc-upload"
+          />
           <label htmlFor="internal-doc-upload" style={{ ...styles.uploadButton, backgroundColor: uploading ? '#9ca3af' : '#4f46e5', cursor: uploading ? 'not-allowed' : 'pointer' }}>
             <Upload size={16} /> {uploading ? 'Uploading...' : 'Select Documents'}
           </label>
-          <p style={styles.uploadHint}>Supports PDF, DOC, XLS, Images, TXT, ZIP (Max {DOCUMENT_CONFIG.MAX_SIZE_MB}MB each)</p>
+          <p style={styles.uploadHint}>Supports PDF, DOC, XLS, Images, TXT (Max {DOCUMENT_CONFIG.MAX_FILES} files, {DOCUMENT_CONFIG.MAX_SIZE_MB}MB each).</p>
 
           {selectedFiles.length > 0 && (
             <div style={{ marginTop: '1rem' }}>
@@ -733,16 +771,23 @@ export default function QuotationLayout({
   onDocumentDownload, onDocumentPreview, documentLoading = false, formatFileSize, getFileIcon,
   companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai', 
   termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
-  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = ''
+  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = '',  selectedCurrency: propSelectedCurrency = null 
 }) {
-  const { selectedCurrency } = useCompanyCurrency();
+  const { selectedCurrency: globalSelectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
   
   const displayCurrency = useMemo(() => {
-    if (!isEditing || quotationData.currency?.code) return quotationData.currency?.code || 'AED';
-    if (quotationData.currency?.code) return quotationData.currency.code;
-    return selectedCurrency || 'AED';
-  }, [isEditing, quotationData.currency, selectedCurrency]);
+     if (!isEditing && quotationData?.currency?.code) {
+      return quotationData.currency.code;
+    }
+     if (propSelectedCurrency) {
+      return propSelectedCurrency;
+    }
+     if (quotationData?.currency?.code) {
+      return quotationData.currency.code;
+    }
+     return globalSelectedCurrency || 'AED';
+  }, [isEditing, quotationData?.currency?.code, propSelectedCurrency, globalSelectedCurrency]);
 
   const isPlaceOfSupplyUAE = useMemo(() => UAE_EMIRATES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);
   const isPlaceOfSupplyGCC = useMemo(() => GCC_COUNTRIES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);

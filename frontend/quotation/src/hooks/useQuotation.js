@@ -14,6 +14,7 @@ import { validateQuantity, validatePrice, validatePercentage } from '../utils/qt
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { ALLOWED_IMAGE_TYPES, MAX_IMAGES_PER_ITEM, MAX_IMAGE_SIZE_MB } from '../utils/constants';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from './useS3Image';
+import { uploadItemImage, uploadTermsImage } from '../utils/imageUpload';
 
 export function useQuotation() {
   const { id } = useParams();
@@ -33,7 +34,8 @@ export function useQuotation() {
   const [fetchedQ, setFetchedQ] = useState(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState(null);
-  const [newImages, setNewImages] = useState({});
+  const [newImages, setNewImages] = useState({});        // itemId -> [previewObjectUrl] (in-flight only)
+  const [uploadingImages, setUploadingImages] = useState({}); // itemId -> true while uploading
   const [quotationData, setQuotationData] = useState({});
   const [quotationItems, setQuotationItems] = useState([]);
   const [tcSections, setTcSections] = useState([newSection()]);
@@ -45,11 +47,12 @@ export function useQuotation() {
   const [customerTaxTreatment, setCustomerTaxTreatment] = useState('non_vat_registered');
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
   const [termsImages, setTermsImages] = useState([]);
-  const [signedUrls, setSignedUrls] = useState({});  
+  const [signedUrls, setSignedUrls] = useState({});
   const [signedUrlsLoaded, setSignedUrlsLoaded] = useState(false);
+
   // Helper functions defined before useMemo/useCallback
   const round = useCallback((num) => Number((num || 0).toFixed(2)), []);
-  
+
   const showSnack = useCallback((msg, type = "error") => {
     setSnackbar({ show: true, message: msg, type });
   }, []);
@@ -59,52 +62,37 @@ export function useQuotation() {
     return (quotations || []).find((q) => q._id === id) || fetchedQ;
   }, [quotations, id, fetchedQ]);
 
-  
-// Load signed URLs for S3 images when quotation loads
-useEffect(() => {
-  if (!originalQuotation) return;
+  // Load signed URLs for S3 images when quotation loads
+  useEffect(() => {
+    if (!originalQuotation) return;
 
-  const loadSignedUrls = async () => {
-    setSignedUrlsLoaded(false);  // Add this line
-    // Collect all S3 keys from the quotation
-    const allS3Keys = [];
-    
-    // From items
-    originalQuotation.items?.forEach(item => {
-      if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
-        allS3Keys.push(...item.imageS3Keys);
-        console.log("Found S3 keys in items:", item.imageS3Keys);  // Add debug
-      }
-    });
-    
-    // From terms images
-    originalQuotation.termsImages?.forEach(img => {
-      if (img.s3Key) {
-        allS3Keys.push(img.s3Key);
-      }
-    });
-    
-    // From internal documents
-    originalQuotation.internalDocuments?.forEach(doc => {
-      if (doc.s3Key) {
-        allS3Keys.push(doc.s3Key);
-      }
-    });
-    
-    console.log("Total S3 keys found:", allS3Keys);  // Add debug
-    
-    if (allS3Keys.length > 0) {
-      const urls = await convertBatchS3KeysToUrls(allS3Keys);
-      console.log("Signed URLs received:", urls);  // Add debug
-      setSignedUrls(urls);
-    }
-    setSignedUrlsLoaded(true);  // Add this line
-  };
-  
-  loadSignedUrls();
-}, [originalQuotation]);
+    const loadSignedUrls = async () => {
+      setSignedUrlsLoaded(false);
+      const allS3Keys = [];
 
+      originalQuotation.items?.forEach(item => {
+        if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+          allS3Keys.push(...item.imageS3Keys);
+        }
+      });
 
+      originalQuotation.termsImages?.forEach(img => {
+        if (img.s3Key) allS3Keys.push(img.s3Key);
+      });
+
+      originalQuotation.internalDocuments?.forEach(doc => {
+        if (doc.s3Key) allS3Keys.push(doc.s3Key);
+      });
+
+      if (allS3Keys.length > 0) {
+        const urls = await convertBatchS3KeysToUrls(allS3Keys);
+        setSignedUrls(urls);
+      }
+      setSignedUrlsLoaded(true);
+    };
+
+    loadSignedUrls();
+  }, [originalQuotation]);
 
   // Calculations - useMemo for derived values
   const subtotal = useMemo(() => {
@@ -125,11 +113,9 @@ useEffect(() => {
   const taxAmount = useMemo(() => round((subtotalAfterDiscount * taxPercent) / 100), [subtotalAfterDiscount, taxPercent, round]);
   const grandTotal = useMemo(() => round(subtotalAfterDiscount + taxAmount), [subtotalAfterDiscount, taxAmount, round]);
 
-  const amountInWords = useMemo(() => {
-    return numberToWords(grandTotal);
-  }, [grandTotal]);
+  const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
 
-  // All useEffect hooks must be at the top level
+  // Fetch quotation if not in store
   useEffect(() => {
     if (!(quotations || []).find((q) => q._id === id) && id) {
       setLoading(true);
@@ -146,25 +132,22 @@ useEffect(() => {
 
   useEffect(() => {
     if (!originalQuotation) return;
-    
-    // Check if we have S3 keys that need URLs
-    const hasS3Keys = originalQuotation.items?.some(item => 
+
+    // Don't rebuild items from server data while editing — quotationItems is the
+    // source of truth during an edit and holds unsaved uploads. Rebuilding here
+    // would wipe a freshly-added image (its key isn't in originalQuotation yet).
+    if (isEditing) return;
+
+    const hasS3Keys = originalQuotation.items?.some(item =>
       item.imageS3Keys && item.imageS3Keys.length > 0
     );
-    
-    console.log("Has S3 keys:", hasS3Keys, "Signed URLs loaded:", signedUrlsLoaded);
-    
+
     // If we have S3 keys but signed URLs are still loading, wait
-    if (hasS3Keys && !signedUrlsLoaded) {
-      console.log("Waiting for signed URLs to load...");
-      return;
-    }
-    
-    console.log("Processing quotation data with signed URLs:", signedUrls);
-    
+    if (hasS3Keys && !signedUrlsLoaded) return;
+
     const parsedData = parseQuotationData(originalQuotation);
     delete parsedData.termsImage;
-    
+
     setQuotationData({
       ...parsedData,
       projectName: originalQuotation.projectName || "",
@@ -195,13 +178,11 @@ useEffect(() => {
       discount: originalQuotation.discountPercent || 0,
       notes: originalQuotation.notes || "",
     });
-    
-    // Parse items - convert S3 keys to URLs
+
+    // Parse items - convert S3 keys to URLs for display
     const parsedItems = parseQuotationItems(originalQuotation.items);
     const itemsWithUrls = parsedItems.map(item => {
       const s3Urls = (item.imageS3Keys || []).map(key => signedUrls[key]).filter(Boolean);
-      console.log(`Item ${item.id} - S3 keys:`, item.imageS3Keys, "-> URLs:", s3Urls);
-      
       return {
         ...item,
         imageUrls: s3Urls,
@@ -209,7 +190,7 @@ useEffect(() => {
       };
     });
     setQuotationItems(itemsWithUrls);
-    
+
     // Handle terms images
     const cloudinaryImages = originalQuotation.termsImages || [];
     const formattedTermsImages = cloudinaryImages.map((img, index) => ({
@@ -223,10 +204,10 @@ useEffect(() => {
       storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
     }));
     setTermsImages(formattedTermsImages);
-    
+
     const sections = htmlToSections(originalQuotation.termsAndConditions, cloudinaryImages);
     setTcSections(sections.length ? sections : [newSection()]);
-    
+
     // Handle internal documents
     const parsedDocs = parseInternalDocuments(originalQuotation.internalDocuments);
     const docsWithUrls = parsedDocs.map(doc => ({
@@ -234,21 +215,55 @@ useEffect(() => {
       fileUrl: doc.s3Key ? signedUrls[doc.s3Key] : doc.fileUrl
     }));
     setInternalDocuments(docsWithUrls);
-    
-  }, [originalQuotation, signedUrls, signedUrlsLoaded]); // Add signedUrlsLoaded to dependencies
 
-  
+  }, [originalQuotation, signedUrls, signedUrlsLoaded, isEditing]);
+
   // Define all callbacks before conditional logic
   const handleDocumentUpload = useCallback(async (files, descriptions) => {
     try {
+      const MAX_INTERNAL_DOCS = 5;
+      const incoming = Array.from(files || []);
+      if (!incoming.length) return;
+
+      // Block zip archives (by MIME and by extension, since some browsers send
+      // application/octet-stream for .zip).
+      const isZip = (f) => {
+        const name = (f.name || '').toLowerCase();
+        const type = (f.type || '').toLowerCase();
+        return name.endsWith('.zip')
+          || type === 'application/zip'
+          || type === 'application/x-zip-compressed'
+          || type === 'multipart/x-zip';
+      };
+
+      const zipFiles = incoming.filter(isZip);
+      if (zipFiles.length) {
+        showSnack('ZIP files are not allowed for internal documents.', 'error');
+      }
+      const nonZip = incoming.filter(f => !isZip(f));
+      if (!nonZip.length) return;
+
+      // Cap total internal documents at 5 (existing saved + already-staged + new).
+      const currentCount = internalDocuments.length + newDocuments.length;
+      const slots = MAX_INTERNAL_DOCS - currentCount;
+      if (slots <= 0) {
+        showSnack(`Maximum ${MAX_INTERNAL_DOCS} internal documents allowed. You already have ${currentCount}.`, 'error');
+        return;
+      }
+
+      const toProcess = nonZip.slice(0, slots);
+      if (nonZip.length > slots) {
+        showSnack(`Only ${slots} more document(s) allowed — adding the first ${slots}.`, 'error');
+      }
+
       const readers = [];
       let isMounted = true;
-      
-      const base64Promises = files.map(file => {
+
+      const base64Promises = toProcess.map(file => {
         return new Promise((resolve) => {
           const reader = new FileReader();
           readers.push(reader);
-          
+
           reader.onload = () => {
             if (isMounted) {
               resolve({
@@ -264,25 +279,24 @@ useEffect(() => {
           reader.readAsDataURL(file);
         });
       });
-  
+
       const base64Files = await Promise.all(base64Promises);
       const validFiles = base64Files.filter(f => f !== null);
-  
+
       const tempDocs = validFiles.map((file, index) => ({
         id: `temp-${Date.now()}-${index}-${Math.random()}`,
         fileName: file.name,
         fileType: file.type,
         fileSize: file.size,
         fileData: file.fileData,
-        description: descriptions[index] || '',
+        description: (descriptions && descriptions[index]) || '',
         uploadedAt: new Date().toISOString(),
         isTemp: true
       }));
-  
+
       setNewDocuments(prev => [...prev, ...tempDocs]);
       showSnack(`${validFiles.length} document(s) ready`, 'success');
-      
-      // Return cleanup
+
       return () => {
         isMounted = false;
         readers.forEach(reader => {
@@ -295,11 +309,11 @@ useEffect(() => {
       console.error('Error processing documents:', error);
       showSnack('Failed to process documents', 'error');
     }
-  }, [showSnack]);
+  }, [showSnack, internalDocuments.length, newDocuments.length]);
 
   const handleDocumentDelete = useCallback(async (docId) => {
     const isTemp = newDocuments.some(d => d.id === docId);
-  
+
     if (isTemp) {
       setNewDocuments(prev => prev.filter(d => d.id !== docId));
       showSnack('Document removed', 'success');
@@ -310,9 +324,7 @@ useEffect(() => {
         showSnack('Document deleted', 'success');
       } catch (error) {
         console.error('Error deleting document:', error);
-        // ✅ Handle the specific "only creator" error
         const errorMessage = error?.response?.data?.message || error?.message || 'Failed to delete document';
-        
         if (errorMessage.includes('Only the creator')) {
           showSnack('Only the quotation creator can delete internal documents', 'error');
         } else {
@@ -332,12 +344,10 @@ useEffect(() => {
   }, [internalDocuments, newDocuments]);
 
   const handleDocumentPreview = useCallback((docId) => {
-    const doc = [...internalDocuments, ...newDocuments].find(d => 
+    const doc = [...internalDocuments, ...newDocuments].find(d =>
       (d._id === docId || d.id === docId)
     );
-    
     if (!doc) return;
-    
     if (doc.fileType?.startsWith('image/')) {
       setPreviewDoc(doc);
     } else {
@@ -377,7 +387,7 @@ useEffect(() => {
       unitPrice: 0,
       imagePaths: [],
       imageS3Keys: [],
-      newImages: []
+      imageUrls: []
     }]);
   }, []);
 
@@ -422,9 +432,7 @@ useEffect(() => {
           const newErrors = { ...prev };
           if (newErrors[id]) {
             delete newErrors[id].quantity;
-            if (Object.keys(newErrors[id]).length === 0) {
-              delete newErrors[id];
-            }
+            if (Object.keys(newErrors[id]).length === 0) delete newErrors[id];
           }
           return newErrors;
         });
@@ -443,9 +451,7 @@ useEffect(() => {
           const newErrors = { ...prev };
           if (newErrors[id]) {
             delete newErrors[id].unitPrice;
-            if (Object.keys(newErrors[id]).length === 0) {
-              delete newErrors[id];
-            }
+            if (Object.keys(newErrors[id]).length === 0) delete newErrors[id];
           }
           return newErrors;
         });
@@ -472,244 +478,226 @@ useEffect(() => {
     ));
   }, [items, showSnack]);
 
-  const handleImageUpload = useCallback((e, itemId) => {
+  // ── S3 DIRECT UPLOAD (matches create flow) ──────────────────────────────
+  // Compress + upload each file straight to S3, store the returned key in the
+  // item's imageS3Keys, and resolve a signed URL into imageUrls so it displays.
+  // A transient object-URL preview lives in newImages[itemId] during upload.
+  const handleImageUpload = useCallback(async (e, itemId) => {
     const files = Array.from(e.target.files || []);
+    e.target.value = '';
     if (!files.length) return;
-  
-    const existingItem = quotationItems.find(item => item.id === itemId);
-    const existingImageCount = existingItem?.imagePaths?.length || 0;
-    const existingS3Count = existingItem?.imageS3Keys?.length || 0;
-    const newImageCount = (newImages[itemId] || []).length;
-    const currentTotalImages = existingImageCount + existingS3Count + newImageCount;
-    const availableSlots = MAX_IMAGES_PER_ITEM - currentTotalImages;
-  
-    if (availableSlots <= 0) {
-      showSnack(`Maximum ${MAX_IMAGES_PER_ITEM} images allowed per item. You already have ${currentTotalImages} image(s).`, 'error');
-      e.target.value = "";
+
+    const item = quotationItems.find(i => i.id === itemId);
+    const existingS3Count = item?.imageS3Keys?.length || 0;
+    const existingPathCount = item?.imagePaths?.length || 0;
+    const previewCount = (newImages[itemId] || []).length;
+    const currentTotal = existingS3Count + existingPathCount + previewCount;
+    const slots = MAX_IMAGES_PER_ITEM - currentTotal;
+
+    if (slots <= 0) {
+      showSnack(`Maximum ${MAX_IMAGES_PER_ITEM} images allowed per item. You already have ${currentTotal}.`, 'error');
       return;
     }
-  
-    const toProcess = files.slice(0, availableSlots);
-  
-    if (files.length > availableSlots) {
-      showSnack(`Only ${availableSlots} slot(s) left — first ${availableSlots} of ${files.length} will be added.`, 'warning');
+
+    const toProcess = files.slice(0, slots);
+    if (files.length > slots) {
+      showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`, 'warning');
     }
-  
-    const validFiles = [];
-    const errors = [];
-  
+
+    const valid = [];
     for (const file of toProcess) {
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-        errors.push(`"${file.name}" is not a supported image type.`);
+        showSnack(`"${file.name}" is not a supported image type.`, 'error');
         continue;
       }
-  
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
-        errors.push(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
+        showSnack(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`, 'error');
         continue;
       }
-  
-      validFiles.push(file);
+      valid.push(file);
     }
-  
-    if (errors.length > 0) {
-      errors.forEach(err => showSnack(err, 'error'));
-    }
-  
-    if (validFiles.length === 0) {
-      e.target.value = "";
-      return;
-    }
-  
-    // ✅ Track readers for cleanup
-    const readers = [];
-    let processedCount = 0;
-    let isMounted = true;
-  
-    validFiles.forEach((file) => {
-      const reader = new FileReader();
-      readers.push(reader);
-  
-      reader.onload = () => {
-        if (!isMounted) return; // Prevent state update after unmount
-        
-        const base64String = reader.result;
-        
-        setNewImages((prev) => ({
-          ...prev,
-          [itemId]: [...(prev[itemId] || []), base64String],
-        }));
-  
-        setQuotationItems(prev => prev.map(item => 
-          item.id === itemId ? { 
-            ...item, 
-            newImages: [...(item.newImages || []), base64String] 
-          } : item
+    if (!valid.length) return;
+
+    setUploadingImages(prev => ({ ...prev, [itemId]: true }));
+
+    for (const file of valid) {
+      const previewUrl = URL.createObjectURL(file);
+
+      // Show preview immediately
+      setNewImages(prev => ({
+        ...prev,
+        [itemId]: [...(prev[itemId] || []), previewUrl],
+      }));
+
+      try {
+        const key = await uploadItemImage(file);
+        const signedUrl = await convertS3KeyToUrl(key);
+
+        // Attach the key + its signed URL to the item.
+        setQuotationItems(prev => prev.map(it =>
+          it.id === itemId
+            ? {
+                ...it,
+                imageS3Keys: [...(it.imageS3Keys || []), key],
+                imageUrls: [...(it.imageUrls || []), signedUrl].filter(Boolean),
+              }
+            : it
         ));
-  
-        processedCount++;
-  
-        if (processedCount === validFiles.length) {
-          showSnack(`${validFiles.length} image(s) added to item.`, 'success');
-        }
-      };
-  
-      reader.onerror = () => {
-        if (isMounted) {
-          showSnack(`Failed to read file: ${file.name}`, 'error');
-        }
-        processedCount++;
-      };
-  
-      reader.readAsDataURL(file);
+        // NOTE: do NOT setSignedUrls here. It would re-fire the rebuild effect
+        // which repopulates quotationItems from originalQuotation (which has no
+        // new key yet) and wipes the image we just added. The URL is stored
+        // directly on the item above, which is all the display needs.
+
+        // Remove the transient preview
+        setNewImages(prev => ({
+          ...prev,
+          [itemId]: (prev[itemId] || []).filter(u => u !== previewUrl),
+        }));
+        URL.revokeObjectURL(previewUrl);
+      } catch (err) {
+        setNewImages(prev => ({
+          ...prev,
+          [itemId]: (prev[itemId] || []).filter(u => u !== previewUrl),
+        }));
+        URL.revokeObjectURL(previewUrl);
+        showSnack(`Failed to upload "${file.name}": ${err.message}`, 'error');
+      }
+    }
+
+    setUploadingImages(prev => {
+      const { [itemId]: _, ...rest } = prev;
+      return rest;
     });
-  
     setEditingImgId(null);
-    e.target.value = "";
-  
-    // ✅ Return cleanup function
-    return () => {
-      isMounted = false;
-      readers.forEach(reader => {
-        try {
-          if (reader.readyState === 1) {
-            reader.abort();
-          }
-        } catch (err) {
-          console.error('Error aborting file reader:', err);
-        }
-      });
-    };
   }, [quotationItems, newImages, showSnack]);
 
-  
+  // Remove a still-uploading preview (rarely needed since previews are transient).
   const removeNewImage = useCallback((itemId, imageIndex) => {
     setNewImages(prev => {
-      const currentNewImages = prev[itemId] || [];
-      const filtered = currentNewImages.filter((_, idx) => idx !== imageIndex);
-      const updated = { ...prev };
-      if (filtered.length === 0) {
-        delete updated[itemId];
-      } else {
-        updated[itemId] = filtered;
+      const current = prev[itemId] || [];
+      const removed = current[imageIndex];
+      if (removed) {
+        try { URL.revokeObjectURL(removed); } catch (e) {}
       }
+      const filtered = current.filter((_, idx) => idx !== imageIndex);
+      const updated = { ...prev };
+      if (filtered.length === 0) delete updated[itemId];
+      else updated[itemId] = filtered;
       return updated;
     });
-    
-    setQuotationItems(prev => prev.map(item =>
-      item.id === itemId ? {
-        ...item,
-        newImages: (item.newImages || []).filter((_, idx) => idx !== imageIndex)
-      } : item
-    ));
   }, []);
 
+  // Remove an already-attached image. renderItemImages shows
+  // [...imagePaths, ...imageUrls], so map the index accordingly.
   const removeExistingImage = useCallback((itemId, imageIndex) => {
-    setQuotationItems(prevItems => 
+    setQuotationItems(prevItems =>
       prevItems.map(item => {
         if (item.id !== itemId) return item;
-        
-        // Get current arrays
+
+        const currentPaths = item.imagePaths || [];      // legacy Cloudinary (rendered first)
         const currentS3Keys = item.imageS3Keys || [];
-        const currentUrls = item.imageUrls || [];
-        const currentPaths = item.imagePaths || [];
-        
-        // If removing from S3 images
-        if (imageIndex < currentS3Keys.length) {
+        const currentUrls = item.imageUrls || [];        // rendered after paths
+
+        // First block: legacy imagePaths
+        if (imageIndex < currentPaths.length) {
           return {
             ...item,
-            imageS3Keys: currentS3Keys.filter((_, idx) => idx !== imageIndex),
-            imageUrls: currentUrls.filter((_, idx) => idx !== imageIndex)  // ← THIS IS THE KEY FIX
-          };
-        } 
-        // If removing from Cloudinary images
-        else {
-          const adjustedIndex = imageIndex - currentS3Keys.length;
-          return {
-            ...item,
-            imagePaths: currentPaths.filter((_, idx) => idx !== adjustedIndex)
+            imagePaths: currentPaths.filter((_, idx) => idx !== imageIndex),
           };
         }
+
+        // Second block: S3 images (keys + their urls move together)
+        const s3Index = imageIndex - currentPaths.length;
+        return {
+          ...item,
+          imageS3Keys: currentS3Keys.filter((_, idx) => idx !== s3Index),
+          imageUrls: currentUrls.filter((_, idx) => idx !== s3Index),
+        };
       })
     );
   }, []);
 
-  const handleTermsImagesUpload = useCallback((files) => {
+  // Terms images now upload directly to S3 (like item images). Each file is
+  // compressed, PUT to S3 under quotations/terms/, and stored with its s3Key +
+  // a resolved signed URL for display. No more base64 in the payload.
+  const handleTermsImagesUpload = useCallback(async (files) => {
     if (!files || files.length === 0) return;
-  
+
     const remainingSlots = 10 - termsImages.length;
-  
     if (remainingSlots <= 0) {
       showSnack('Maximum 10 terms images allowed', 'error');
       return;
     }
-  
+
     const filesToProcess = files.slice(0, remainingSlots);
     if (files.length > remainingSlots) {
       showSnack(`Only ${remainingSlots} more image(s) allowed`, 'warning');
     }
-  
-    const newImagesList = [];
-    let processedCount = 0;
-    let isMounted = true;
-    const readers = [];
-  
-    filesToProcess.forEach((file) => {
-      if (file instanceof File) {
-        const reader = new FileReader();
-        readers.push(reader);
-        
-        reader.onload = () => {
-          if (!isMounted) return;
-          
-          newImagesList.push({
-            id: `terms-img-${Date.now()}-${Math.random()}`,
-            url: reader.result,
-            base64: reader.result,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            isTemp: true,
-            storageProvider: 's3',
-            uploadedAt: new Date().toISOString()
-          });
-  
-          processedCount++;
-  
-          if (processedCount === filesToProcess.length) {
-            setTermsImages(prev => [...prev, ...newImagesList]);
-          }
-        };
-        reader.onerror = () => {
-          if (isMounted) {
-            console.error('Error reading file:', file.name);
-          }
-          processedCount++;
-        };
-        reader.readAsDataURL(file);
-      } else if (file.url || file.base64) {
-        newImagesList.push(file);
-        processedCount++;
-  
-        if (processedCount === filesToProcess.length) {
-          setTermsImages(prev => [...prev, ...newImagesList]);
+
+    for (const file of filesToProcess) {
+      // Already-processed image objects (re-passed) — keep as-is.
+      if (!(file instanceof File)) {
+        if (file.url || file.base64 || file.s3Key) {
+          setTermsImages(prev => [...prev, file]);
         }
+        continue;
       }
-    });
-  
-    // ✅ Return cleanup function
-    return () => {
-      isMounted = false;
-      readers.forEach(reader => {
-        try {
-          if (reader.readyState === 1) {
-            reader.abort();
-          }
-        } catch (err) {
-          console.error('Error aborting file reader:', err);
+
+      if (!file.type.startsWith('image/')) {
+        showSnack(`"${file.name}" is not a supported image type.`, 'error');
+        continue;
+      }
+
+      const tempId = `terms-img-${Date.now()}-${Math.random()}`;
+      const previewUrl = URL.createObjectURL(file);
+
+      // Show preview immediately while uploading.
+      setTermsImages(prev => [...prev, {
+        id: tempId,
+        url: previewUrl,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        isTemp: true,
+        uploading: true,
+        storageProvider: 's3',
+        uploadedAt: new Date().toISOString(),
+      }]);
+
+      try {
+        const key = await uploadTermsImage(file);
+        const signedUrl = await convertS3KeyToUrl(key);
+
+        // Replace the preview entry with the settled S3 image.
+        setTermsImages(prev => prev.map(img =>
+          img.id === tempId
+            ? {
+                id: tempId,
+                url: signedUrl || previewUrl,
+                s3Key: key,
+                fileName: file.name,
+                fileType: file.type,
+                fileSize: file.size,
+                isTemp: false,
+                uploading: false,
+                storageProvider: 's3',
+                uploadedAt: new Date().toISOString(),
+              }
+            : img
+        ));
+        // Only revoke the local blob if we actually have a signed URL to show
+        // in its place. If the signed URL didn't resolve, keep the blob alive so
+        // the thumbnail still displays (the s3Key persists for a fresh URL on reload).
+        if (signedUrl && previewUrl) {
+          try { URL.revokeObjectURL(previewUrl); } catch (e) {}
         }
-      });
-    };
+      } catch (err) {
+        // Drop the failed preview.
+        setTermsImages(prev => prev.filter(img => img.id !== tempId));
+        if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (e) {} }
+        showSnack(`Failed to upload "${file.name}": ${err.message}`, 'error');
+      }
+    }
   }, [termsImages.length, showSnack]);
 
   const removeTermsImage = useCallback((imageId) => {
@@ -745,6 +733,7 @@ useEffect(() => {
     const itemsWithUrls = parsedItems.map(item => ({
       ...item,
       imageUrls: (item.imageS3Keys || []).map(key => signedUrls[key]).filter(Boolean),
+      imagePaths: item.imagePaths || [],
     }));
     setQuotationItems(itemsWithUrls);
 
@@ -799,13 +788,11 @@ useEffect(() => {
         showSnack(`Item description is required for all items.`, 'error');
         return false;
       }
-    
       const quantityResult = validateQuantity(item.quantity);
       if (!quantityResult.isValid) {
         showSnack(`Item "${item.name}" has invalid quantity`, 'error');
         return false;
       }
-
       const priceResult = validatePrice(item.unitPrice);
       if (!priceResult.isValid) {
         showSnack(`Item "${item.name}" has invalid price`, 'error');
@@ -817,12 +804,10 @@ useEffect(() => {
       showSnack("Project Name is required.", 'error');
       return false;
     }
-
     if (!quotationData.ourFocalPoint?.trim()) {
       showSnack("Focal Point Name is required.", 'error');
       return false;
     }
-
     if (!quotationData.expiryDate) {
       showSnack("Expiry date is required.", 'error');
       return false;
@@ -833,7 +818,6 @@ useEffect(() => {
       showSnack(taxResult.error, 'error');
       return false;
     }
-
     const discountResult = validatePercentage(quotationData.discount);
     if (!discountResult.isValid) {
       showSnack(discountResult.error, 'error');
@@ -845,39 +829,15 @@ useEffect(() => {
 
   const handleSave = useCallback(async () => {
     if (!validateBeforeSave()) return;
-  
+
+    // Block save while any image is still uploading.
+    if (Object.keys(uploadingImages).length > 0) {
+      showSnack("Please wait — images are still uploading.", 'error');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const quotationImages = {};
-  
-      quotationItems.forEach((item, index) => {
-        const allImages = [];
-      
-        // Add existing S3 keys (as keys, not URLs)
-        if (item.imageS3Keys && Array.isArray(item.imageS3Keys) && item.imageS3Keys.length > 0) {
-          allImages.push(...item.imageS3Keys);
-        }
-      
-        // Add existing Cloudinary paths
-        if (item.imagePaths && Array.isArray(item.imagePaths) && item.imagePaths.length > 0) {
-          allImages.push(...item.imagePaths);
-        }
-      
-        // Add new base64 images
-        if (newImages[item.id] && Array.isArray(newImages[item.id]) && newImages[item.id].length > 0) {
-          const base64Images = newImages[item.id].map(img => {
-            if (typeof img === 'string') return img;
-            if (typeof img === 'object' && img.preview) return img.preview;
-            return img;
-          });
-          allImages.push(...base64Images);
-        }
-      
-        if (allImages.length > 0) {
-          quotationImages[index] = allImages;
-        }
-      });
-  
       const documentData = [
         ...internalDocuments.map(doc => ({
           fileName: doc.fileName,
@@ -896,10 +856,10 @@ useEffect(() => {
           description: doc.description || '',
         }))
       ];
-  
+
       const taxValue = parseFloat(quotationData.tax) || 0;
       const discountValue = parseFloat(quotationData.discount) || 0;
-  
+
       let finalTermsAndConditions = "";
       if (tcSections && tcSections.length > 0) {
         finalTermsAndConditions = tcSections
@@ -912,8 +872,9 @@ useEffect(() => {
           .filter(Boolean)
           .join("\n\n");
       }
-  
-      // Format items for API - separate S3 keys and base64 images
+
+      // Images are uploaded directly to S3 now — send keys only. Legacy
+      // imagePaths (old Cloudinary) are preserved if present.
       const formattedItems = quotationItems.map((qi) => ({
         itemId: qi.itemId || null,
         name: qi.name || "",
@@ -921,14 +882,10 @@ useEffect(() => {
         quantity: Number(qi.quantity) || 1,
         unitPrice: Number(qi.unitPrice) || 0,
         imageS3Keys: qi.imageS3Keys || [],
-        newImages: newImages[qi.id] || [],
         imagePaths: qi.imagePaths || []
       }));
-  
-      // ==================== ✅ FIXED: TERMS IMAGES HANDLING ====================
-      
-      // Separate existing S3 term images from new base64 ones
-      // Send ALL existing images that are STILL present (not removed by user)
+
+      // Terms images: existing S3 keys vs new base64 (terms upload still base64)
       const existingTermsImages = termsImages
         .filter(img => img.s3Key && !img.url?.startsWith('data:'))
         .map(img => ({
@@ -938,22 +895,12 @@ useEffect(() => {
           id: img.id,
           _id: img.id
         }));
-  
+
       const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
-  
-      console.log('📸 Terms images payload:', {
-        totalTermsImages: termsImages.length,
-        existingCount: existingTermsImages.length,
-        newCount: newBase64Images.length,
-        existing: existingTermsImages.map(img => ({ s3Key: img.s3Key?.substring(0, 50), id: img.id }))
-      });
-  
-      // ==================== END OF TERMS IMAGES FIX ====================
-  
+
       const payload = {
         customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
-        
-        // Left side fields
+
         projectName: quotationData.projectName?.trim(),
         scopeOfWork: quotationData.scopeOfWork?.trim() || "",
         remark: quotationData.remark?.trim() || "",
@@ -964,19 +911,18 @@ useEffect(() => {
         customerDesignation: quotationData.customerDesignation?.trim() || "",
         customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber?.trim() || "",
         customerTaxRegistrationNumber: quotationData.customerTaxRegistrationNumber?.trim() || "",
-        
+
         contact: quotationData.customerPhone?.trim() || quotationData.contact?.trim() || "",
-        
-        // Right side fields
+
         ourFocalPoint: quotationData.ourFocalPoint?.trim() || "",
         ourFocalPointDesignation: quotationData.ourFocalPointDesignation?.trim() || "",
         ourContact: quotationData.ourContact?.trim() || "",
         salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",
-        
+
         date: quotationData.date,
         expiryDate: quotationData.expiryDate,
         queryDate: quotationData.queryDate || null,
-        
+
         ourRef: quotationData.ourRef?.trim() || "",
         paymentTerms: quotationData.paymentTerms?.trim() || "",
         deliveryTerms: quotationData.deliveryTerms?.trim() || "",
@@ -985,13 +931,12 @@ useEffect(() => {
         taxPercent: taxValue,
         discountPercent: discountValue,
         notes: quotationData.notes?.trim() || "",
-        
+
         termsAndConditions: finalTermsAndConditions,
         termsImages: newBase64Images,
-        existingTermsImages: existingTermsImages,  // ✅ Send kept existing images
-        
+        existingTermsImages: existingTermsImages,
+
         items: formattedItems,
-        quotationImages: quotationImages,
         internalDocuments: documentData
           .filter(doc => doc.fileData)
           .map(doc => doc.fileData),
@@ -999,21 +944,15 @@ useEffect(() => {
           .filter(doc => doc.fileData)
           .map(doc => doc.description || '')
       };
-  
-      console.log('📤 Sending payload to server:', {
-        hasExistingTermsImages: payload.existingTermsImages.length,
-        hasNewTermsImages: payload.termsImages.length,
-        itemsCount: payload.items.length
-      });
-  
+
       const result = await updateQuotation(originalQuotation._id, payload);
-  
+
       if (result?.success) {
         const updatedQuotation = result.quotation;
-  
+
         if (updatedQuotation) {
           setFetchedQ(updatedQuotation);
-          
+
           setQuotationData({
             projectName: updatedQuotation.projectName || "",
             scopeOfWork: updatedQuotation.scopeOfWork || "",
@@ -1044,18 +983,31 @@ useEffect(() => {
             notes: updatedQuotation.notes || "",
             currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
           });
-          
+
+          // Re-resolve signed URLs for the saved items AND terms images so they
+          // display immediately (without a reload). Both contribute their S3 keys
+          // to a single batch.
           const updatedItems = parseQuotationItems(updatedQuotation.items);
-          const itemsWithNewImages = updatedItems.map(item => ({
-            ...item,
-            newImages: []
-          }));
-          setQuotationItems(itemsWithNewImages);
-  
           const serverTermsImages = updatedQuotation.termsImages || [];
+          const allKeys = [];
+          updatedItems.forEach(it => (it.imageS3Keys || []).forEach(k => { if (k) allKeys.push(k); }));
+          serverTermsImages.forEach(img => { if (img.s3Key) allKeys.push(img.s3Key); });
+          let freshUrls = signedUrls;
+          if (allKeys.length > 0) {
+            const fetched = await convertBatchS3KeysToUrls(allKeys);
+            freshUrls = { ...signedUrls, ...fetched };
+            setSignedUrls(freshUrls);
+          }
+          const itemsWithUrls = updatedItems.map(item => ({
+            ...item,
+            imageUrls: (item.imageS3Keys || []).map(k => freshUrls[k]).filter(Boolean),
+            imagePaths: item.imagePaths || [],
+          }));
+          setQuotationItems(itemsWithUrls);
+
           setTermsImages(serverTermsImages.map(img => ({
             id: img._id || `img-${Date.now()}`,
-            url: img.s3Key ? signedUrls[img.s3Key] : img.url,
+            url: img.s3Key ? freshUrls[img.s3Key] : img.url,
             s3Key: img.s3Key,
             publicId: img.publicId,
             fileName: img.fileName,
@@ -1063,13 +1015,13 @@ useEffect(() => {
             uploadedAt: img.uploadedAt,
             storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
           })));
-  
+
           const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
           setTcSections(sections.length ? sections : [newSection()]);
-  
+
           setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
         }
-  
+
         showSnack("Quotation updated successfully!", 'success');
         setIsEditing(false);
         setEditingImgId(null);
@@ -1085,8 +1037,8 @@ useEffect(() => {
     } finally {
       setIsSaving(false);
     }
-  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, newDocuments,
-      internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls]);
+  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
+      internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
@@ -1108,26 +1060,21 @@ useEffect(() => {
 
     setIsExporting(true);
     try {
-      // Convert S3 keys to signed URLs for PDF generation
       const allS3Keys = [];
-      
       quotationItems.forEach(item => {
         if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
           allS3Keys.push(...item.imageS3Keys);
         }
       });
-      
       termsImages.forEach(img => {
-        if (img.s3Key) {
-          allS3Keys.push(img.s3Key);
-        }
+        if (img.s3Key) allS3Keys.push(img.s3Key);
       });
-      
+
       let signedUrlsMap = {};
       if (allS3Keys.length > 0) {
         signedUrlsMap = await convertBatchS3KeysToUrls(allS3Keys);
       }
-      
+
       const pdfQuotation = {
         ...originalQuotation,
         projectName: quotationData.projectName,
@@ -1154,13 +1101,11 @@ useEffect(() => {
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes,
         termsAndConditions: sectionsToHTML(tcSections),
-        remark: quotationData.remark || originalQuotation?.remark || "",
         items: quotationItems.map(item => ({
           ...item,
           imagePaths: [
             ...(item.imagePaths || []),
             ...(item.imageS3Keys || []).map(key => signedUrlsMap[key]).filter(Boolean),
-            ...((newImages[item.id] || []).map(img => typeof img === 'string' ? img : img.preview))
           ]
         })),
         subtotal,
@@ -1172,7 +1117,7 @@ useEffect(() => {
         termsImagesUrls: termsImages.map(img => img.s3Key ? signedUrlsMap[img.s3Key] : img.url).filter(Boolean)
       };
 
-      await downloadQuotationPDF(pdfQuotation, { newImages, exportType });
+      await downloadQuotationPDF(pdfQuotation, { exportType });
       showSnack("PDF downloaded successfully!", 'success');
     } catch (err) {
       console.error("PDF export error:", err);
@@ -1180,7 +1125,7 @@ useEffect(() => {
     } finally {
       setIsExporting(false);
     }
-  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newImages, tcSections, 
+  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, tcSections,
       subtotal, taxAmount, discountAmount, grandTotal, amountInWords, termsImages, showSnack]);
 
   // Return all values

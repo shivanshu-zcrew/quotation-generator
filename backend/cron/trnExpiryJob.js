@@ -2,9 +2,6 @@
 //
 // Daily job: find customers whose trnExpiryDate has passed and are still active,
 // mark them inactive locally AND in Zoho Books. Runs once per day.
-//
-// Wire it up in your server entrypoint with:
-//   require('./cron/trnExpiryJob').start();
 
 const cron = require('node-cron');
 const { Customer } = require('../models/customer');
@@ -12,24 +9,17 @@ const Company = require('../models/company');
 const zohoBooksService = require('../zoho/customerServices');
 const logger = require('../config/logger');
 
-// Process Zoho calls in small batches to respect rate limits
 const ZOHO_BATCH_SIZE = 5;
 const ZOHO_BATCH_DELAY_MS = 600;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Core routine — exported separately so it can be invoked manually
- * (e.g. from an admin endpoint or a test) without the scheduler.
- */
 async function runTrnExpiryDeactivation() {
   const startTime = Date.now();
   const now = new Date();
 
   logger.info('TRN expiry job: starting', { timestamp: now.toISOString() });
 
-  // Find active customers whose TRN expiry has passed.
-  // trnExpiryDate must exist, be non-null, and be strictly in the past.
   const expiredCustomers = await Customer.find({
     isActive: true,
     trnExpiryDate: { $ne: null, $lte: now },
@@ -48,7 +38,6 @@ async function runTrnExpiryDeactivation() {
     count: expiredCustomers.length,
   });
 
-  // Group customers by company so we can set the Zoho org context once per company.
   const byCompany = new Map();
   for (const c of expiredCustomers) {
     const key = String(c.companyId);
@@ -71,6 +60,21 @@ async function runTrnExpiryDeactivation() {
     const zohoEnabled = !!company?.zohoOrganizationId;
     if (zohoEnabled) {
       zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+
+      // Warm the access token ONCE up front. Without this, the parallel batch
+      // below all see an invalid token at the same instant and race to refresh
+      // it — but only one refresh is allowed per minute (the service's
+      // _canRefresh guard), so the losers fail with "Rate limited... wait 60s".
+      // Doing the single refresh here means every batched call finds a valid
+      // token and none of them tries to refresh.
+      try {
+        await zohoBooksService.getValidAccessToken();
+      } catch (err) {
+        logger.warn(
+          `TRN expiry job: token warm-up failed for company ${companyId}: ${err.message}`,
+          { companyId }
+        );
+      }
     } else {
       logger.warn(
         `TRN expiry job: company ${companyId} has no Zoho org id — deactivating locally only`,
@@ -78,14 +82,11 @@ async function runTrnExpiryDeactivation() {
       );
     }
 
-    // Process in batches to stay within Zoho rate limits.
     for (let i = 0; i < customers.length; i += ZOHO_BATCH_SIZE) {
       const batch = customers.slice(i, i + ZOHO_BATCH_SIZE);
 
       await Promise.all(
         batch.map(async (customer) => {
-          // 1) Deactivate in Zoho first (only if it has a zohoId and the company is wired up).
-          //    If Zoho fails, we DON'T flip the local flag, so the next run retries it.
           if (zohoEnabled && customer.zohoId) {
             try {
               const zohoResult = await zohoBooksService.markContactInactive(customer.zohoId);
@@ -95,7 +96,7 @@ async function runTrnExpiryDeactivation() {
                   `TRN expiry job: Zoho deactivation failed for ${customer.name}`,
                   { customerId: customer._id, zohoId: customer.zohoId, error: zohoResult.error }
                 );
-                return; // skip local update so it retries next run
+                return;
               }
             } catch (err) {
               zohoErrors++;
@@ -103,20 +104,14 @@ async function runTrnExpiryDeactivation() {
                 `TRN expiry job: Zoho deactivation threw for ${customer.name}: ${err.message}`,
                 { customerId: customer._id, zohoId: customer.zohoId }
               );
-              return; // skip local update
+              return;
             }
           }
 
-          // 2) Mark inactive locally.
           try {
             await Customer.updateOne(
               { _id: customer._id },
-              {
-                $set: {
-                  isActive: false,
-                  trnExpiredDeactivatedAt: new Date(),
-                },
-              }
+              { $set: { isActive: false, trnExpiredDeactivatedAt: new Date() } }
             );
             deactivated++;
             logger.info(`TRN expiry job: deactivated ${customer.name}`, {
@@ -152,29 +147,23 @@ async function runTrnExpiryDeactivation() {
 
 let scheduledTask = null;
 
-/**
- * Start the daily scheduler. Default: 02:15 every day, server timezone.
- * Pass a cron expression to override.
- */
-function start(cronExpression = '15 16 * * *') {
-    if (scheduledTask) {
-      logger.warn('TRN expiry job: scheduler already started');
-      return scheduledTask;
-    }
-  
-    scheduledTask = cron.schedule(cronExpression, async () => {
-      try {
-        await runTrnExpiryDeactivation();
-      } catch (err) {
-        logger.error(`TRN expiry job: unhandled error: ${err.message}`, {
-          stack: err.stack
-        });
-      }
-    });
-  
-    logger.info(`TRN expiry job: scheduled (${cronExpression})`);
+function start(cronExpression = '35 16 * * *') {
+  if (scheduledTask) {
+    logger.warn('TRN expiry job: scheduler already started');
     return scheduledTask;
   }
+
+  scheduledTask = cron.schedule(cronExpression, async () => {
+    try {
+      await runTrnExpiryDeactivation();
+    } catch (err) {
+      logger.error(`TRN expiry job: unhandled error: ${err.message}`, { stack: err.stack });
+    }
+  });
+
+  logger.info(`TRN expiry job: scheduled (${cronExpression})`);
+  return scheduledTask;
+}
 
 function stop() {
   if (scheduledTask) {

@@ -828,6 +828,15 @@ exports.createQuotation = async (req, res) => {
         }
       }
     }
+
+    // Accept S3 keys the browser already uploaded directly via presigned PUT.
+    // This is the ONLY source for browser-uploaded images — without it they're dropped.
+    // Mirrors the same block updateQuotation already has.
+    if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
+      for (const key of item.imageS3Keys) {
+        if (key && !imageKeys.includes(key)) imageKeys.push(key);
+      }
+    }
     
     imageKeys = [...new Set(imageKeys)];
     
@@ -969,7 +978,7 @@ exports.updateQuotation = async (req, res) => {
   if (quotationImages && Object.keys(quotationImages).length > 0) {
     compressedQuotationImages = await imageCompressor.compressQuotationImages(quotationImages, { maxWidth: 800, quality: 70, maxSizeKB: 300 });
   }
-  
+
   let compressedTermsImages = termsImages;
   if (termsImages && termsImages.length > 0) {
     compressedTermsImages = await imageCompressor.compressTermsImages(termsImages, { maxWidth: 600, quality: 65, maxSizeKB: 200 });
@@ -1106,6 +1115,38 @@ exports.updateQuotation = async (req, res) => {
         storageProvider: 's3'
       });
     }
+
+    // ==================== ✅ ITEM IMAGE S3 CLEANUP ====================
+    // Diff the item-image keys saved on the quotation against the keys that
+    // survived this update. Anything dropped was removed by the user and is now
+    // orphaned in S3, so delete it. This mirrors the terms-image cleanup below.
+    // Done at save time (not on click) so a cancelled/failed edit never destroys
+    // a still-referenced image. Keys are unique per upload, so there's no risk of
+    // deleting a key still used by another item.
+    try {
+      const oldItemKeys = new Set();
+      (existing.items || []).forEach(it => {
+        (it.imageS3Keys || []).forEach(k => { if (k) oldItemKeys.add(k); });
+      });
+
+      const keptItemKeys = new Set();
+      processedItems.forEach(it => {
+        (it.imageS3Keys || []).forEach(k => { if (k) keptItemKeys.add(k); });
+      });
+
+      const removedItemKeys = [...oldItemKeys].filter(k => !keptItemKeys.has(k));
+      for (const key of removedItemKeys) {
+        await deleteFromS3(key);
+        console.log(`🗑️ Deleted removed item image: ${key}`);
+      }
+      if (removedItemKeys.length > 0) {
+        logger.info(`Item image cleanup: removed ${removedItemKeys.length} orphaned S3 object(s)`);
+      }
+    } catch (cleanupErr) {
+      // A cleanup failure must not block the save — just log it.
+      logger.error(`Item image S3 cleanup error: ${cleanupErr.message}`);
+    }
+    // ==================== END ITEM IMAGE S3 CLEANUP ====================
 
     const tax = taxPercent !== undefined ? parseFloat(taxPercent) : (existing.taxPercent || 0);
     const discount = discountPercent !== undefined ? parseFloat(discountPercent) : (existing.discountPercent || 0);
@@ -1334,43 +1375,52 @@ const PRESIGN_MAX_BYTES = 15 * 1024 * 1024;
  
 exports.presignItemImageUpload = async (req, res) => {
   try {
-    const { contentType, fileName = '', itemIndex, size } = req.body || {};
-
+    const { contentType, fileName = '', itemIndex, size, type = 'item' } = req.body || {};
+ 
     if (!contentType || !PRESIGN_ALLOWED_MIME.has(contentType)) {
       return res.status(400).json({
         success: false,
         message: `Unsupported content type. Allowed: ${[...PRESIGN_ALLOWED_MIME].join(', ')}`,
       });
     }
-
+ 
     if (size != null && (typeof size !== 'number' || size > PRESIGN_MAX_BYTES)) {
       return res.status(400).json({
         success: false,
         message: `File too large. Max ${Math.round(PRESIGN_MAX_BYTES / 1024 / 1024)}MB`,
       });
     }
-
-    // Build a safe, unique key. Mirror the existing folder convention.
+ 
     const ext = (contentType.split('/')[1] || 'jpg').replace(/[^a-z0-9]/gi, '') || 'jpg';
-    const safeIdx = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex + 1 : 'x';
     const unique = `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    const key = `quotations/items/item_${safeIdx}/${unique}.${ext}`;
-
+ 
+    // Build the key prefix based on type.
+    let prefix;
+    if (type === 'terms') {
+      prefix = 'quotations/terms';
+    } else {
+      const safeIdx = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex + 1 : 'x';
+      prefix = `quotations/items/item_${safeIdx}`;
+    }
+    const key = `${prefix}/${unique}.${ext}`;
+ 
     const command = new PutObjectCommand({
       Bucket: S3_BUCKET_NAME,
       Key: key,
       ContentType: contentType,
     });
-
-    const expiresIn = 300; 
+ 
+    const expiresIn = 300;
+    // Use the checksum-free presign client (requestChecksumCalculation: "WHEN_REQUIRED")
     const uploadUrl = await getSignedUrl(presignS3Client, command, { expiresIn });
-
+ 
     return res.status(200).json({ success: true, uploadUrl, key, expiresIn });
   } catch (err) {
     logger.error(`Presign image upload error: ${err.message}`);
     return res.status(500).json({ success: false, message: 'Failed to create upload URL', error: err.message });
   }
 };
+ 
 
 exports.updateQueryDate = async (req, res) => {
   try {

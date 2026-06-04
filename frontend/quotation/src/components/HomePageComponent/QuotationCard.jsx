@@ -5,15 +5,15 @@ import { StatusBadge, RejectionNote, ActionBtn } from '../SharedComponents';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../../utils/formatters';
 import { DELETABLE } from '../../utils/constants';
 
-const QuotationCard = React.memo(({ 
-  quotation, 
-  selectedCurrency, 
-  onView, 
-  onFollowUp, 
-  onDownload, 
-  onAward, 
-  onDelete, 
-  isExporting 
+const QuotationCard = React.memo(({
+  quotation,
+  selectedCurrency,
+  onView,
+  onFollowUp,
+  onDownload,
+  onAward,
+  onDelete,
+  isExporting
 }) => {
   const expired = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
@@ -21,107 +21,96 @@ const QuotationCard = React.memo(({
   const canAward = quotation.status === 'approved';
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
 
+  const customerName = quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A';
+
+  const metaLabel = { fontSize: '0.58rem', fontWeight: 600, color: '#9aa0a4', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 1 };
+  const metaValue = { fontSize: '0.72rem', color: '#646a6e', fontWeight: 500 };
+
   return (
     <div style={{
-      background: 'white',
+      background: '#ffffff',
       borderRadius: '12px',
-      padding: '1rem',
-      marginBottom: '0.75rem',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-      border: '1px solid #f1f5f9',
-      transition: 'transform 0.2s, box-shadow 0.2s',
+      padding: '0.85rem 0.9rem',
+      border: '1px solid #e8eaec',
+      boxShadow: '0 1px 2px rgba(20,22,24,0.04), 0 6px 18px -14px rgba(20,22,24,0.10)',
+      transition: 'transform 0.18s ease, box-shadow 0.18s ease',
       cursor: 'pointer'
     }}
     onMouseEnter={(e) => {
-      e.currentTarget.style.transform = 'translateY(-2px)';
-      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+      e.currentTarget.style.transform = 'translateY(-1px)';
+      e.currentTarget.style.boxShadow = '0 1px 2px rgba(20,22,24,0.04), 0 12px 26px -16px rgba(20,22,24,0.16)';
     }}
     onMouseLeave={(e) => {
       e.currentTarget.style.transform = 'translateY(0)';
-      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+      e.currentTarget.style.boxShadow = '0 1px 2px rgba(20,22,24,0.04), 0 6px 18px -14px rgba(20,22,24,0.10)';
     }}
     >
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.25rem' }}>
-            <span style={{ fontWeight: 700, color: '#0f172a', fontFamily: 'monospace', fontSize: '0.85rem' }}>
-              {quotation.quotationNumber || '—'}
-            </span>
-            <StatusBadge status={quotation.status} />
-            {expired && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#dc2626', background: '#fef2f2', padding: '2px 6px', borderRadius: 999 }}>Expired</span>}
-            {expiring && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#d97706', background: '#fffbeb', padding: '2px 6px', borderRadius: 999 }}>Expiring Soon</span>}
-          </div>
+      {/* Header: quote # + status + flags, total on right */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.6rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{ fontWeight: 600, color: '#1b1d1e', fontFamily: "'Inter', monospace", fontSize: '0.76rem' }}>
+            {quotation.quotationNumber || '—'}
+          </span>
+          <StatusBadge status={quotation.status} />
+          {expired && <span style={{ fontSize: '0.56rem', fontWeight: 600, color: '#c1352b', background: '#fdeceb', padding: '1px 5px', borderRadius: 999, border: '1px solid #f8d6d2' }}>Expired</span>}
+          {expiring && <span style={{ fontSize: '0.56rem', fontWeight: 600, color: '#b45309', background: '#fff7e6', padding: '1px 5px', borderRadius: 999, border: '1px solid #fde9c8' }}>Expiring</span>}
         </div>
-        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0f172a' }}>
+        <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#1b1d1e', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
           {fmtCurrency(quotation.total, selectedCurrency)}
         </div>
       </div>
 
-      {/* Customer Info */}
-      <div style={{ marginBottom: '0.5rem' }}>
-        <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>
-          {quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}
+      {/* Customer + project */}
+      <div style={{ marginBottom: '0.65rem' }}>
+        <div style={{ fontWeight: 600, color: '#1b1d1e', fontSize: '0.875rem', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {customerName}
         </div>
+        {quotation.projectName && (
+          <div style={{ fontSize: '0.76rem', color: '#646a6e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {quotation.projectName}
+          </div>
+        )}
         {quotation.contact && (
-          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 2 }}>{quotation.contact}</div>
+          <div style={{ fontSize: '0.7rem', color: '#9aa0a4', marginTop: 2 }}>{quotation.contact}</div>
         )}
         <RejectionNote quotation={quotation} />
       </div>
 
-      {/* Project Name */}
-      {quotation.projectName && (
-        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem' }}>
-          📋 {quotation.projectName}
+      {/* Dates — labeled, wrap on small widths */}
+      <div style={{ display: 'flex', gap: '1.1rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+        <div>
+          <div style={metaLabel}>Submitted</div>
+          <div style={metaValue}>{fmtDate(quotation.date)}</div>
         </div>
-      )}
-
-      {/* Dates */}
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.7rem', color: '#64748b', flexWrap: 'wrap' }}>
+        <div>
+          <div style={metaLabel}>Expiry</div>
+          <div style={{ ...metaValue, color: expired ? '#c1352b' : expiring ? '#b45309' : '#646a6e', fontWeight: expired || expiring ? 600 : 500 }}>
+            {fmtDate(quotation.expiryDate)}
+          </div>
+        </div>
         {quotation.queryDate && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-            <Calendar size={12} />
-            <span style={{ color: queryDatePassed ? '#991b1b' : '#92400e', fontWeight: 500 }}>
-              Follow-up: {fmtDate(quotation.queryDate)} {queryDatePassed && '⚠️'}
-            </span>
+          <div>
+            <div style={metaLabel}>Follow-up</div>
+            <div style={{ ...metaValue, display: 'inline-flex', alignItems: 'center', gap: '0.2rem', color: queryDatePassed ? '#c1352b' : '#b45309', fontWeight: 600 }}>
+              <Calendar size={11} /> {fmtDate(quotation.queryDate)} {queryDatePassed && '⚠'}
+            </div>
           </div>
         )}
-        <div>📅 Submitted: {fmtDate(quotation.date)}</div>
-        <div>⏰ Expiry: {fmtDate(quotation.expiryDate)}</div>
       </div>
 
-      {/* Created By */}
-      <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
-        Created by: {quotation.createdBy?.name || '—'}
-      </div>
-
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
-        <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        {/* {!['awarded', 'not_awarded'].includes(quotation.status) && (
-          <ActionBtn 
-            bg={quotation.queryDate ? '#fef3c7' : '#f1f5f9'} 
-            color={quotation.queryDate ? '#92400e' : '#64748b'} 
-            onClick={() => onFollowUp(quotation)} 
-            icon={Calendar} 
-            label="Follow-up" 
-            size="small" 
-          />
-        )} */}
-        {/* <ActionBtn 
-          bg={isExporting ? '#f1f5f9' : '#f0fdf4'} 
-          color={isExporting ? '#94a3b8' : '#166534'} 
-          onClick={() => !isExporting && onDownload(quotation)} 
-          disabled={isExporting} 
-          icon={isExporting ? Loader : Download} 
-          label={isExporting ? '…' : 'PDF'} 
-          size="small" 
-        /> */}
+      {/* Actions + created-by */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', borderTop: '1px solid #f0f1f3', paddingTop: '0.65rem' }}>
+        <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         {canAward && (
-          <ActionBtn bg="#d1fae5" color="#065f46" onClick={() => onAward(quotation)} icon={Award} label="Outcome" size="small" />
+          <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onAward(quotation)} icon={Award} label="Outcome" size="small" />
         )}
         {canDelete && (
-          <ActionBtn bg="#fff1f2" color="#e11d48" onClick={() => onDelete(quotation)} icon={Trash2} label="Del" size="small" />
+          <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onDelete(quotation)} icon={Trash2} label="Del" size="small" />
+        )}
+        {quotation.createdBy?.name && (
+          <span style={{ marginLeft: 'auto', fontSize: '0.66rem', color: '#9aa0a4', whiteSpace: 'nowrap' }}>
+            {quotation.createdBy.name}
+          </span>
         )}
       </div>
     </div>

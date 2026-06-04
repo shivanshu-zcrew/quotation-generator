@@ -75,3 +75,22 @@ export async function uploadItemImage(file, itemIndex) {
 
    return key;
 }
+
+export async function uploadTermsImage(file) {
+    const { blob, contentType } = await compressImage(file);
+  
+    const presignRes = await quotationAPI.presignItemImage(
+      contentType, file.name, undefined, blob.size, 'terms'
+    );
+    const { uploadUrl, key } = presignRes.data || {};
+    if (!uploadUrl || !key) throw new Error('Failed to get upload URL');
+  
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: blob,
+    });
+    if (!putRes.ok) throw new Error(`S3 upload failed (${putRes.status})`);
+  
+    return key;
+  }

@@ -14,12 +14,12 @@ export const newSection = () => ({
 // ============================================================
 export const sectionsToHTML = (sections) => {
   const safeSections = Array.isArray(sections) ? sections : [];
-  
+
   return safeSections.map((sec, idx) => {
     if (!sec) return "";
 
     let html = `<div style="margin-bottom:28px;">`;
-    
+
     if (sec.heading?.trim()) {
       html += `<h4 style="font-weight:700;color:#0f172a;margin-bottom:12px;">${idx + 1}. ${sec.heading}</h4>`;
     }
@@ -53,14 +53,14 @@ export const htmlToSections = (rawText = "", existingImages = []) => {
 };
 
 // ============================================================
-// TermsEditor with Image Upload - FIXED VERSION
+// TermsEditor with Image Upload — S3 direct upload version
 // ============================================================
-export default function TermsEditor({ 
-  sections = [], 
+export default function TermsEditor({
+  sections = [],
   onChange,
   termsImages = [],
   onTermsImagesUpload,
-  onRemoveTermsImage 
+  onRemoveTermsImage
 }) {
   const safeSections = Array.isArray(sections) && sections.length > 0 ? sections : [newSection()];
 
@@ -77,39 +77,23 @@ export default function TermsEditor({
     onChange(prev => prev.filter(s => s?.id !== id));
   };
 
-  // ✅ Handle image upload
+  // Pass raw File objects through to the parent handler, which compresses and
+  // uploads them directly to S3. (Previously this FileReader-ed them into base64,
+  // which bypassed the S3 upload and bloated the payload.)
   const handleImageUpload = (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
-    
+
     const validFiles = files.filter(file => file.type.startsWith('image/'));
-    
-    const processedImages = [];
-    
-    validFiles.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const newImage = {
-          id: `img-${Date.now()}-${Math.random()}`,
-          url: reader.result,
-          base64: reader.result,
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-          isTemp: true,
-          uploadedAt: new Date().toISOString()
-        };
-        processedImages.push(newImage);
-        
-        if (processedImages.length === validFiles.length) {
-          if (onTermsImagesUpload) {
-            onTermsImagesUpload(processedImages);
-          }
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    
+    if (validFiles.length === 0) {
+      e.target.value = "";
+      return;
+    }
+
+    if (onTermsImagesUpload) {
+      onTermsImagesUpload(validFiles);
+    }
+
     e.target.value = "";
   };
 
@@ -123,32 +107,6 @@ export default function TermsEditor({
           padding: "1.5rem",
           marginBottom: "1rem"
         }}>
-          {/* <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem", alignItems: "center" }}>
-            <span style={{ fontWeight: 700, color: "#6366f1" }}>Section {idx + 1}</span>
-            {safeSections.length > 1 && (
-              <button onClick={() => deleteSection(sec.id)} style={{ color: "#ef4444", padding: "4px", cursor: "pointer", background: "none", border: "none" }}>
-                <Trash2 size={18} />
-              </button>
-            )}
-          </div> */}
-
-          {/* Heading */}
-          {/* <input
-            value={sec.heading || ""}
-            onChange={(e) => updateSection(sec.id, { heading: e.target.value })}
-            placeholder="Section Heading (optional)"
-            style={{
-              width: "100%",
-              fontSize: "1.1rem",
-              fontWeight: 700,
-              padding: "0.6rem 0",
-              border: "none",
-              borderBottom: "2px solid #e2e8f0",
-              marginBottom: "1rem",
-              outline: "none"
-            }}
-          /> */}
-
           {/* Main Textarea */}
           <textarea
             value={sec.content || ""}
@@ -171,7 +129,7 @@ export default function TermsEditor({
 
           {/* Add Image Button */}
           <div style={{ marginTop: "1rem" }}>
-            <label 
+            <label
               htmlFor="terms-image-upload"
               style={{
                 display: "inline-flex",
@@ -212,11 +170,25 @@ export default function TermsEditor({
                   border: "1px solid #e2e8f0",
                   background: "#f8fafc"
                 }}>
-                  <img 
-                    src={img.url || img.base64} 
+                  <img
+                    src={img.url || img.base64}
                     alt={img.fileName || "terms"}
-                    style={{ width: "100%", height: "80px", objectFit: "cover", display: "block" }} 
+                    style={{ width: "100%", height: "80px", objectFit: "cover", display: "block", opacity: img.uploading ? 0.5 : 1 }}
                   />
+                  {img.uploading && (
+                    <div style={{
+                      position: "absolute",
+                      inset: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "0.65rem",
+                      color: "#475569",
+                      background: "rgba(255,255,255,0.4)"
+                    }}>
+                      Uploading…
+                    </div>
+                  )}
                   <button
                     onClick={() => onRemoveTermsImage && onRemoveTermsImage(img.id)}
                     style={{
@@ -257,40 +229,18 @@ export default function TermsEditor({
           )}
         </div>
       ))}
-
-      {/* <button 
-        onClick={addSection}
-        style={{
-          width: "100%",
-          padding: "1rem",
-          background: "#eff1ff",
-          color: "#6366f1",
-          border: "2px dashed #c7d2fe",
-          borderRadius: "12px",
-          fontWeight: 600,
-          cursor: "pointer",
-          marginTop: "0.5rem"
-        }}
-      >
-        <Plus size={18} /> Add New Section
-      </button> */}
     </div>
   );
 }
 
 // ============================================================
-// TermsViewer
-// ============================================================
-// ============================================================
-// TermsViewer - Updated to display images correctly
+// TermsViewer - displays images correctly
 // ============================================================
 export function TermsViewer({ sections = [], termsImages = [] }) {
   const safeSections = Array.isArray(sections) ? sections : [];
-  
-  // Combine images from sections and direct termsImages prop
+
   let allImages = [...termsImages];
-  
-  // Also extract images from sections if any
+
   safeSections.forEach(sec => {
     if (sec.images && Array.isArray(sec.images)) {
       sec.images.forEach(img => {
@@ -301,19 +251,19 @@ export function TermsViewer({ sections = [], termsImages = [] }) {
     }
   });
 
-  const hasTextContent = safeSections.some(sec => 
+  const hasTextContent = safeSections.some(sec =>
     (sec.heading?.trim()) || (sec.content?.trim())
   );
-  
+
   const hasImages = allImages.length > 0;
 
   if (!hasTextContent && !hasImages) {
     return (
-      <div style={{ 
-        padding: "3rem", 
-        background: "#f8fafc", 
-        borderRadius: "12px", 
-        textAlign: "center", 
+      <div style={{
+        padding: "3rem",
+        background: "#f8fafc",
+        borderRadius: "12px",
+        textAlign: "center",
         color: "#94a3b8",
         border: "1px dashed #e2e8f0"
       }}>
@@ -335,9 +285,9 @@ export function TermsViewer({ sections = [], termsImages = [] }) {
       {safeSections.map((sec, idx) => (
         <div key={sec.id} style={{ marginBottom: "2.8rem" }}>
           {sec.heading?.trim() && (
-            <h4 style={{ 
-              fontWeight: 700, 
-              color: "#0f172a", 
+            <h4 style={{
+              fontWeight: 700,
+              color: "#0f172a",
               marginBottom: "1.25rem",
               fontSize: "1.1rem"
             }}>
@@ -357,12 +307,11 @@ export function TermsViewer({ sections = [], termsImages = [] }) {
           )}
         </div>
       ))}
-      
-      {/* Display images at the bottom */}
+
       {allImages.length > 0 && (
         <div style={{ marginTop: "2rem", display: "flex", flexWrap: "wrap", gap: "16px" }}>
           {allImages.map((img, idx) => (
-            <img 
+            <img
               key={img.id || idx}
               src={img.url || img.base64}
               alt={img.fileName || `terms-${idx}`}

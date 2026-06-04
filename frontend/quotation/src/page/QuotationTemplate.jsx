@@ -23,6 +23,7 @@ import ItemModal from "../components/AddItemModal";
 // ============================================================
 import { quotationAPI } from '../services/api';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from '../hooks/useS3Image';
+import { uploadItemImage, uploadTermsImage } from "../utils/imageUpload";
 
 // ============================================================
 // LOADING COMPONENTS
@@ -151,6 +152,8 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `${prefix}-${timestamp}-${random}`;
   });
+  const [uploadingImages, setUploadingImages] = useState({});
+  const [keyUrlMap, setKeyUrlMap] = useState({}); // { s3Key: signedUrl } for displaying uploaded images
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
   const [quotationItems, setQuotationItems] = useState([]);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
@@ -210,11 +213,82 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
   const hideSnack = useCallback(() => setSnackbar(SNACK_HIDE), []);
   
-  // Terms images handlers (now for S3 keys)
-  const handleTermsImagesUpload = useCallback((newImages) => {
-    // newImages should contain { s3Key, fileName, uploadedAt, storageProvider }
-    setTermsImages(prev => [...prev, ...newImages]);
-  }, []);
+  // Terms images upload directly to S3 (matches edit flow). The shared
+  // TermsEditor passes raw File objects; we compress, upload, and store the
+  // returned s3Key + a signed URL for display.
+  const handleTermsImagesUpload = useCallback(async (files) => {
+    if (!files || files.length === 0) return;
+
+    const remainingSlots = 10 - termsImages.length;
+    if (remainingSlots <= 0) {
+      showSnack('Maximum 10 terms images allowed', 'error');
+      return;
+    }
+
+    const filesToProcess = files.slice(0, remainingSlots);
+    if (files.length > remainingSlots) {
+      showSnack(`Only ${remainingSlots} more image(s) allowed`, 'error');
+    }
+
+    for (const file of filesToProcess) {
+      // Already-processed objects (re-passed) — keep as-is.
+      if (!(file instanceof File)) {
+        if (file.url || file.base64 || file.s3Key) {
+          setTermsImages(prev => [...prev, file]);
+        }
+        continue;
+      }
+
+      if (!file.type.startsWith('image/')) {
+        showSnack(`"${file.name}" is not a supported image type.`, 'error');
+        continue;
+      }
+
+      const tempId = `terms-img-${Date.now()}-${Math.random()}`;
+      const previewUrl = URL.createObjectURL(file);
+
+      setTermsImages(prev => [...prev, {
+        id: tempId,
+        url: previewUrl,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        isTemp: true,
+        uploading: true,
+        storageProvider: 's3',
+        uploadedAt: new Date().toISOString(),
+      }]);
+
+      try {
+        const key = await uploadTermsImage(file);
+        const signedUrl = await convertS3KeyToUrl(key);
+
+        setTermsImages(prev => prev.map(img =>
+          img.id === tempId
+            ? {
+                id: tempId,
+                url: signedUrl || previewUrl,
+                s3Key: key,
+                fileName: file.name,
+                fileType: file.type,
+                fileSize: file.size,
+                isTemp: false,
+                uploading: false,
+                storageProvider: 's3',
+                uploadedAt: new Date().toISOString(),
+              }
+            : img
+        ));
+        // Keep the blob alive if the signed URL didn't resolve, so the preview
+        // still shows (the s3Key persists for a fresh URL on reload).
+        if (signedUrl && previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (e) {} }
+      } catch (err) {
+        setTermsImages(prev => prev.filter(img => img.id !== tempId));
+        if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (e) {} }
+        showSnack(`Failed to upload "${file.name}": ${err.message}`, 'error');
+      }
+    }
+  }, [termsImages.length, showSnack]);
   
   const handleRemoveTermsImage = useCallback((imageId) => {
     setTermsImages(prev => prev.filter(img => img.id !== imageId));
@@ -233,12 +307,31 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
         // S3 keys for images
-        imageS3Keys: item.imageS3Keys || [],
-        newImages: []  // Will store base64 for new uploads
+        imageS3Keys: item.imageS3Keys || []
       });
     });
     setQuotationItems(Array.from(itemsMap.values()));
   }, [selectedItems, quotationItems.length]);
+
+  // Convert uploaded S3 keys into signed URLs so they can be shown as thumbnails.
+  // Runs whenever items change; only fetches keys we don't already have a URL for.
+  useEffect(() => {
+    const allKeys = [];
+    quotationItems.forEach(item => {
+      (item.imageS3Keys || []).forEach(k => {
+        if (k && !keyUrlMap[k]) allKeys.push(k);
+      });
+    });
+    if (!allKeys.length) return;
+
+    let cancelled = false;
+    (async () => {
+      const urls = await convertBatchS3KeysToUrls(allKeys);
+      if (cancelled) return;
+      setKeyUrlMap(prev => ({ ...prev, ...urls }));
+    })();
+    return () => { cancelled = true; };
+  }, [quotationItems]);
   
   // Add this useEffect to auto-populate customer TRN when customer changes
   useEffect(() => {
@@ -320,6 +413,19 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   );
 
   const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
+
+  // Images to display per item: uploaded keys (as signed URLs) + any live previews
+  // still uploading. This is what keeps an image visible after its upload finishes.
+  const displayImages = useMemo(() => {
+    const map = {};
+    quotationItems.forEach(item => {
+      const keyUrls = (item.imageS3Keys || []).map(k => keyUrlMap[k]).filter(Boolean);
+      const previews = itemImages[item.id] || [];
+      map[item.id] = [...keyUrls, ...previews];
+    });
+    return map;
+  }, [quotationItems, keyUrlMap, itemImages]);
+
   const companyName = useMemo(() => getCompanyName(selectedCompany, companies), [selectedCompany, companies]);
   const hasAnyError = Object.keys(headerErrors).length > 0 || Object.values(fieldErrors).some(e => e && Object.keys(e).length > 0);
 
@@ -327,7 +433,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const totalImageCount = useMemo(() => {
     let count = 0;
     quotationItems.forEach(item => {
-      count += (item.imageS3Keys?.length || 0) + (item.newImages?.length || 0);
+      count += (item.imageS3Keys?.length || 0);
     });
     return count;
   }, [quotationItems]);
@@ -430,65 +536,124 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     ));
   }, []);
   
-  const handleImageUpload = useCallback((e, itemId) => {
+  const handleImageUpload = useCallback(async (e, itemId) => {
     const files = Array.from(e.target.files || []);
+    e.target.value = ''; // reset input so same file can be re-picked
     if (!files.length) return;
-    
-    const currentImages = itemImages[itemId] || [];
-    const currentS3Keys = quotationItems.find(i => i.id === itemId)?.imageS3Keys?.length || 0;
-    const totalCurrent = currentImages.length + currentS3Keys;
-    const slots = MAX_IMAGES_PER_ITEM - totalCurrent;
-    
+   
+    const itemIndex = quotationItems.findIndex((i) => i.id === itemId);
+   
+    // Count current images (already-uploaded keys + previews in flight).
+    const item = quotationItems.find((i) => i.id === itemId);
+    const currentCount =
+      (item?.imageS3Keys?.length || 0) + (itemImages[itemId]?.length || 0);
+    const slots = MAX_IMAGES_PER_ITEM - currentCount;
+   
     if (slots <= 0) {
       showSnack(`Max ${MAX_IMAGES_PER_ITEM} images per item.`);
       return;
     }
+   
     const toProcess = files.slice(0, slots);
-    if (files.length > slots) showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
-    
-    let processed = 0;
-    toProcess.forEach(file => {
+    if (files.length > slots) {
+      showSnack(`Only ${slots} slot(s) left — first ${slots} of ${files.length} will be added.`);
+    }
+   
+    // Validate types/sizes up front (pre-compression size check).
+    const valid = [];
+    for (const file of toProcess) {
       if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
         showSnack(`"${file.name}" is not a supported type.`);
-        return;
+        continue;
       }
       if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
         showSnack(`"${file.name}" exceeds ${MAX_IMAGE_SIZE_MB}MB.`);
-        return;
+        continue;
       }
-      
-      const reader = new FileReader();
-      reader.onload = () => {
-        processed++;
-        setItemImages(prev => ({ ...prev, [itemId]: [...(prev[itemId] || []), reader.result] }));
-        setQuotationItems(prev => prev.map(item => item.id === itemId ? { ...item, newImages: [...(item.newImages || []), reader.result] } : item));
-      };
-      reader.readAsDataURL(file);
+      valid.push(file);
+    }
+    if (!valid.length) return;
+   
+    setUploadingImages((prev) => ({ ...prev, [itemId]: true }));
+   
+    // Upload each valid file directly to S3. Show a local preview immediately,
+    // then attach the returned key. If an upload fails, drop its preview.
+    for (const file of valid) {
+      const previewUrl = URL.createObjectURL(file);
+   
+      // Show preview right away.
+      setItemImages((prev) => ({
+        ...prev,
+        [itemId]: [...(prev[itemId] || []), previewUrl],
+      }));
+   
+      try {
+        const key = await uploadItemImage(file, itemIndex >= 0 ? itemIndex : undefined);
+   
+        // Attach the S3 key to the item; remove the local preview (the key now
+        // represents this image and will render via signed URL on reload).
+        setQuotationItems((prev) =>
+          prev.map((it) =>
+            it.id === itemId
+              ? { ...it, imageS3Keys: [...(it.imageS3Keys || []), key] }
+              : it
+          )
+        );
+        setItemImages((prev) => ({
+          ...prev,
+          [itemId]: (prev[itemId] || []).filter((u) => u !== previewUrl),
+        }));
+        URL.revokeObjectURL(previewUrl);
+      } catch (err) {
+        // Upload failed — remove the preview and tell the user.
+        setItemImages((prev) => ({
+          ...prev,
+          [itemId]: (prev[itemId] || []).filter((u) => u !== previewUrl),
+        }));
+        URL.revokeObjectURL(previewUrl);
+        showSnack(`Failed to upload "${file.name}": ${err.message}`, 'error');
+      }
+    }
+   
+    setUploadingImages((prev) => {
+      const { [itemId]: _, ...rest } = prev;
+      return rest;
     });
-    
     setEditingImageId(null);
-    e.target.value = "";
-  }, [itemImages, quotationItems, showSnack]);
+  }, [quotationItems, itemImages, showSnack]);
   
   const handleRemoveImage = useCallback((itemId, imageIndex) => {
     setQuotationItems(prev => prev.map(item => {
       if (item.id !== itemId) return item;
-      const s3KeyCount = item.imageS3Keys?.length || 0;
-      const isExisting = imageIndex < s3KeyCount;
-      
-      if (isExisting) {
-        return { ...item, imageS3Keys: item.imageS3Keys.filter((_, idx) => idx !== imageIndex) };
+      const keyCount = item.imageS3Keys?.length || 0;
+      if (imageIndex < keyCount) {
+        // Remove an uploaded S3 key
+        return { ...item, imageS3Keys: item.imageS3Keys.filter((_, i) => i !== imageIndex) };
       }
-      const newImageIndex = imageIndex - s3KeyCount;
-      return { ...item, newImages: item.newImages.filter((_, idx) => idx !== newImageIndex) };
+      return item;
     }));
-    setItemImages(prev => ({ ...prev, [itemId]: (prev[itemId] || []).filter((_, idx) => idx !== imageIndex) }));
-  }, []);
+    // Also clear any matching local preview (preview indices come after keys)
+    setItemImages(prev => {
+      const keyCount = (quotationItems.find(i => i.id === itemId)?.imageS3Keys?.length || 0);
+      const previewIndex = imageIndex - keyCount;
+      if (previewIndex < 0) return prev;
+      return {
+        ...prev,
+        [itemId]: (prev[itemId] || []).filter((_, i) => i !== previewIndex),
+      };
+    });
+  }, [quotationItems]);
   
   const handleSubmit = useCallback(async () => {
     if (!validateAll()) return;
     if (!selectedCompany) {
       showSnack("Please select a company", "error");
+      return;
+    }
+
+    // Don't allow submit while images are still uploading.
+    if (Object.keys(uploadingImages).length > 0) {
+      showSnack("Please wait — images are still uploading.", "error");
       return;
     }
   
@@ -528,18 +693,8 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unitPrice) || 0,
-        // Send S3 keys for existing images, base64 for new ones
-        imageS3Keys: item.imageS3Keys || [],
-        newImages: item.newImages || []
+        imageS3Keys: item.imageS3Keys || [],   // keys only — no base64
       }));
-  
-      const quotationImages = {};
-      quotationItems.forEach((item, index) => {
-        const allImages = [...(item.imageS3Keys || []), ...(item.newImages || [])];
-        if (allImages.length > 0) {
-          quotationImages[index] = allImages;
-        }
-      });
   
       const quotation = {
         quotationNumber: quotationNumber, 
@@ -581,7 +736,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         termsImages: newBase64Images,
         existingTermsImages: existingTermsImages,
         items: formattedItems,
-        quotationImages: quotationImages,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
       };
@@ -603,7 +757,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       setSaveProgress(0);
       setSaveStep("");
     }
-  }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency]);
+  }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency, uploadingImages]);
 
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
@@ -667,10 +821,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         
         const s3Images = await Promise.all(s3ImagePromises);
         
-        // New images are already base64
-        const newImagesBase64 = (item.newImages || []).filter(img => img && typeof img === 'string');
-        
-        const allImages = [...s3Images.filter(Boolean), ...newImagesBase64];
+        const allImages = [...s3Images.filter(Boolean)];
         
         return {
           ...item,
@@ -813,64 +964,101 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     }
   }, [validateAll, quotationData, quotationItems, quotationNumber, selectedCurrency, selectedCompany, companies, customer, companyName, tcSections, showSnack, totalImageCount, companyDetails]);
   
-  const handleDocumentUpload = useCallback(async (files, descriptions) => {
-    try {
-      setIsSaving(true);
-      for (const file of files) {
-        const validation = validateFile(file);
-        if (!validation.valid) { 
-          showSnack(validation.error, 'error'); 
-          return; 
-        }
+ const handleDocumentUpload = useCallback(async (files, descriptions) => {
+  try {
+    const MAX_INTERNAL_DOCS = 5;
+    const incoming = Array.from(files || []);
+    if (!incoming.length) return;
+
+    // Filter ZIP files
+    const validFiles = incoming.filter(file => {
+      const isZip = file.name.toLowerCase().endsWith('.zip') || file.type === 'application/zip';
+      if (isZip) {
+        showSnack('ZIP files are not allowed', 'error');
+        return false;
       }
-      
-      const base64Promises = files.map(file => new Promise((resolve) => {
+      return true;
+    });
+
+    if (!validFiles.length) return;
+
+    const currentCount = uploadedDocuments.length;
+    const slots = MAX_INTERNAL_DOCS - currentCount;
+    if (slots <= 0) {
+      showSnack(`Maximum ${MAX_INTERNAL_DOCS} documents allowed`, 'error');
+      return;
+    }
+
+    const toProcess = validFiles.slice(0, slots);
+    
+    // Convert to base64 (same as view/edit)
+    const base64Promises = toProcess.map(file => {
+      return new Promise((resolve) => {
         const reader = new FileReader();
-        reader.onload = () => resolve({ 
-          fileData: reader.result, 
-          name: file.name, 
-          type: file.type, 
-          size: file.size 
+        reader.onload = () => resolve({
+          fileData: reader.result,
+          name: file.name,
+          type: file.type,
+          size: file.size,
         });
         reader.readAsDataURL(file);
-      }));
+      });
+    });
 
-      const base64Files = await Promise.all(base64Promises);
-      const newDocs = base64Files.map((file, index) => ({
-        id: `doc-${Date.now()}-${index}-${Math.random()}`,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        fileData: file.fileData,
-        description: descriptions[index] || '',
-        uploadedAt: new Date().toISOString(),
-        isTemp: true,
-        storageProvider: 's3'
-      }));
+    const base64Files = await Promise.all(base64Promises);
+    
+    // ✅ IMPORTANT: Use SAME structure as view/edit
+    const newDocs = base64Files.map((file, index) => ({
+      id: `temp-${Date.now()}-${index}`,  // Keep as id for temp
+      _id: `temp-${Date.now()}-${index}`,  // Add _id for compatibility
+      fileName: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+      fileData: file.fileData,  // Base64 data
+      description: (descriptions && descriptions[index]) || '',
+      uploadedAt: new Date().toISOString(),
+      isTemp: true
+    }));
 
-      setUploadedDocuments(prev => [...prev, ...newDocs]);
-      showSnack(`${files.length} document(s) ready`, 'success');
-    } catch (error) {
-      console.error('Error processing documents:', error);
-      showSnack('Failed to process documents', 'error');
-    } finally {
-      setIsSaving(false);
-    }
-  }, [showSnack]);
+    setUploadedDocuments(prev => [...prev, ...newDocs]);
+    showSnack(`${newDocs.length} document(s) added`, 'success');
+    
+  } catch (error) {
+    console.error('Upload error:', error);
+    showSnack('Failed to process documents', 'error');
+  }
+}, [uploadedDocuments.length, showSnack]);
 
-  const handleDocumentDelete = useCallback((docId) => {
-    setUploadedDocuments(prev => prev.filter(doc => doc.id !== docId));
-  }, []);
 
-  const handleDocumentDownload = useCallback((docId) => {
-    const doc = uploadedDocuments.find(d => d.id === docId);
-    if (doc?.fileData) {
-      const link = document.createElement('a');
-      link.href = doc.fileData;
-      link.download = doc.fileName;
-      link.click();
-    }
-  }, [uploadedDocuments]);
+const handleDocumentDelete = useCallback((docId) => {
+  const isTemp = uploadedDocuments.some(d => 
+    (d.id === docId || d._id === docId) && d.isTemp
+  );
+  
+  if (isTemp) {
+    setUploadedDocuments(prev => prev.filter(d => 
+      d.id !== docId && d._id !== docId
+    ));
+    showSnack('Document removed', 'success');
+  } else {
+    
+    setUploadedDocuments(prev => prev.filter(d => 
+      d.id !== docId && d._id !== docId
+    ));
+    showSnack('Document removed', 'success');
+  }
+}, [uploadedDocuments, showSnack]);
+
+const handleDocumentDownload = useCallback((docId) => {
+  const doc = uploadedDocuments.find(d => 
+    d._id === docId || d.id === docId
+  );
+  if (doc) {
+    window.open(doc.fileData || doc.fileUrl, '_blank');
+  } else {
+    showSnack("Document not found", "error");
+  }
+}, [uploadedDocuments, showSnack]);
 
   return (
     <div style={styles.container}>
@@ -900,9 +1088,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           <div style={styles.headerActions}>
             <ActionButton onClick={() => setIsEditing(!isEditing)} disabled={false} 
               bgColor={isEditing ? "#ef4444" : "#f59e0b"} icon={isEditing ? <Save size={18} /> : <Edit2 size={18} />} label={isEditing ? "Done" : "Edit"} />
-            {/* <ActionButton onClick={handleExportPDF} disabled={isExporting || hasAnyError} 
-              bgColor="#0369a1" icon={isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={18} />} 
-              label={isExporting ? "Generating…" : "Download PDF"} loading={isExporting} /> */}
             <ActionButton onClick={onBack} bgColor="#6b7280" icon={<ArrowLeft size={18} />} label="Back" />
           </div>
         </div>
@@ -923,7 +1108,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           onRemoveNewImage={handleRemoveImage}
           editingImgId={editingImageId}
           onToggleImgEdit={(id) => setEditingImageId(editingImageId === id ? null : id)}
-          newImages={itemImages}
+          newImages={displayImages}
           subtotal={subtotal}
           taxAmount={taxAmount}
           discountAmount={discountAmount}

@@ -1,4 +1,4 @@
-// CustomerModal.jsx - Updated to use selected company when available
+// CustomerModal.jsx - Updated to show errors across all tabs
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { X, Plus, Trash2, Edit2, MapPin, Building2, ChevronDown, Mail, Phone, User, CreditCard, Globe, Briefcase, Users, CheckCircle, AlertCircle, Layers } from 'lucide-react';
@@ -165,6 +165,97 @@ const PhoneInput = ({ value, onChange, placeholder, isMobile }) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
+// Error Summary Component
+// ─────────────────────────────────────────────────────────────────────────
+const ErrorSummary = ({ errors, onTabChange, setActiveTab }) => {
+  const isMobile = useMediaQuery('(max-width: 640px)');
+  
+  if (Object.keys(errors).length === 0) return null;
+  
+  const errorMessages = [];
+  const tabErrors = {
+    basic: [],
+    tax: [],
+    company: []
+  };
+  
+  // Map fields to tabs and create readable messages
+  const fieldToTab = {
+    name: { tab: 'basic', message: 'Customer Name is required' },
+    email: { tab: 'basic', message: 'Valid Email is required' },
+    companyName: { tab: 'basic', message: 'Company Name is required' },
+    taxRegistrationNumber: { tab: 'tax', message: 'TRN is required for VAT registered customers' },
+    company: { tab: 'company', message: 'Please select a company' }
+  };
+  
+  Object.keys(errors).forEach(field => {
+    const mapping = fieldToTab[field];
+    if (mapping) {
+      tabErrors[mapping.tab].push(mapping.message);
+      errorMessages.push({ tab: mapping.tab, message: mapping.message });
+    } else {
+      errorMessages.push({ tab: 'basic', message: errors[field] });
+    }
+  });
+  
+  const getTabId = (tab) => {
+    if (tab === 'basic') return 'basic';
+    if (tab === 'tax') return 'tax';
+    return 'basic';
+  };
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      style={{
+        marginBottom: '1rem',
+        padding: isMobile ? '0.75rem' : '1rem',
+        background: '#fef2f2',
+        border: '1px solid #fecaca',
+        borderRadius: '12px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <AlertCircle size={isMobile ? 16 : 18} color="#dc2626" />
+        <span style={{ fontWeight: '600', color: '#991b1b', fontSize: isMobile ? '0.75rem' : '0.875rem' }}>
+          Please fix the following errors:
+        </span>
+      </div>
+      <ul style={{ margin: 0, paddingLeft: '1.5rem', color: '#b91c1c', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
+        {errorMessages.map((error, idx) => (
+          <li key={idx}>
+            {error.tab ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onTabChange) onTabChange(error.tab);
+                  if (setActiveTab) setActiveTab(error.tab);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#dc2626',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontSize: 'inherit'
+                }}
+              >
+                {error.message}
+              </button>
+            ) : (
+              error.message
+            )}
+          </li>
+        ))}
+      </ul>
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────
 // Customer Modal
 // ─────────────────────────────────────────────────────────────────────────
 const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmitting }) => {
@@ -211,6 +302,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
   const [editingContactIndex, setEditingContactIndex] = useState(null);
   const [activeTab, setActiveTab] = useState('basic');
   const [touched, setTouched] = useState({});
+  const [validationAttempted, setValidationAttempted] = useState(false);
 
   const [contactForm, setContactForm] = useState({
     salutation: '', firstName: '', lastName: '', email: '',
@@ -244,6 +336,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         setSelectedCompanyId(selectedCompany || '');
       }
       setShowCompanyError(false);
+      setValidationAttempted(false);
       
       if (initialData) {
         const mainContact = initialData.contactPersons?.[0] || {};
@@ -333,6 +426,23 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
 
   const handleBlur = (field) => {
     setTouched(prev => ({ ...prev, [field]: true }));
+    // Validate on blur
+    const newErrors = { ...errors };
+    if (field === 'name' && !formData.name?.trim()) {
+      newErrors.name = 'Name required';
+    } else if (field === 'name') {
+      delete newErrors.name;
+    }
+    if (field === 'email') {
+      if (!formData.email?.trim()) {
+        newErrors.email = 'Email required';
+      } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+        newErrors.email = 'Invalid email';
+      } else {
+        delete newErrors.email;
+      }
+    }
+    setErrors(newErrors);
   };
 
   const handlePhoneChange = (phoneWithCode) => {
@@ -389,17 +499,21 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     }
   };
 
+  // Enhanced validation that checks all fields
   const validateForm = () => {
     const newErrors = {};
+    
+    // Basic info validation
     if (!formData.name?.trim()) newErrors.name = 'Name required';
     if (!formData.email?.trim()) newErrors.email = 'Email required';
-    else if (!/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = 'Invalid email';
+    else if (formData.email && !/\S+@\S+\.\S+/.test(formData.email)) newErrors.email = 'Invalid email';
 
+    // Tax validation
     if (isVatRegistered && !formData.taxRegistrationNumber?.trim()) {
       newErrors.taxRegistrationNumber = 'TRN required';
     }
     
-    // ✅ Only validate company selection when 'All Companies' is selected
+    // Company validation
     if (needsCompanySelection && !selectedCompanyId) {
       setShowCompanyError(true);
       newErrors.company = 'Please select a company';
@@ -411,30 +525,56 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    setValidationAttempted(true);
+    
+    // Mark all fields as touched to show inline errors
+    const allFields = ['name', 'email'];
+    const touchedFields = {};
+    allFields.forEach(field => { touchedFields[field] = true; });
+    setTouched(touchedFields);
+    
     if (validateForm()) {
       const submitData = { ...formData };
       
-      // ✅ Determine company ID based on selection
       if (needsCompanySelection) {
-        // Admin selected "All Companies" - must pick a specific company
         if (!selectedCompanyId) {
           setShowCompanyError(true);
           return;
         }
         submitData.companyId = selectedCompanyId;
       } else {
-        // ✅ Use the already selected company ID (specific company)
         submitData.companyId = selectedCompany;
       }
       
       onSubmit(submitData);
+    } else {
+      // Auto-switch to the tab that has the first error
+      if (errors.name || errors.email) {
+        setActiveTab('basic');
+      } else if (errors.taxRegistrationNumber) {
+        setActiveTab('tax');
+      } else if (errors.company) {
+        setActiveTab('basic');
+      }
     }
   };
 
   const getFieldStatus = (fieldName) => {
-    if (touched[fieldName] && errors[fieldName]) return 'error';
-    if (touched[fieldName] && formData[fieldName] && !errors[fieldName]) return 'success';
+    if ((touched[fieldName] || validationAttempted) && errors[fieldName]) return 'error';
+    if ((touched[fieldName] || validationAttempted) && formData[fieldName] && !errors[fieldName]) return 'success';
     return 'default';
+  };
+
+  // Handle tab change with error scroll
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    // Small delay to allow DOM update before scrolling
+    setTimeout(() => {
+      const errorElement = document.querySelector('.error-field');
+      if (errorElement) {
+        errorElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
   };
 
   if (!isOpen) return null;
@@ -482,7 +622,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
             .modal-animate { animation: modalSlideIn 0.3s cubic-bezier(0.34, 1.2, 0.64, 1); }
             .overlay-animate { animation: fadeIn 0.2s ease-out; }
             .tab-animate { animation: slideInUp 0.3s ease-out; }
-            .error-field { border-color: #ef4444 !important; }
+            .error-field { border-color: #ef4444 !important; background-color: #fef2f2 !important; }
             .success-field { border-color: #10b981 !important; }
             * { box-sizing: border-box; }
           `}</style>
@@ -548,6 +688,13 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                   </button>
                 </div>
 
+                {/* ✅ Error Summary - Shows errors from any tab */}
+                <ErrorSummary 
+                  errors={errors} 
+                  onTabChange={handleTabChange}
+                  setActiveTab={setActiveTab}
+                />
+
                 {/* ✅ Company Selector - Show ONLY when 'All Companies' is selected */}
                 {needsCompanySelection && (
                   <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#f0f9ff', borderRadius: '12px', border: '1px solid #bae6fd' }}>
@@ -596,7 +743,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                     <button
                       key={tab.id}
                       type="button"
-                      onClick={() => setActiveTab(tab.id)}
+                      onClick={() => handleTabChange(tab.id)}
                       style={{
                         padding: isMobile ? '0.5rem 0.75rem' : '0.75rem 1.5rem',
                         background: 'transparent',
@@ -608,15 +755,39 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                         borderBottom: activeTab === tab.id ? '2px solid #0f172a' : '2px solid transparent',
                         transition: 'all 0.2s',
                         whiteSpace: 'nowrap',
+                        position: 'relative'
                       }}
                     >
                       <span>{tab.icon}</span> {tab.label}
+                      {/* Show error indicator on tab if there are errors in that tab */}
+                      {(tab.id === 'basic' && (errors.name || errors.email)) && (
+                        <span style={{
+                          position: 'absolute',
+                          top: '-4px',
+                          right: '-4px',
+                          width: '8px',
+                          height: '8px',
+                          background: '#ef4444',
+                          borderRadius: '50%'
+                        }} />
+                      )}
+                      {(tab.id === 'tax' && errors.taxRegistrationNumber) && (
+                        <span style={{
+                          position: 'absolute',
+                          top: '-4px',
+                          right: '-4px',
+                          width: '8px',
+                          height: '8px',
+                          background: '#ef4444',
+                          borderRadius: '50%'
+                        }} />
+                      )}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Form content remains the same */}
+              {/* Form content */}
               <form onSubmit={handleSubmit} style={{ padding: isMobile ? '1rem' : '2rem' }}>
                 <AnimatePresence mode="wait">
                   {/* Basic Info Tab */}
@@ -805,12 +976,13 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                                 value={formData.taxRegistrationNumber}
                                 onChange={handleChange}
                                 maxLength={15}
+                                className={errors.taxRegistrationNumber && (touched.taxRegistrationNumber || validationAttempted) ? 'error-field' : ''}
                                 style={{ ...inputStyle, background: 'white', fontFamily: 'monospace' }}
                               />
                               {errors.taxRegistrationNumber && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.taxRegistrationNumber}</p>}
 
-                               {/* TRN Expiry Date */}
-                               <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
+                              {/* TRN Expiry Date */}
+                              <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
                                 <label style={{ ...labelStyle, color: '#0c4a6e' }}>
                                   TRN Expiry Date
                                 </label>
@@ -825,7 +997,6 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                                   Leave blank if the TRN does not expire. When this date passes, the customer is automatically deactivated.
                                 </p>
                               </div>
-                              
                             </div>
                           </motion.div>
                         )}

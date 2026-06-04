@@ -506,7 +506,8 @@ export default function QuotationScreen({ onBack }) {
   const [isMobile, setIsMobile] = useState(false);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
-  
+  const [localCurrency, setLocalCurrency] = useState('AED');
+  const [localCompany, setLocalCompany] = useState(null);
   // --------------------------------------------------------------------------
   // Responsive Detection
   // --------------------------------------------------------------------------
@@ -568,6 +569,10 @@ export default function QuotationScreen({ onBack }) {
   // --------------------------------------------------------------------------
   // Handlers
   // --------------------------------------------------------------------------
+  const handleCurrencyChange = useCallback((newCurrency) => {
+    setLocalCurrency(newCurrency);
+  }, []);
+
   const showToast = useCallback((message, type = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), TOAST_DURATION);
@@ -679,8 +684,8 @@ export default function QuotationScreen({ onBack }) {
       <QuotationTemplate 
         customer={selectedCustomer} 
         selectedItems={selectedItems} 
-        selectedCompany={selectedCompany} 
-        selectedCurrency={selectedCurrency} 
+        selectedCurrency={localCurrency}   
+  selectedCompany={selectedCompany}     
         quotationData={quotationData} 
         onBack={handleBack} 
       />
@@ -763,7 +768,19 @@ export default function QuotationScreen({ onBack }) {
           {/* Company Section */}
           <div style={{ padding: isMobile ? "1rem 1rem 0" : "1.5rem 1.5rem 0" }}>
             <SectionHeader icon={Building2} title="Company" required />
-            <CompanyCurrencySelector variant="full" showLabels={false} />
+            <CompanyCurrencySelector 
+  variant="full" 
+  showLabels={true}
+  localCurrencyMode={true}  
+  localCurrencyValue={localCurrency}
+  onCurrencyChange={(currency) => {
+    setLocalCurrency(currency);
+    console.log('Currency changed locally:', currency);
+   }}
+  onCompanyChange={(companyId, meta) => {
+    console.log('Company changed (global):', companyId);
+   }}
+/>
           </div>
           <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
 

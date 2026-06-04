@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { authAPI } from "../services/api";
+import { X, Eye, EyeOff, Key, Copy, Check, AlertCircle } from 'lucide-react';
 
 export function PasswordResetModal({
     open,
@@ -112,10 +113,7 @@ export function PasswordResetModal({
           <div style={styles.modalHeader}>
             <div style={styles.modalHeaderLeft}>
               <div style={styles.modalIcon}>
-                <svg width="20" height="20" fill="none" stroke="white" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                </svg>
+                <Key size={20} color="white" />
               </div>
               <div>
                 <h2 style={styles.modalTitle}>Reset Password</h2>
@@ -123,19 +121,14 @@ export function PasswordResetModal({
               </div>
             </div>
             <button onClick={handleClose} style={styles.closeBtn} disabled={actionLoading}>
-              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X size={20} />
             </button>
           </div>
    
           {/* Error Banner */}
           {errors.submit && (
             <div style={styles.errorBanner}>
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+              <AlertCircle size={16} />
               {errors.submit}
             </div>
           )}
@@ -146,44 +139,34 @@ export function PasswordResetModal({
             <div style={styles.fieldWrapper}>
               <label style={styles.label}>Reset Method</label>
               <div style={styles.methodContainer}>
-                {[
-                  {
-                    key: 'direct',
-                    label: 'Set Password Directly',
-                    icon: '🔒',
-                    desc: 'Set a new password immediately'
-                  },
-                ].map((method) => (
-                  <button
-                    key={method.key}
-                    type="button"
-                    onClick={() => {
-                      setResetMethod(method.key);
-                      setErrors({});
-                      setTempPassword('');
-                    }}
-                    disabled={actionLoading || (tempPassword && method.key !== 'temp')}
-                    style={{
-                      ...styles.methodButton,
-                      borderColor: resetMethod === method.key ? '#667eea' : '#e5e7eb',
-                      backgroundColor: resetMethod === method.key ? '#667eea15' : 'white',
-                      color: resetMethod === method.key ? '#667eea' : '#374151',
-                      fontWeight: resetMethod === method.key ? '600' : '500',
-                    }}
-                  >
-                    <span style={styles.methodIcon}>{method.icon}</span>
-                    <div style={styles.methodContent}>
-                      <div>{method.label}</div>
-                      <div style={{
-                        ...styles.methodDesc,
-                        color: resetMethod === method.key ? '#667eea' : '#9ca3af',
-                      }}>
-                        {method.desc}
-                      </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetMethod('direct');
+                    setErrors({});
+                    setTempPassword('');
+                  }}
+                  disabled={actionLoading}
+                  style={{
+                    ...styles.methodButton,
+                    borderColor: resetMethod === 'direct' ? '#667eea' : '#e5e7eb',
+                    backgroundColor: resetMethod === 'direct' ? '#667eea15' : 'white',
+                    color: resetMethod === 'direct' ? '#667eea' : '#374151',
+                    fontWeight: resetMethod === 'direct' ? '600' : '500',
+                  }}
+                >
+                  <span style={styles.methodIcon}>🔒</span>
+                  <div style={styles.methodContent}>
+                    <div>Set Password Directly</div>
+                    <div style={{
+                      ...styles.methodDesc,
+                      color: resetMethod === 'direct' ? '#667eea' : '#9ca3af',
+                    }}>
+                      Set a new password immediately
                     </div>
-                    {resetMethod === method.key && <span style={styles.methodCheck}>✓</span>}
-                  </button>
-                ))}
+                  </div>
+                  {resetMethod === 'direct' && <span style={styles.methodCheck}>✓</span>}
+                </button>
               </div>
             </div>
    
@@ -212,18 +195,7 @@ export function PasswordResetModal({
                       style={styles.eyeBtn}
                       type="button"
                     >
-                      {showPassword ? (
-                        <svg width="16" height="16" fill="none" stroke="#9ca3af" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                        </svg>
-                      ) : (
-                        <svg width="16" height="16" fill="none" stroke="#9ca3af" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      )}
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                   {errors.password && <span style={styles.errorMsg}>{errors.password}</span>}
@@ -262,7 +234,8 @@ export function PasswordResetModal({
                     onClick={copyToClipboard}
                     style={styles.copyBtn}
                   >
-                    {copied ? '✓ Copied' : 'Copy'}
+                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                    {copied ? ' Copied' : ' Copy'}
                   </button>
                 </div>
                 <div style={styles.tempPasswordNote}>
@@ -459,7 +432,7 @@ const styles = {
   
   input: {
     width: '100%',
-    padding: '10px 12px',
+    padding: '10px 40px 10px 12px',
     border: '1.5px solid #e5e7eb',
     borderRadius: '10px',
     fontSize: '14px',
@@ -485,6 +458,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    color: '#9ca3af',
   },
   
   errorMsg: {
@@ -537,6 +511,9 @@ const styles = {
     fontSize: '12px',
     fontWeight: '600',
     cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
     transition: 'all 0.2s',
   },
   

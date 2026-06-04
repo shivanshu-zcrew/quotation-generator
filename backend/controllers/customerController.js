@@ -40,6 +40,17 @@ class SyncStateManager {
     this.cancelMap = new Map();
   }
 
+  tryAcquire(companyId) {
+    const status = this.getStatus(companyId);
+    if (status.isSyncing) return false;
+    this.setStatus(companyId, { isSyncing: true });
+    return true;
+  }
+ 
+  release(companyId) {
+    this.setStatus(companyId, { isSyncing: false });
+  }
+
   getStatus(companyId) {
     if (!this.statusMap.has(companyId)) {
       this.statusMap.set(companyId, {
@@ -1108,86 +1119,105 @@ exports.syncCustomerWithZoho = async (req, res) => {
 
 exports.syncFromZoho = async (req, res) => {
   let companyId;
-
+  let acquired = false;
+ 
   try {
     companyId = req.headers['x-company-id'] || req.body.companyId;
     if (!companyId) return sendErrorResponse(res, 400, 'Company ID is required');
-
+ 
     const company = await Company.findById(companyId);
     if (!company) return sendErrorResponse(res, 404, 'Company not found');
     if (!company.zohoOrganizationId) {
       return sendErrorResponse(res, 400, 'Company does not have a Zoho Organization ID configured');
     }
-
-    if (syncManager.getStatus(companyId).isSyncing) {
-      return res.status(409).json({ success: false, message: 'Sync already in progress' });
+ 
+    // ATOMIC acquire — replaces the old non-atomic check-then-set.
+    acquired = syncManager.tryAcquire(companyId);
+    if (!acquired) {
+      return res.status(409).json({ success: false, message: 'Sync already in progress for this company' });
     }
-
+ 
+    // Clear any stale cancellation flags from a previous run (both registries).
     syncManager.clearCancel(companyId);
-    syncManager.setSyncing(companyId, true);
+    const customerServices = require('../zoho/customerServices');
+    if (customerServices.customerSyncCancelMap) {
+      customerServices.customerSyncCancelMap.delete(String(companyId));
+    }
+ 
     syncManager.setProgress(companyId, {
       stage: 'starting', message: 'Starting customer sync...', fetched: 0, total: 0, startTime: Date.now()
     });
-
+ 
+    // Respond immediately; sync continues in background.
     res.status(202).json({
       success: true, message: `Customer sync started for ${company.name}`, status: 'started'
     });
-
+ 
     logger.info(`Customer sync started from Zoho for company: ${company.code}`, {
-      companyId: company._id,
-      companyCode: company.code,
-      startedBy: req.user?.id
+      companyId: company._id, companyCode: company.code, startedBy: req.user?.id
     });
-
+ 
+    // Pass a cancelToken OBJECT (not a bare companyId string) so the service
+    // has one unambiguous way to check cancellation.
+    const cancelToken = {
+      isCancelRequested: () =>
+        syncManager.isCancelRequested(companyId) ||
+        (customerServices.customerSyncCancelMap &&
+         customerServices.customerSyncCancelMap.get(String(companyId)) === true)
+    };
+ 
     const result = await zohoBooksService.syncContactsToDatabase(
-      company, !req.query.fullSync, null,
+      company,
+      !req.query.fullSync,
+      null,
       (progress) => syncManager.setProgress(companyId, progress),
-      { isCancelRequested: () => syncManager.isCancelRequested(companyId) }
+      cancelToken
     );
-
-    const wasCancelled = result?.message === 'Sync cancelled by user' || result?.cancelled === true;
-
+ 
+    const wasCancelled = result?.cancelled === true || result?.message === 'Sync cancelled by user';
+ 
     syncManager.setStatus(companyId, {
       isSyncing: false, lastSyncTime: new Date(), lastSyncResult: result
     });
-
+ 
     syncManager.setProgress(companyId, wasCancelled ? {
-      stage: 'cancelled', message: 'Sync was cancelled', fetched: result?.totalFromZoho || 0, total: result?.totalFromZoho || 0
+      stage: 'cancelled', message: 'Sync was cancelled',
+      fetched: result?.totalFromZoho || 0, total: result?.totalFromZoho || 0
     } : {
-      stage: 'completed', message: `Sync completed! ${result?.created || 0} created, ${result?.updated || 0} updated`,
+      stage: 'completed',
+      message: `Sync completed! ${result?.created || 0} created, ${result?.updated || 0} updated`,
       fetched: result?.totalFromZoho || 0, total: result?.totalFromZoho || 0,
-      created: result?.created || 0, updated: result?.updated || 0, errors: result?.errors || 0, duration: result?.duration
+      created: result?.created || 0, updated: result?.updated || 0,
+      errors: result?.errors || 0, duration: result?.duration
     });
-
-    if (!wasCancelled && result) {
+ 
+    if (!wasCancelled && result?.success) {
       logger.info(`Customer sync completed for company: ${company.code}`, {
-        companyId: company._id,
-        companyCode: company.code,
-        created: result?.created || 0,
-        updated: result?.updated || 0,
-        errors: result?.errors || 0,
-        total: result?.totalFromZoho || 0,
-        duration: result?.duration
+        companyId: company._id, companyCode: company.code,
+        created: result?.created || 0, updated: result?.updated || 0,
+        errors: result?.errors || 0, total: result?.totalFromZoho || 0, duration: result?.duration
       });
+    } else if (!wasCancelled && result && result.success === false) {
+      // Sync ran but failed at the fetch/processing level — surface it in progress.
+      syncManager.setProgress(companyId, {
+        stage: 'error', message: `Sync failed: ${result.error || 'Unknown error'}`, error: result.error
+      });
+      logger.error(`Customer sync failed for company: ${company.code}: ${result.error}`, { companyId: company._id });
     } else if (wasCancelled) {
-      logger.warn(`Customer sync cancelled for company: ${company.code}`, {
-        companyId: company._id,
-        companyCode: company.code
-      });
+      logger.warn(`Customer sync cancelled for company: ${company.code}`, { companyId: company._id });
     }
-
+ 
     setTimeout(() => syncManager.clearSyncState(companyId), 15000);
-
+ 
   } catch (error) {
-    logger.error(`Customer sync from Zoho error: ${error.message}`, {
-      error: error.message,
-      companyId
-    });
+    logger.error(`Customer sync from Zoho error: ${error.message}`, { error: error.message, companyId });
     if (companyId) {
-      syncManager.setSyncing(companyId, false);
       syncManager.setProgress(companyId, { stage: 'error', message: `Sync failed: ${error.message}`, error: error.message });
       setTimeout(() => syncManager.clearSyncState(companyId), 10000);
     }
+  } finally {
+    // ALWAYS release the lock, even on a thrown error or early return after acquire.
+    if (acquired && companyId) syncManager.release(companyId);
   }
 };
 
@@ -1195,23 +1225,24 @@ exports.cancelCustomerSync = async (req, res) => {
   try {
     const companyId = req.headers['x-company-id'] || req.body.companyId;
     if (!companyId) return sendErrorResponse(res, 400, 'Company ID is required');
-
+ 
     if (!syncManager.getStatus(companyId).isSyncing) {
       return sendErrorResponse(res, 400, 'No sync is currently running');
     }
-
+ 
     const customerServices = require('../zoho/customerServices');
     if (customerServices.customerSyncCancelMap) {
-      customerServices.customerSyncCancelMap.set(companyId, true);
+      customerServices.customerSyncCancelMap.set(String(companyId), true); // String key — matches service
     }
     syncManager.requestCancel(companyId);
-    syncManager.setSyncing(companyId, false);
-    syncManager.setProgress(companyId, { stage: 'cancelled', message: 'Sync cancelled by user', startTime: Date.now() });
-
-    logger.info(`Customer sync cancelled for company: ${companyId}`, { companyId });
-
-    res.json({ success: true, message: 'Sync cancelled successfully' });
-
+ 
+    // Do NOT flip isSyncing to false here — let the sync loop observe the
+    // cancel flag, finish its current batch cleanly, and report 'cancelled'.
+    syncManager.setProgress(companyId, { stage: 'cancelling', message: 'Cancellation requested…', startTime: Date.now() });
+ 
+    logger.info(`Customer sync cancellation requested for company: ${companyId}`, { companyId });
+    res.json({ success: true, message: 'Cancellation requested' });
+ 
   } catch (error) {
     sendErrorResponse(res, 500, 'Failed to cancel sync', error);
   }

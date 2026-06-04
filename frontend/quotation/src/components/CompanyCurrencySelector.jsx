@@ -1,4 +1,4 @@
-// components/CompanyCurrencySelector.jsx (UPDATED WITH DEBOUNCE TO PREVENT BLINKING)
+// components/CompanyCurrencySelector.jsx (UPDATED - Only currency local mode)
 import React, { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react';
 import { Building2, DollarSign, ChevronDown, RefreshCw, Layers } from 'lucide-react';
 import { useAppStore } from '../services/store';
@@ -17,7 +17,7 @@ const CURRENCY_METADATA = {
 
 const ALL_COMPANIES_ID = 'all';
 
-// ✅ Add debounce utility
+// Debounce utility
 const debounce = (fn, delay) => {
   let timeout;
   return (...args) => {
@@ -50,8 +50,11 @@ export const CompanyCurrencySelector = memo(({
   onCompanyChange, 
   onCurrencyChange, 
   className = '',
-  isMobile = false
+  isMobile = false,
+  localCurrencyMode = false,  // ✅ NEW: When true, currency doesn't update global store
+  localCurrencyValue = null,   // ✅ NEW: Local currency value when in localCurrencyMode
 }) => {
+  // Get store data
   const {
     companies, selectedCompany, selectedCurrency, setSelectedCompany,
     setSelectedCurrency, fetchExchangeRates, fetchQuotationsForCompany,
@@ -62,11 +65,29 @@ export const CompanyCurrencySelector = memo(({
   const isAdmin = user?.role === 'admin';
   const showAllCompaniesOption = isAdmin;
 
+  // ✅ Local state for currency when in localCurrencyMode
+  const [localCurrency, setLocalCurrency] = useState(localCurrencyValue || selectedCurrency || 'AED');
+  const [localExchangeRates, setLocalExchangeRates] = useState(null);
+  const [isLocalRefreshing, setIsLocalRefreshing] = useState(false);
+
+  // Update local currency when prop changes
+  useEffect(() => {
+    if (localCurrencyMode && localCurrencyValue !== undefined) {
+      setLocalCurrency(localCurrencyValue);
+    }
+  }, [localCurrencyMode, localCurrencyValue]);
+
+  // Update local currency when global currency changes (if not in local mode)
+  useEffect(() => {
+    if (!localCurrencyMode && selectedCurrency) {
+      setLocalCurrency(selectedCurrency);
+    }
+  }, [localCurrencyMode, selectedCurrency]);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isChanging, setIsChanging] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   
-  // ✅ Add ref to track last selected company to prevent duplicate calls
   const lastSelectedCompanyRef = useRef(selectedCompany);
 
   // Mark initial load as complete when companies are loaded
@@ -86,9 +107,21 @@ export const CompanyCurrencySelector = memo(({
     return company?.acceptedCurrencies || ['AED'];
   }, [companies, selectedCompany, isAllCompaniesSelected]);
 
-  // ✅ Create the actual handler
+  // ✅ Local fetch exchange rates (for localCurrencyMode)
+  const localFetchExchangeRates = useCallback(async (currency) => {
+    try {
+      const response = await fetch(`/api/exchange-rates?base=${currency}`);
+      const data = await response.json();
+      setLocalExchangeRates(data);
+      return data;
+    } catch (error) {
+      console.error('Failed to fetch exchange rates:', error);
+      return null;
+    }
+  }, []);
+
+  // ✅ Handle company change (always updates global store)
   const handleCompanyChangeCore = useCallback(async (newCompanyId) => {
-    // Prevent if already changing or same company
     if (isChanging) return;
     if (lastSelectedCompanyRef.current === newCompanyId) return;
     
@@ -105,9 +138,18 @@ export const CompanyCurrencySelector = memo(({
         if (company) {
           await setSelectedCompany(company._id);
           if (company.baseCurrency) {
-            setSelectedCurrency(company.baseCurrency);
-            onCurrencyChange?.(company.baseCurrency);
-            await fetchExchangeRates(company.baseCurrency);
+            // Update currency based on company's base currency
+            if (localCurrencyMode) {
+              // In local mode, just update local currency without affecting global
+              setLocalCurrency(company.baseCurrency);
+              onCurrencyChange?.(company.baseCurrency);
+              await localFetchExchangeRates(company.baseCurrency);
+            } else {
+              // Normal mode - update global store
+              setSelectedCurrency(company.baseCurrency);
+              onCurrencyChange?.(company.baseCurrency);
+              await fetchExchangeRates(company.baseCurrency);
+            }
           }
           await fetchQuotationsForCompany(company._id);
           onCompanyChange?.(company._id, { isAllCompanies: false });
@@ -119,33 +161,54 @@ export const CompanyCurrencySelector = memo(({
       setIsChanging(false);
     }
   }, [companies, setSelectedCompany, setSelectedCurrency, onCompanyChange, onCurrencyChange, 
-      fetchExchangeRates, fetchQuotationsForCompany, refetchQuotations, isChanging]);
+      fetchExchangeRates, fetchQuotationsForCompany, refetchQuotations, isChanging, 
+      localCurrencyMode, localFetchExchangeRates]);
 
-  // ✅ Create debounced version
+  // Create debounced version
   const debouncedHandleCompanyChange = useMemo(
     () => debounce(handleCompanyChangeCore, 300),
     [handleCompanyChangeCore]
   );
 
-  // ✅ Wrapper for the select onChange
+  // Wrapper for the select onChange
   const handleCompanyChange = useCallback((e) => {
     const newCompanyId = e.target.value;
     if (!newCompanyId) return;
     debouncedHandleCompanyChange(newCompanyId);
   }, [debouncedHandleCompanyChange]);
 
+  // ✅ Handle currency change - respects localCurrencyMode
   const handleCurrencyChange = useCallback((e) => {
     const newCurrency = e.target.value;
-    setSelectedCurrency(newCurrency);
-    onCurrencyChange?.(newCurrency);
-  }, [setSelectedCurrency, onCurrencyChange]);
+    
+    if (localCurrencyMode) {
+      // Local mode: only update local state, don't touch global store
+      setLocalCurrency(newCurrency);
+      onCurrencyChange?.(newCurrency);
+      localFetchExchangeRates(newCurrency);
+    } else {
+      // Normal mode: update global store
+      setSelectedCurrency(newCurrency);
+      onCurrencyChange?.(newCurrency);
+      fetchExchangeRates(newCurrency);
+    }
+  }, [localCurrencyMode, setSelectedCurrency, onCurrencyChange, fetchExchangeRates, localFetchExchangeRates]);
 
+  // ✅ Handle refresh rates
   const handleRefreshRates = useCallback(async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    await fetchExchangeRates(selectedCurrency);
-    setIsRefreshing(false);
-  }, [fetchExchangeRates, selectedCurrency, isRefreshing]);
+    if (localCurrencyMode) {
+      if (isLocalRefreshing) return;
+      setIsLocalRefreshing(true);
+      await localFetchExchangeRates(localCurrency);
+      setIsLocalRefreshing(false);
+    } else {
+      if (isRefreshing) return;
+      setIsRefreshing(true);
+      await fetchExchangeRates(selectedCurrency);
+      setIsRefreshing(false);
+    }
+  }, [localCurrencyMode, localFetchExchangeRates, localCurrency, isLocalRefreshing, 
+      fetchExchangeRates, selectedCurrency, isRefreshing]);
 
   const currentCompany = isAllCompaniesSelected 
     ? { name: 'All Companies', code: 'ALL' }
@@ -153,6 +216,10 @@ export const CompanyCurrencySelector = memo(({
 
   // Show loading state while companies are being fetched
   const isLoading = companies.length === 0 && !isInitialLoad;
+
+  // ✅ Get current display currency
+  const displayCurrency = localCurrencyMode ? localCurrency : selectedCurrency;
+  const displayRefreshing = localCurrencyMode ? isLocalRefreshing : isRefreshing;
 
   // Mobile compact variant
   if (isMobile) {
@@ -259,7 +326,7 @@ export const CompanyCurrencySelector = memo(({
           <div style={styles.selectWrapper}>
             <DollarSign size={16} style={styles.icon} />
             <select 
-              value={selectedCurrency} 
+              value={displayCurrency} 
               onChange={handleCurrencyChange} 
               disabled={disabled} 
               style={styles.select}
@@ -274,11 +341,11 @@ export const CompanyCurrencySelector = memo(({
           <div style={styles.actionGroup}>
             <button 
               onClick={handleRefreshRates} 
-              disabled={isRefreshing} 
+              disabled={displayRefreshing} 
               style={styles.iconButton} 
               title="Refresh exchange rates"
             >
-              <RefreshCw size={14} style={isRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
+              <RefreshCw size={14} style={displayRefreshing ? { animation: 'spin 1s linear infinite' } : {}} />
             </button>
           </div>
         </div>

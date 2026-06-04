@@ -13,7 +13,7 @@ export const numberToWords = (() => {
   };
   
   return (num) => {
-    if (!num || num === 0) return 'Zero Dirhams Only';
+    if (!num || num === 0) return 'Zero';
     let n = Math.floor(num);
     let res = '', i = 0;
     while (n > 0) {
@@ -22,7 +22,7 @@ export const numberToWords = (() => {
       i++;
     }
     const fils = Math.round((num - Math.floor(num)) * 100);
-    let result = res.trim() + ' Dirhams Only';
+    let result = res.trim() + ' Only';
     if (fils > 0) result = result.replace('Dirhams Only', `Dirhams and ${convertLessThanThousand(fils)} Fils Only`);
     return result;
   };

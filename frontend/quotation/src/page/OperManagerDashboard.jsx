@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   Eye, Download, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
-  AlertCircle, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp, Menu,
-  ShoppingCart
+  AlertCircle, RefreshCw, ChevronLeft, ChevronRight,
+  Shield, Award, Ban, Users, Menu,
 } from 'lucide-react';
 
 import { useOpsStats } from '../hooks/customHooks';
@@ -14,269 +13,310 @@ import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import useToast, { ToastContainer } from '../hooks/useToast';
 
-// Import shared components
 import {
   StatusBadge,
   RejectionNote,
   StatCard,
   ActionBtn,
   SortHeader,
-  PaginationBar,
   SkeletonRow,
   ConfirmModal,
 } from '../components/SharedComponents';
 
-// Import new components
 import CompactStatsCard from '../components/HomePageComponent/CompactStatsCard';
+import DesktopStatsGrid from '../components/HomePageComponent/DesktopStatsGrid';
 import ViewToggle from '../components/HomePageComponent/ViewToggle';
 
-// Import utils
-import {
-  DEBOUNCE_MS,
-} from '../utils/constants';
+import { DEBOUNCE_MS, PAGE_SIZE_OPTIONS } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import AwardModal from '../components/AwardModal';
 
-// Custom hook for responsive detection
-const useMediaQuery = (query) => {
-  const [matches, setMatches] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return window.matchMedia(query).matches;
-    }
-    return false;
+// ============================================================
+// DESIGN TOKENS — identical to HomeScreen
+// ============================================================
+const T = {
+  canvas:     '#f6f7f8',
+  surface:    '#ffffff',
+  ink:        '#1b1d1e',
+  inkSoft:    '#646a6e',
+  inkFaint:   '#9aa0a4',
+  line:       '#e8eaec',
+  lineSoft:   '#f0f1f3',
+  accent:     '#2563c4',
+  accentSoft: '#e6f0fb',
+  accentInk:  '#1d63c4',
+  shadow:     '0 1px 2px rgba(20,22,24,0.04), 0 8px 24px -12px rgba(20,22,24,0.10)',
+  radius:     16,
+  radiusSm:   10,
+};
+
+const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+// ============================================================
+// STATUS CONFIG — ops-specific states
+// ============================================================
+const STATUS_CONFIG = {
+  pending:      { label: 'Pending',          bg: '#fff7e6', color: '#b45309', borderColor: '#fde9c8', icon: '○' },
+  pending_admin:{ label: 'Pending',          bg: '#fff7e6', color: '#b45309', borderColor: '#fde9c8', icon: '○' },
+  ops_approved: { label: 'Awaiting Admin',   bg: '#e6f0fb', color: '#1d63c4', borderColor: '#c9defa', icon: '◔' },
+  approved:     { label: 'Approved',         bg: '#e3f5ee', color: '#0f7a52', borderColor: '#c3ebda', icon: '●' },
+  awarded:      { label: 'Awarded',          bg: '#efe9fb', color: '#6d28d9', borderColor: '#dccffa', icon: '◆' },
+  not_awarded:  { label: 'Not Awarded',      bg: '#eef1f4', color: '#52606d', borderColor: '#dde3e8', icon: '—' },
+  ops_rejected: { label: 'Returned by Me',   bg: '#fdeaf0', color: '#be185d', borderColor: '#f8d2e0', icon: '△' },
+  rejected:     { label: 'Rejected by Admin',bg: '#fdeceb', color: '#c1352b', borderColor: '#f8d6d2', icon: '✕' },
+};
+
+const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
+  const config = STATUS_CONFIG[status] || {
+    label: status?.replace(/_/g, ' ') || 'Unknown',
+    bg: '#f2f3f4', color: '#646a6e', borderColor: '#e8eaec', icon: '·',
+  };
+
+  const isExp  = quotation && new Date(quotation.expiryDate) < new Date();
+  const isExpS = quotation && !isExp && new Date(quotation.expiryDate) - new Date() < 7 * 24 * 60 * 60 * 1000;
+
+  const base = {
+    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+    padding: '0.28rem 0.7rem', borderRadius: 999, fontSize: '0.74rem',
+    fontWeight: 600, letterSpacing: '0.01em', whiteSpace: 'nowrap', cursor: 'help',
+  };
+
+  if (isExp && status === 'pending') {
+    return (
+      <span style={{ ...base, backgroundColor: '#fdeceb', color: '#c1352b', border: '1px solid #f8d6d2' }} title="Expired">
+        <span style={{ opacity: 0.8 }}>✕</span> Expired
+      </span>
+    );
+  }
+  if (isExpS && status === 'pending') {
+    return (
+      <span style={{ ...base, backgroundColor: '#fff7e6', color: '#b45309', border: '1px solid #fde9c8' }} title="Expiring soon">
+        <span style={{ opacity: 0.8 }}>◷</span> Expiring Soon
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ ...base, backgroundColor: config.bg, color: config.color, border: `1px solid ${config.borderColor}`, transition: 'all 0.2s ease' }} title={config.label}>
+      <span style={{ fontSize: '0.6rem', opacity: 0.85 }}>{config.icon}</span>
+      {config.label}
+    </span>
+  );
+});
+
+// ============================================================
+// PAGINATION BAR — same as HomeScreen
+// ============================================================
+const PageBtn = React.memo(({ n, current, onPage }) => (
+  <button
+    onClick={() => onPage(n)}
+    style={{
+      minWidth: 32, height: 32, borderRadius: 8,
+      border: n === current ? '1px solid transparent' : `1px solid ${T.line}`,
+      backgroundColor: n === current ? T.ink : T.surface,
+      color: n === current ? '#fff' : T.inkSoft,
+      fontWeight: n === current ? 600 : 500, fontSize: '0.8rem',
+      cursor: 'pointer', transition: 'all 0.15s ease',
+    }}
+  >
+    {n}
+  </button>
+));
+
+const PaginationBar = React.memo(({ total, page, limit, totalPages, onPageChange, onLimitChange }) => {
+  if (totalPages <= 1 && total <= (PAGE_SIZE_OPTIONS?.[0] ?? 10)) return null;
+
+  const start = (page - 1) * limit + 1;
+  const end   = Math.min(page * limit, total);
+
+  const pages = useMemo(() => {
+    const p = [];
+    const s = Math.max(1, page - 2);
+    const e = Math.min(totalPages, page + 2);
+    for (let i = s; i <= e; i++) p.push(i);
+    return p;
+  }, [page, totalPages]);
+
+  const showStart = pages[0] > 1;
+  const showEnd   = pages[pages.length - 1] < totalPages;
+
+  const arrowBtn = (disabled) => ({
+    width: 32, height: 32, border: `1px solid ${T.line}`, borderRadius: 8,
+    background: T.surface, cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.4 : 1, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', color: T.inkSoft,
   });
 
+  return (
+    <div style={{ padding: '0.9rem 1.5rem', borderTop: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', backgroundColor: T.surface }}>
+      <span style={{ fontSize: '0.8rem', color: T.inkSoft }}>
+        Showing <strong style={{ color: T.ink, fontWeight: 600 }}>{start}–{end}</strong> of <strong style={{ color: T.ink, fontWeight: 600 }}>{total}</strong>
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        {onLimitChange && PAGE_SIZE_OPTIONS && (
+          <select value={limit} onChange={(e) => onLimitChange(Number(e.target.value))} style={{ padding: '0.3rem 0.6rem', borderRadius: 8, border: `1px solid ${T.line}`, fontSize: '0.75rem', backgroundColor: T.surface, color: T.inkSoft, cursor: 'pointer', fontFamily: FONT_STACK }}>
+            {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s} per page</option>)}
+          </select>
+        )}
+        <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1} style={arrowBtn(page === 1)}><ChevronLeft size={14} /></button>
+        {showStart && (
+          <>
+            <PageBtn n={1} current={page} onPage={onPageChange} />
+            {pages[0] > 2 && <span style={{ color: T.inkFaint, fontSize: '0.8rem' }}>…</span>}
+          </>
+        )}
+        {pages.map((n) => <PageBtn key={n} n={n} current={page} onPage={onPageChange} />)}
+        {showEnd && (
+          <>
+            {pages[pages.length - 1] < totalPages - 1 && <span style={{ color: T.inkFaint, fontSize: '0.8rem' }}>…</span>}
+            <PageBtn n={totalPages} current={page} onPage={onPageChange} />
+          </>
+        )}
+        <button onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} style={arrowBtn(page === totalPages)}><ChevronRight size={14} /></button>
+      </div>
+    </div>
+  );
+});
+
+// ============================================================
+// SHIMMER — same palette as HomeScreen
+// ============================================================
+const shimmer = {
+  background: `linear-gradient(90deg, ${T.lineSoft} 25%, ${T.line} 50%, ${T.lineSoft} 75%)`,
+  backgroundSize: '200% 100%',
+  animation: 'ops-shimmer 1.4s ease infinite',
+  borderRadius: 6,
+};
+
+const ShimmerStatsCard = ({ isMobile }) => {
+  const card = { background: T.surface, borderRadius: T.radius, padding: '1.25rem', border: `1px solid ${T.line}` };
+  if (isMobile) {
+    return (
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ ...shimmer, width: 100, height: 18 }} />
+            <div style={{ ...shimmer, width: 40, height: 40, borderRadius: '50%' }} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '0.75rem' }}>
+            {[1,2,3,4].map((i) => (
+              <div key={i}>
+                <div style={{ ...shimmer, width: 60, height: 11, marginBottom: 8 }} />
+                <div style={{ ...shimmer, width: 80, height: 22 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '1rem' }}>
+        {[1,2,3,4].map((i) => (
+          <div key={i} style={card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ ...shimmer, width: 80, height: 11 }} />
+                <div style={{ ...shimmer, width: 100, height: 26, marginTop: 8 }} />
+              </div>
+              <div style={{ ...shimmer, width: 44, height: 44, borderRadius: 12 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// RESPONSIVE HOOK
+// ============================================================
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(query).matches : false
+  );
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    
-    const mediaQuery = window.matchMedia(query);
-    const handler = (e) => setMatches(e.matches);
-    
-    mediaQuery.addEventListener('change', handler);
-    return () => mediaQuery.removeEventListener('change', handler);
+    const mq = window.matchMedia(query);
+    const h = (e) => setMatches(e.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
   }, [query]);
-
   return matches;
 };
 
-// Shimmer Components
-const ShimmerStatCard = () => (
-  <div style={{
-    background: 'white',
-    borderRadius: '20px',
-    padding: '1.25rem',
-    border: '1px solid #f1f5f9',
-  }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-      <div>
-        <ShimmerLine width="80px" height="12px" />
-        <ShimmerLine width="60px" height="28px" style={{ marginTop: '8px' }} />
-        <ShimmerLine width="100px" height="10px" style={{ marginTop: '8px' }} />
-      </div>
-      <ShimmerCircle size={40} />
-    </div>
-  </div>
-);
-
-const ShimmerLine = ({ width, height, style = {} }) => (
-  <div
-    style={{
-      width,
-      height,
-      borderRadius: '8px',
-      background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
-      backgroundSize: '200% 100%',
-      animation: 'shimmer 1.5s ease infinite',
-      ...style,
-    }}
-  />
-);
-
-const ShimmerCircle = ({ size }) => (
-  <div
-    style={{
-      width: size,
-      height: size,
-      borderRadius: '50%',
-      background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
-      backgroundSize: '200% 100%',
-      animation: 'shimmer 1.5s ease infinite',
-    }}
-  />
-);
-
-const ShimmerTableRow = () => (
-  <tr>
-    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
-      <td key={i} style={{ padding: '12px 16px' }}>
-        <ShimmerLine width={i === 1 ? '80px' : i === 8 ? '70px' : '120px'} height="16px" />
-      </td>
-    ))}
-  </tr>
-);
-
-const ShimmerCard = () => (
-  <div style={{
-    background: 'white',
-    borderRadius: '12px',
-    padding: '1rem',
-    marginBottom: '0.75rem',
-    border: '1px solid #f1f5f9',
-  }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-      <ShimmerLine width="100px" height="20px" />
-      <ShimmerLine width="80px" height="20px" />
-    </div>
-    <ShimmerLine width="150px" height="18px" style={{ marginBottom: '0.5rem' }} />
-    <ShimmerLine width="200px" height="14px" style={{ marginBottom: '0.5rem' }} />
-    <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
-      <ShimmerLine width="80px" height="12px" />
-      <ShimmerLine width="80px" height="12px" />
-      <ShimmerLine width="60px" height="12px" />
-    </div>
-    <div style={{ display: 'flex', gap: '0.5rem', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
-      <ShimmerLine width="60px" height="32px" />
-      <ShimmerLine width="60px" height="32px" />
-      <ShimmerLine width="70px" height="32px" />
-    </div>
-  </div>
-);
-
-// ─────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────
-const TAB_KEYS = {
-  all:          { label: 'All Quotations',        Icon: FileText, statusFilter: null }, 
-  pending:      { label: 'Pending Review',        Icon: Clock,    statusFilter: 'pending' },
-  ops_approved: { label: 'Awaiting Admin',        Icon: Shield,   statusFilter: 'ops_approved' },
-  ops_rejected: { label: 'Returned by Me',        Icon: Ban,      statusFilter: 'ops_rejected' },
-  rejected:     { label: 'Rejected by Admin',     Icon: XCircle,  statusFilter: 'rejected' },
-  approved:     { label: 'Approved',              Icon: CheckCircle, statusFilter: 'approved' },
-  awarded:      { label: 'Awarded',               Icon: Award,    statusFilter: 'awarded' },
-};
-
-// ─────────────────────────────────────────────────────────────
-// Sub-components
-// ─────────────────────────────────────────────────────────────
+// ============================================================
+// EXPIRY BADGE
+// ============================================================
 const ExpiryBadge = React.memo(({ type }) => {
-  const config = {
-    expired: { bg: '#fef2f2', color: '#dc2626', border: '#fecaca', label: 'Expired' },
-    expiring: { bg: '#fffbeb', color: '#d97706', border: '#fde68a', label: 'Expiring Soon' }
-  };
-  const cfg = config[type];
+  const cfg = type === 'expired'
+    ? { bg: '#fdeceb', color: '#c1352b', border: '#f8d6d2', label: 'Expired' }
+    : { bg: '#fff7e6', color: '#b45309', border: '#fde9c8', label: 'Expiring' };
   return (
-    <span style={{ 
-      fontSize: '0.62rem', fontWeight: 700, color: cfg.color, 
-      background: cfg.bg, padding: '1px 6px', borderRadius: 999, 
-      border: `1px solid ${cfg.border}` 
-    }}>
+    <span style={{ fontSize: '0.6rem', fontWeight: 600, color: cfg.color, background: cfg.bg, padding: '1px 6px', borderRadius: 999, border: `1px solid ${cfg.border}` }}>
       {cfg.label}
     </span>
   );
 });
 
-const ItemsBadge = React.memo(({ count }) => (
-  <span style={{ 
-    background: '#f1f5f9', color: '#475569', 
-    borderRadius: 6, padding: '0.2rem 0.6rem', 
-    fontSize: '0.8rem', fontWeight: 600 
-  }}>
-    {count}
-  </span>
-));
-
-// Mobile Quotation Card for Ops
+// ============================================================
+// OPS MOBILE CARD — HomeScreen card style
+// ============================================================
 const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, onAward, isDownloading, isApproving, isRejecting, isAwarding }) => {
-  const expired = isExpired(quotation.expiryDate);
+  const expired  = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
-  const canAct = quotation.status === 'pending';
-  const canAward = quotation.status === 'approved' && ( quotation.createdBy?.role === 'ops_manager' || quotation.createdBySnapshot?.role === 'ops_manager');
+  const canAct   = quotation.status === 'pending';
+  const canAward = quotation.status === 'approved' && (quotation.createdBy?.role === 'ops_manager' || quotation.createdBySnapshot?.role === 'ops_manager');
 
   return (
-    <div style={{
-      background: 'white',
-      borderRadius: '12px',
-      padding: '1rem',
-      marginBottom: '0.75rem',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-      border: '1px solid #f1f5f9'
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, color: '#0f172a', fontFamily: 'monospace', fontSize: '0.85rem' }}>
-              {quotation.quotationNumber || '—'}
-            </span>
-            <StatusBadge status={quotation.status} />
-            {expired && <ExpiryBadge type="expired" />}
-            {expiring && <ExpiryBadge type="expiring" />}
-          </div>
+    <div style={{ background: T.surface, borderRadius: T.radius, padding: '1rem 1.1rem', border: `1px solid ${T.line}`, boxShadow: T.shadow, fontFamily: FONT_STACK }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.65rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{quotation.quotationNumber || '—'}</span>
+          <EnhancedStatusBadge status={quotation.status} quotation={quotation} />
+          {expired  && <ExpiryBadge type="expired" />}
+          {expiring && <ExpiryBadge type="expiring" />}
         </div>
-        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0f172a' }}>
-          {fmtCurrency(quotation.total, selectedCurrency)}
-        </div>
+        <span style={{ fontWeight: 700, color: T.ink, fontSize: '0.9rem' }}>{fmtCurrency(quotation.total, selectedCurrency)}</span>
       </div>
 
+      {/* Customer */}
       <div style={{ marginBottom: '0.5rem' }}>
-        <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>
+        <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>
           {quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}
         </div>
-        {quotation.contact && (
-          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 2 }}>{quotation.contact}</div>
-        )}
+        {quotation.contact && <div style={{ fontSize: '0.72rem', color: T.inkFaint, marginTop: 2 }}>{quotation.contact}</div>}
         <RejectionNote quotation={quotation} />
       </div>
 
       {quotation.projectName && (
-        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem' }}>
-          📋 {quotation.projectName}
-        </div>
+        <div style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem' }}>{quotation.projectName}</div>
       )}
 
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem', fontSize: '0.7rem', color: '#64748b', flexWrap: 'wrap' }}>
-        <div>📅 Submitted: {fmtDate(quotation.date)}</div>
-        <div>⏰ Expiry: {fmtDate(quotation.expiryDate)}</div>
-        <div>📦 Items: {quotation.items?.length ?? 0}</div>
+      {/* Meta row */}
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.6rem', fontSize: '0.72rem', color: T.inkSoft, flexWrap: 'wrap' }}>
+        <span>Submitted: {fmtDate(quotation.date)}</span>
+        <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>Expiry: {fmtDate(quotation.expiryDate)}</span>
+        <span>Items: {quotation.items?.length ?? 0}</span>
       </div>
 
-      <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+      <div style={{ fontSize: '0.7rem', color: T.inkFaint, marginBottom: '0.75rem' }}>
         Created by: {quotation.createdBy?.name || '—'}
       </div>
 
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', borderTop: '1px solid #f1f5f9', paddingTop: '0.75rem' }}>
-        <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
+        <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         {canAct && (
           <>
-            <ActionBtn 
-              bg="#dcfce7" 
-              color="#166534" 
-              onClick={() => onApprove(quotation._id)} 
-              icon={Check} 
-              label="Approve" 
-              size="small"
-              disabled={isApproving}
-            />
-            <ActionBtn 
-              bg="#fee2e2" 
-              color="#991b1b" 
-              onClick={() => onReject(quotation)} 
-              icon={X} 
-              label="Reject" 
-              size="small"
-              disabled={isRejecting}
-            />
+            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id)} icon={Check} label="Approve" size="small" disabled={isApproving} />
+            <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onReject(quotation)} icon={X} label="Reject" size="small" disabled={isRejecting} />
           </>
         )}
         {canAward && (
-          <ActionBtn 
-            bg="#e9d5ff" 
-            color="#6b21a8" 
-            onClick={() => onAward(quotation)} 
-            icon={Award} 
-            label="Award" 
-            size="small"
-            disabled={isAwarding}
-          />
+          <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => onAward(quotation)} icon={Award} label="Award" size="small" disabled={isAwarding} />
         )}
       </div>
     </div>
@@ -284,989 +324,327 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 });
 OpsQuotationCard.displayName = 'OpsQuotationCard';
 
-// ─────────────────────────────────────────────────────────────
-// Main Dashboard
-// ─────────────────────────────────────────────────────────────
+// ============================================================
+// MAIN DASHBOARD
+// ============================================================
 export default function OpsDashboard({ onViewQuotation }) {
   const navigate = useNavigate();
-  
-  // Responsive hooks
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [viewMode, setViewMode] = useState('table');
-  
-  // Award Modal State
-  const [awardModal, setAwardModal] = useState({
-    open: false,
-    quotation: null,
-    loading: false
-  });
+
+  const [uiState, setUiState] = useState({ mobileMenuOpen: false, viewMode: 'table' });
+  const [awardModal, setAwardModal] = useState({ open: false, quotation: null, loading: false });
   const [forceHideLoading, setForceHideLoading] = useState(false);
   const loadingTimeoutRef = useRef(null);
-  
-  // ── Store subscriptions ───────────────────────────────────
-  // ✅ USE THE HOOK'S BUILT-IN PAGINATION
-  const { 
-    quotations: companyQuotations, 
+
+  // ── Store ─────────────────────────────────────────────────
+  const {
+    quotations: companyQuotations,
     pagination,
-    refresh: refreshCompanyQuotations, 
+    refresh: refreshCompanyQuotations,
     loading: quotationsLoading,
     goToPage,
     changeLimit,
     currentPage,
-    currentLimit
+    currentLimit,
+    quotationsInitialized,
   } = useCompanyQuotations();
-  
-  const user = useAppStore((s) => s.user);
-  const awardQuotation = useAppStore((s) => s.awardQuotation);
-  const opsApproveQuotation = useAppStore((s) => s.opsApproveQuotation);
+
+  const user               = useAppStore((s) => s.user);
+  const awardQuotation     = useAppStore((s) => s.awardQuotation);
+  const opsApproveQuotation= useAppStore((s) => s.opsApproveQuotation);
   const opsRejectQuotation = useAppStore((s) => s.opsRejectQuotation);
-  const handleLogout = useAppStore((s) => s.handleLogout);
-  const loadError = useAppStore((s) => s.loadError);
-  const clearError = useAppStore((s) => s.clearError);
-  const selectedCompany = useAppStore((s) => s.selectedCompany);
-  
-  // ── Stats hook ────────────────────────────────────────────
-  const { 
-    loading: statsLoading, 
-    refresh: refreshStats,
-    totalQuotations,
-    pendingReview,
-    awaitingAdmin,
-    returnedByMe,
-    totalValue,
-    tabCounts, 
-    rejectedByAdmin,
-    approved,
-    awarded
-  } = useOpsStats();
+  const handleLogout       = useAppStore((s) => s.handleLogout);
+  const loadError          = useAppStore((s) => s.loadError);
+  const clearError         = useAppStore((s) => s.clearError);
+  const selectedCompany    = useAppStore((s) => s.selectedCompany);
 
-  // ── Company & Currency ────────────────────────────────────
-  const {
-    selectedCurrency,
-    refreshCompanyData
-  } = useCompanyCurrency();
-
-  // ── Custom hooks ──────────────────────────────────────────
+  const { loading: statsLoading, refresh: refreshStats, totalQuotations, pendingReview, awaitingAdmin, returnedByMe, totalValue, tabCounts, approved, awarded } = useOpsStats();
+  const { selectedCurrency } = useCompanyCurrency();
   const { toasts, addToast, dismissToast } = useToast();
-  const searchRef = useRef(null);
+
+  const searchRef   = useRef(null);
   const searchTimer = useRef(null);
-  const isMountedRef = useRef(true);
-  const initialLoadDone = useRef(false);
+  const isMountedRef      = useRef(true);
+  const initialLoadDone   = useRef(false);
   const refreshInProgress = useRef(false);
 
   // ── Table state ───────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState('all');
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [sort, setSort] = useState({ field: 'createdAt', dir: 'desc' });
-  const [loadingIds, setLoadingIds] = useState({});
+  const [activeTab,    setActiveTab]    = useState('all');
+  const [searchInput,  setSearchInput]  = useState('');
+  const [search,       setSearch]       = useState('');
+  const [sort,         setSort]         = useState({ field: 'createdAt', dir: 'desc' });
+  const [loadingIds,   setLoadingIds]   = useState({});
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
- 
-  // Update limit on screen resize
+
+  // Latch refs — prevent shimmer flashing on re-renders
+  const statsLatchRef = useRef(false);
+  const tableLatchRef = useRef(false);
+
+  const statsReady = totalQuotations != null;
+  const tableReady = quotationsInitialized;
+
+  if (statsReady) statsLatchRef.current = true;
+  if (tableReady) tableLatchRef.current = true;
+
+  const prevCompanyRef = useRef(selectedCompany);
   useEffect(() => {
-    if (isMobile && currentLimit !== 10) {
-      changeLimit(10);
-    } else if (!isMobile && currentLimit !== 20) {
-      changeLimit(20);
+    const prev = prevCompanyRef.current;
+    prevCompanyRef.current = selectedCompany;
+    if (prev && selectedCompany && prev !== selectedCompany) {
+      statsLatchRef.current = false;
+      tableLatchRef.current = false;
     }
-  }, [isMobile, currentLimit, changeLimit]);
+  }, [selectedCompany]);
 
-  // Reset view mode on mobile
-  useEffect(() => {
-    if (isMobile) {
-      setViewMode('card');
-    }
-  }, [isMobile]);
+  const showStatsShimmer = !statsLatchRef.current && !statsReady;
+  const showTableShimmer = !tableLatchRef.current && !tableReady;
 
-  // Mark component as mounted
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
+  const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
+  const totalFiltered = pagination?.total    || 0;
+  const totalPages    = pagination?.totalPages || 1;
 
-useEffect(() => {
-  if (!selectedCompany || initialLoadDone.current) return;
-  
-  const loadInitialData = async () => {
-    if (refreshInProgress.current) return;
-    refreshInProgress.current = true;
-    
-    loadingTimeoutRef.current = setTimeout(() => {
-      console.log('Loading timeout - forcing data display');
-      setForceHideLoading(true);
-      initialLoadDone.current = true;
-      refreshInProgress.current = false;
-    }, 8000);
-    
-    try {
-      // ✅ Call refresh with initial params
-      await refreshCompanyQuotations({
-        page: 1,
-        limit: isMobile ? 10 : 20,
-        status: activeTab === 'all' ? undefined : activeTab,
-        search: '',
-        sortBy: 'createdAt',
-        sortDir: 'desc'
-      });
-      await refreshStats();
-      
-      if (isMountedRef.current) {
-        initialLoadDone.current = true;
-        setForceHideLoading(false);
-      }
-    } catch (error) {
-      console.error('Initial load error:', error);
-      if (isMountedRef.current) {
-        initialLoadDone.current = true;
-        setForceHideLoading(true);
-      }
-    } finally {
-      clearTimeout(loadingTimeoutRef.current);
-      refreshInProgress.current = false;
-    }
-  };
-  
-  loadInitialData();
-}, [selectedCompany, refreshCompanyQuotations, refreshStats, isMobile, activeTab]);
-
-  // ── Derived state ─────────────────────────────────────────
-  const safeQuotationsLoading = quotationsLoading === undefined ? true : quotationsLoading;
-  const hasData = companyQuotations?.length > 0;
-  const isLoading = !initialLoadDone.current && (safeQuotationsLoading || statsLoading) && !hasData && !forceHideLoading;
-  const isRefreshing = initialLoadDone.current && safeQuotationsLoading && companyQuotations?.length > 0;
-
-  // ✅ Use server-side pagination from the hook
-  const safeQ = useMemo(() => {
-    return Array.isArray(companyQuotations) ? companyQuotations : [];
-  }, [companyQuotations]);
-
-  const totalFiltered = pagination?.total || 0;
-  const totalPages = pagination?.totalPages || 1;
-  const safePage = currentPage;
-  const currentLimitValue = currentLimit;
-
-  // ── Tab counts from API counts or calculate from data
-  const tabCountsFromStats = useMemo(() => {
-    // Use tabCounts from API if available
-    if (tabCounts && Object.values(tabCounts).some(v => v > 0)) {
-      return tabCounts;
-    }
-    
-    // Fallback to local calculation
+  const tabCountsResolved = useMemo(() => {
+    if (tabCounts && Object.values(tabCounts).some(v => v > 0)) return tabCounts;
     return {
-      all: pagination?.total || safeQ.length,
-      pending: safeQ.filter(q => q && q.status === 'pending').length,
-      ops_approved: safeQ.filter(q => q && q.status === 'ops_approved').length,
-      ops_rejected: safeQ.filter(q => q && q.status === 'ops_rejected').length,
-      rejected: safeQ.filter(q => q && q.status === 'rejected').length,
-      approved: safeQ.filter(q => q && q.status === 'approved').length,
-      awarded: safeQ.filter(q => q && q.status === 'awarded').length,
+      all:          pagination?.total || safeQ.length,
+      pending:      safeQ.filter(q => q?.status === 'pending').length,
+      ops_approved: safeQ.filter(q => q?.status === 'ops_approved').length,
+      ops_rejected: safeQ.filter(q => q?.status === 'ops_rejected').length,
+      rejected:     safeQ.filter(q => q?.status === 'rejected').length,
+      approved:     safeQ.filter(q => q?.status === 'approved').length,
+      awarded:      safeQ.filter(q => q?.status === 'awarded').length,
     };
   }, [safeQ, pagination, tabCounts]);
-  // ── Loading helpers ───────────────────────────────────────
-  const setOp = useCallback((id, action, val) => {
-    setLoadingIds((p) => ({ ...p, [`${id}_${action}`]: val }));
+
+  // ── Responsive defaults ───────────────────────────────────
+  useEffect(() => {
+    const newLimit = isMobile ? 10 : 20;
+    if (currentLimit !== newLimit) changeLimit(newLimit);
+  }, [isMobile, currentLimit, changeLimit]);
+
+  useEffect(() => {
+    if (isMobile) setUiState(p => ({ ...p, viewMode: 'card' }));
+  }, [isMobile]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
   }, []);
 
-  const isOp = useCallback((id, action) => !!loadingIds[`${id}_${action}`], [loadingIds]);
+  useEffect(() => {
+    if (!selectedCompany || initialLoadDone.current) return;
+    const load = async () => {
+      if (refreshInProgress.current) return;
+      refreshInProgress.current = true;
+      loadingTimeoutRef.current = setTimeout(() => {
+        setForceHideLoading(true);
+        initialLoadDone.current = true;
+        refreshInProgress.current = false;
+      }, 8000);
+      try {
+        await refreshCompanyQuotations({ page: 1, limit: isMobile ? 10 : 20, status: undefined, search: '', sortBy: 'createdAt', sortDir: 'desc' });
+        await refreshStats();
+        if (isMountedRef.current) { initialLoadDone.current = true; setForceHideLoading(false); }
+      } catch (e) {
+        if (isMountedRef.current) { initialLoadDone.current = true; setForceHideLoading(true); }
+      } finally {
+        clearTimeout(loadingTimeoutRef.current);
+        refreshInProgress.current = false;
+      }
+    };
+    load();
+  }, [selectedCompany, refreshCompanyQuotations, refreshStats, isMobile]);
+
+  // ── Op helpers ────────────────────────────────────────────
+  const setOp  = useCallback((id, action, val) => setLoadingIds(p => ({ ...p, [`${id}_${action}`]: val })), []);
+  const isOp   = useCallback((id, action) => !!loadingIds[`${id}_${action}`], [loadingIds]);
 
   // ── Handlers ──────────────────────────────────────────────
-// Replace handleSearchChange (around line 400)
-const handleSearchChange = useCallback((e) => {
-  const val = e.target.value;
-  setSearchInput(val);
-  clearTimeout(searchTimer.current);
-  searchTimer.current = setTimeout(() => {
-    setSearch(val);
-    // ✅ Pass search to refresh with page 1
-    refreshCompanyQuotations({ 
-      page: 1, 
-      search: val,
-      status: activeTab === 'all' ? undefined : activeTab,
-      sortBy: sort.field,
-      sortDir: sort.dir
-    });
-  }, DEBOUNCE_MS);
-}, [refreshCompanyQuotations, activeTab, sort]);
+  const handleSearchChange = useCallback((e) => {
+    const val = e.target.value;
+    setSearchInput(val);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setSearch(val);
+      refreshCompanyQuotations({ page: 1, search: val, status: activeTab === 'all' ? undefined : activeTab, sortBy: sort.field, sortDir: sort.dir });
+    }, DEBOUNCE_MS);
+  }, [refreshCompanyQuotations, activeTab, sort]);
 
-// Replace clearSearch
-const clearSearch = useCallback(() => {
-  setSearchInput('');
-  setSearch('');
-  refreshCompanyQuotations({ 
-    page: 1, 
-    search: '',
-    status: activeTab === 'all' ? undefined : activeTab,
-    sortBy: sort.field,
-    sortDir: sort.dir
-  });
-}, [refreshCompanyQuotations, activeTab, sort]);
+  const clearSearch = useCallback(() => {
+    setSearchInput(''); setSearch('');
+    refreshCompanyQuotations({ page: 1, search: '', status: activeTab === 'all' ? undefined : activeTab, sortBy: sort.field, sortDir: sort.dir });
+  }, [refreshCompanyQuotations, activeTab, sort]);
 
-// Replace handleTabChange
-const handleTabChange = useCallback((key) => {
-  setActiveTab(key);
-  setSearchInput('');
-  setSearch('');
-  setSort({ field: 'createdAt', dir: 'desc' });
-  setMobileMenuOpen(false);
-  
-  // ✅ Pass status to refresh with page 1
-  refreshCompanyQuotations({ 
-    page: 1, 
-    status: key === 'all' ? undefined : key,
-    search: '',
-    sortBy: 'createdAt',
-    sortDir: 'desc'
-  });
-}, [refreshCompanyQuotations]);
- 
-const handleSort = useCallback((field) => {
-   let sortField = field;
-  if (field === 'customer') {
-    sortField = 'customer';
-  } else if (field === 'createdBy') {
-    sortField = 'createdBy';
-  }
-  
-  const newDir = sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc';
-  setSort({ field, dir: newDir });
-  
-  refreshCompanyQuotations({ 
-    page: 1, 
-    sortBy: sortField, 
-    sortDir: newDir,
-    status: activeTab === 'all' ? undefined : activeTab,
-    search: search
-  });
-}, [refreshCompanyQuotations, activeTab, search, sort]);
+  const handleTabChange = useCallback((key) => {
+    setActiveTab(key); setSearchInput(''); setSearch('');
+    setSort({ field: 'createdAt', dir: 'desc' });
+    setUiState(p => ({ ...p, mobileMenuOpen: false }));
+    refreshCompanyQuotations({ page: 1, status: key === 'all' ? undefined : key, search: '', sortBy: 'createdAt', sortDir: 'desc' });
+  }, [refreshCompanyQuotations]);
 
+  const handleSort = useCallback((field) => {
+    const newDir = sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc';
+    setSort({ field, dir: newDir });
+    refreshCompanyQuotations({ page: 1, sortBy: field, sortDir: newDir, status: activeTab === 'all' ? undefined : activeTab, search });
+  }, [refreshCompanyQuotations, activeTab, search, sort]);
 
-const handleRefresh = useCallback(async () => {
-  if (refreshInProgress.current) {
-    addToast('Refresh already in progress', 'info');
-    return;
-  }
-  
-  refreshInProgress.current = true;
-  try {
-    // ✅ Pass current page, limit, and filters to refresh
-    await refreshCompanyQuotations({ 
-      page: currentPage, 
-      limit: currentLimit,
-      status: activeTab === 'all' ? undefined : activeTab,
-      search: search,
-      sortBy: sort.field,
-      sortDir: sort.dir
-    });
-    await refreshStats();
-    addToast('Data refreshed', 'success');
-  } catch (err) {
-    addToast(err.message || 'Refresh failed', 'error');
-  } finally {
-    refreshInProgress.current = false;
-  }
-}, [refreshCompanyQuotations, refreshStats, addToast, currentPage, currentLimit, activeTab, search, sort]);
-
-const handleApprove = useCallback(async (id) => {
-  setOp(id, 'approve', true);
-  try {
-    const result = await opsApproveQuotation(id);
-    if (result?.success) {
-      addToast('Quotation approved and forwarded to admin', 'success');
+  const handleRefresh = useCallback(async () => {
+    if (refreshInProgress.current) return;
+    refreshInProgress.current = true;
+    try {
       await Promise.all([
-        refreshCompanyQuotations({
-          page: currentPage,
-          limit: currentLimit,
-          status: activeTab === 'all' ? undefined : activeTab,
-          search,
-          sortBy: sort.field,
-          sortDir: sort.dir,
-        }),
-        refreshStats()
+        refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }),
+        refreshStats(),
       ]);
-    } else {
-      addToast(result?.error || 'Failed to approve quotation', 'error');
-    }
-  } catch (error) {
-    addToast(error.message || 'Failed to approve quotation', 'error');
-  } finally {
-    setOp(id, 'approve', false);
-  }
-}, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit]);
+      addToast('Data refreshed', 'success');
+    } catch (err) {
+      addToast(err.message || 'Refresh failed', 'error');
+    } finally { refreshInProgress.current = false; }
+  }, [refreshCompanyQuotations, refreshStats, addToast, currentPage, currentLimit, activeTab, search, sort]);
+
+  const handleApprove = useCallback(async (id) => {
+    setOp(id, 'approve', true);
+    try {
+      const result = await opsApproveQuotation(id);
+      if (result?.success) {
+        addToast('Approved and forwarded to admin', 'success');
+        await Promise.all([refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }), refreshStats()]);
+      } else { addToast(result?.error || 'Failed to approve', 'error'); }
+    } catch (e) { addToast(e.message || 'Failed to approve', 'error'); }
+    finally { setOp(id, 'approve', false); }
+  }, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit, activeTab, search, sort]);
 
   const handleReject = {
-    open: useCallback((quotation) => {
-      setRejectTarget(quotation);
-      setRejectReason('');
-    }, []),
-    close: useCallback(() => setRejectTarget(null), []),
+    open:    useCallback((q) => { setRejectTarget(q); setRejectReason(''); }, []),
+    close:   useCallback(() => setRejectTarget(null), []),
     confirm: useCallback(async () => {
       if (!rejectTarget || !rejectReason.trim()) return;
-      
       setOp(rejectTarget._id, 'reject', true);
       try {
         const result = await opsRejectQuotation(rejectTarget._id, rejectReason);
         if (result?.success) {
           addToast('Quotation rejected', 'success');
-          handleReject.close();
-          await Promise.all([
-            refreshCompanyQuotations({
-              page: currentPage,
-              limit: currentLimit,
-              status: activeTab === 'all' ? undefined : activeTab,
-              search,
-              sortBy: sort.field,
-              sortDir: sort.dir,
-            }),
-            refreshStats()
-          ]);
-        } else {
-          addToast(result?.error || 'Failed to reject quotation', 'error');
-        }
-      } catch (error) {
-        addToast(error.message || 'Failed to reject quotation', 'error');
-      } finally {
-        setOp(rejectTarget._id, 'reject', false);
-      }
-    }, [rejectTarget, rejectReason, opsRejectQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit])
+          setRejectTarget(null);
+          await Promise.all([refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }), refreshStats()]);
+        } else { addToast(result?.error || 'Failed to reject', 'error'); }
+      } catch (e) { addToast(e.message || 'Failed to reject', 'error'); }
+      finally { setOp(rejectTarget?._id, 'reject', false); }
+    }, [rejectTarget, rejectReason, opsRejectQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit, activeTab, search, sort]),
   };
 
-  const handleDownload = useCallback(async (quotation) => {
-    setDownloadLoadingId(quotation._id);
-    try {
-      await downloadQuotationPDF(quotation);
-      addToast('PDF downloaded successfully!', 'success');
-    } catch (error) {
-      addToast(`PDF failed: ${error.message}`, 'error');
-    } finally {
-      setDownloadLoadingId(null);
-    }
+  const handleDownload = useCallback(async (q) => {
+    setDownloadLoadingId(q._id);
+    try { await downloadQuotationPDF(q); addToast('PDF downloaded!', 'success'); }
+    catch (e) { addToast(`PDF failed: ${e.message}`, 'error'); }
+    finally { setDownloadLoadingId(null); }
   }, [addToast]);
 
   const handleView = useCallback((id) => {
-    if (onViewQuotation) {
-      onViewQuotation(id);
-    } else {
-      navigate(`/quotation/${id}`);
-    }
+    if (onViewQuotation) onViewQuotation(id); else navigate(`/quotation/${id}`);
   }, [onViewQuotation, navigate]);
 
-  const handleAwardOpen = useCallback((quotation) => {
-    setAwardModal({
-      open: true,
-      quotation,
-      loading: false
-    });
-  }, []);
-  
-  const handleAwardClose = useCallback(() => {
-    setAwardModal({
-      open: false,
-      quotation: null,
-      loading: false
-    });
-  }, []);
-  
-  const handleAwardConfirm = useCallback(async (awarded, awardNote) => {
+  const handleAwardOpen    = useCallback((q) => setAwardModal({ open: true, quotation: q, loading: false }), []);
+  const handleAwardClose   = useCallback(() => setAwardModal({ open: false, quotation: null, loading: false }), []);
+  const handleAwardConfirm = useCallback(async (awarded, note) => {
     if (!awardModal.quotation) return;
-    
-    setAwardModal(prev => ({ ...prev, loading: true }));
-    
+    setAwardModal(p => ({ ...p, loading: true }));
     try {
-      const result = await awardQuotation(awardModal.quotation._id, awarded, awardNote);
-      
+      const result = await awardQuotation(awardModal.quotation._id, awarded, note);
       if (result?.success) {
-        addToast(
-          awarded 
-            ? `🏆 "${awardModal.quotation.quotationNumber}" marked as Awarded!` 
-            : `"${awardModal.quotation.quotationNumber}" marked as Not Awarded.`,
-          "success"
-        );
-        await Promise.all([
-          refreshCompanyQuotations({
-            page: currentPage,
-            limit: currentLimit,
-            status: activeTab === 'all' ? undefined : activeTab,
-            search,
-            sortBy: sort.field,
-            sortDir: sort.dir,
-          }),
-          refreshStats()
-        ]);
+        addToast(awarded ? `🏆 "${awardModal.quotation.quotationNumber}" Awarded!` : `"${awardModal.quotation.quotationNumber}" Not Awarded.`, 'success');
+        await Promise.all([refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }), refreshStats()]);
         handleAwardClose();
-      } else {
-        addToast(result?.error || "Failed to update award status", "error");
-        setAwardModal(prev => ({ ...prev, loading: false }));
-      }
-    } catch (error) {
-      console.error('Award error:', error);
-      addToast(error.message || "Failed to update award status", "error");
-      setAwardModal(prev => ({ ...prev, loading: false }));
-    }
-  }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose, currentPage, currentLimit]);
+      } else { addToast(result?.error || 'Failed', 'error'); setAwardModal(p => ({ ...p, loading: false })); }
+    } catch (e) { addToast(e.message || 'Failed', 'error'); setAwardModal(p => ({ ...p, loading: false })); }
+  }, [awardModal.quotation, awardQuotation, addToast, refreshCompanyQuotations, refreshStats, handleAwardClose, currentPage, currentLimit, activeTab, search, sort]);
 
   // ── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
-    const handler = (e) => {
+    const h = (e) => {
       if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
-        e.preventDefault(); 
-        searchRef.current?.focus();
+        e.preventDefault(); searchRef.current?.focus();
       }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
   }, []);
-
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
-  // ── Tab configuration ─────────────────────────────────────
+  // ── Tab config ────────────────────────────────────────────
   const TABS = useMemo(() => [
-    { key: 'all',           label: 'All Quotations',     Icon: FileText,     count: tabCountsFromStats.all },
-    { key: 'pending',       label: 'Pending Review',     Icon: Clock,        count: tabCountsFromStats.pending },
-    { key: 'ops_approved',  label: 'Awaiting Admin',     Icon: Shield,       count: tabCountsFromStats.ops_approved },
-    { key: 'ops_rejected',  label: 'Returned by Me',     Icon: Ban,          count: tabCountsFromStats.ops_rejected },
-    { key: 'rejected',      label: 'Rejected by Admin',  Icon: XCircle,      count: tabCountsFromStats.rejected },
-    { key: 'approved',      label: 'Approved',           Icon: CheckCircle,  count: tabCountsFromStats.approved },
-    { key: 'awarded',       label: 'Awarded',            Icon: Award,        count: tabCountsFromStats.awarded },
-  ], [tabCountsFromStats]);
+    { key: 'all',          label: 'All',             Icon: FileText,    count: tabCountsResolved.all },
+    { key: 'pending',      label: 'Pending',         Icon: Clock,       count: tabCountsResolved.pending },
+    { key: 'ops_approved', label: 'Awaiting Admin',  Icon: Shield,      count: tabCountsResolved.ops_approved },
+    { key: 'ops_rejected', label: 'Returned',        Icon: Ban,         count: tabCountsResolved.ops_rejected },
+    { key: 'rejected',     label: 'Admin Rejected',  Icon: XCircle,     count: tabCountsResolved.rejected },
+    { key: 'approved',     label: 'Approved',        Icon: CheckCircle, count: tabCountsResolved.approved },
+    { key: 'awarded',      label: 'Awarded',         Icon: Award,       count: tabCountsResolved.awarded },
+  ], [tabCountsResolved]);
 
-  // ── Render helpers with Shimmer ──────────────────────────
-  const renderStatCards = () => {
-    if (isLoading) {
-      return (
-        <div style={styles.statsGrid}>
-          {[1, 2, 3, 4].map(i => <ShimmerStatCard key={i} />)}
-        </div>
-      );
-    }
-
-    if (isMobile) {
-      const statusCounts = {
-        pending: pendingReview,
-        in_review: awaitingAdmin,
-        approved: 0,
-        awarded: 0,
-        returned: returnedByMe
-      };
-      return (
-        <CompactStatsCard 
-          totalRevenue={totalValue}
-          quotationsCount={totalQuotations}
-          customersCount={0}
-          selectedCurrency={selectedCurrency}
-          statusCounts={statusCounts}
-          loading={false}
-        />
-      );
-    }
-    
-    return (
-      <div style={styles.statsGrid}>
-        <StatCard 
-          label="Total Quotations" 
-          value={totalQuotations} 
-          accent="#6366f1" 
-          iconBg="#eff1ff" 
-          iconColor="#6366f1" 
-          Icon={FileText} 
-          loading={false} 
-          sub="All quotations in system"
-        />
-        <StatCard 
-          label="Pending Review" 
-          value={pendingReview} 
-          accent="#f59e0b" 
-          iconBg="#fef3c7" 
-          iconColor="#f59e0b" 
-          Icon={Clock} 
-          loading={false} 
-          sub="Awaiting your review"
-        />
-        <StatCard 
-          label="Awaiting Admin" 
-          value={awaitingAdmin} 
-          accent="#3b82f6" 
-          iconBg="#dbeafe" 
-          iconColor="#3b82f6" 
-          Icon={Shield} 
-          loading={false} 
-          sub="Forwarded to admin"
-        />
-        <StatCard 
-          label="Returned by You" 
-          value={returnedByMe} 
-          accent="#ef4444" 
-          iconBg="#fee2e2" 
-          iconColor="#ef4444" 
-          Icon={Ban} 
-          loading={false} 
-          sub="Rejected quotations"
-        />
-      </div>
-    );
+  // ── Header button style (same as HomeScreen) ──────────────
+  const headerBtn = (variant) => {
+    const variants = {
+      ghost:  { background: 'transparent', color: '#c7cccf', border: '1px solid rgba(255,255,255,0.14)' },
+      soft:   { background: 'rgba(255,255,255,0.08)', color: '#e6e9ea', border: '1px solid rgba(255,255,255,0.10)' },
+      accent: { background: T.accent, color: '#fff', border: '1px solid transparent' },
+    };
+    return {
+      ...variants[variant], borderRadius: T.radiusSm,
+      padding: isMobile ? '0.4rem 0.7rem' : '0.5rem 0.95rem',
+      fontSize: isMobile ? '0.72rem' : '0.8rem', fontWeight: 600, cursor: 'pointer',
+      display: 'flex', alignItems: 'center', gap: '0.45rem', fontFamily: FONT_STACK,
+      transition: 'all 0.18s ease',
+    };
   };
 
-  const renderContent = () => {
-    if (isLoading) {
-      return (
-        <>
-          {isMobile ? (
-            <div style={{ padding: '1rem' }}>
-              {[1, 2, 3, 4, 5].map(i => <ShimmerCard key={i} />)}
-            </div>
-          ) : (
-            <div style={styles.tableWrapper}>
-              <table style={styles.table}>
-                <thead>
-                  <tr style={{ backgroundColor: '#fafafa' }}>
-                    {['Quote #','Customer','Date','Expiry','Status','Created By','Items','Total','Actions'].map(h => (
-                      <th key={h} style={styles.skeletonHeader}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[1, 2, 3, 4, 5, 6].map(i => <ShimmerTableRow key={i} />)}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      );
-    }
-
-    if (!isLoading && safeQ.length === 0) {
-      return (
-        <div style={styles.emptyState}>
-          <FileText size={isMobile ? 36 : 48} color="#cbd5e1" style={{ marginBottom: '1rem' }}/>
-          <p style={styles.emptyStateTitle}>
-            {search ? `No results for "${search}"` : 'No quotations found'}
-          </p>
-          {search && (
-            <button onClick={clearSearch} style={styles.emptyStateClear}>
-              Clear search
-            </button>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <>
-        {(isMobile || viewMode === 'card') ? (
-          <div style={{ 
-            padding: isMobile ? '1rem' : '1.5rem',
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
-            gap: isMobile ? '0.75rem' : '1rem'
-          }}>
-            {safeQ.length === 0 ? (
-              <div style={{ gridColumn: '1 / -1', padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
-                No results for "<strong>{search}</strong>"
-                <button onClick={clearSearch} style={{ marginLeft: '0.5rem', background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
-              </div>
-            ) : (
-              safeQ.map((q) => (
-                <OpsQuotationCard
-                  key={q._id}
-                  quotation={q}
-                  selectedCurrency={selectedCurrency}
-                  onView={handleView}
-                  onApprove={handleApprove}
-                  onReject={handleReject.open}
-                  onDownload={handleDownload}
-                  onAward={handleAwardOpen}
-                  isDownloading={downloadLoadingId === q._id}
-                  isApproving={isOp(q._id, 'approve')}
-                  isRejecting={isOp(q._id, 'reject')}
-                  isAwarding={isOp(q._id, 'award')} 
-                />
-              ))
-            )}
-          </div>
-        ) : (
-          <div style={styles.tableWrapper}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <SortHeader label="Quote #" field="quotationNumber" sort={sort} onSort={handleSort}/>
-                  <SortHeader label="Customer" field="customer" sort={sort} onSort={handleSort}/>
-                  <SortHeader label="Date" field="date" sort={sort} onSort={handleSort}/>
-                  <SortHeader label="Expiry" field="expiryDate" sort={sort} onSort={handleSort}/>
-                  <SortHeader label="Status" field="status" sort={sort} onSort={handleSort}/>
-                  <SortHeader label="Created By" field="createdBy" sort={sort} onSort={handleSort}/>
-                  <th style={styles.itemsHeaderCell}>Items</th>
-                  <SortHeader label={`Total (${selectedCurrency})`} field="total" sort={sort} onSort={handleSort} align="right"/>
-                  <th style={styles.actionsHeaderCell}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {safeQ.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} style={styles.noResults}>
-                      No results for "<strong>{search}</strong>"
-                      <button onClick={clearSearch} style={styles.clearSearchLink}>Clear</button>
-                    </td>
-                  </tr>
-                ) : (
-                  safeQ.map((q) => {
-                    const isDownloading = downloadLoadingId === q._id;
-                    const canAct = q.status === 'pending';  
-                    const canAward = q.status === 'approved' && ( q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
-                    const isAdminRejected = q.status === 'rejected';
-                    const expired = isExpired(q.expiryDate);
-                    const expiring = !expired && isExpiringSoon(q.expiryDate);
-                  
-                    return (
-                      <tr key={q._id} className="ops-row" style={{
-                        backgroundColor: isAdminRejected ? '#fef2f2' : 'transparent',
-                      }}>
-                        <td style={styles.cell}>
-                          <div style={styles.quoteCell}>
-                            <span style={styles.quoteNumber}>{q.quotationNumber || '—'}</span>
-                            {expired && <ExpiryBadge type="expired" />}
-                            {expiring && <ExpiryBadge type="expiring" />}
-                          </div>
-                        </td>
-                        <td style={styles.cell}>
-                          <div style={styles.customerCell}>
-                            <div style={styles.customerName}>
-                              {q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}
-                            </div>
-                            {q.contact && <div style={styles.contactText}>{q.contact}</div>}
-                          </div>
-                        </td>
-                        <td style={styles.dateCell}>{fmtDate(q.date)}</td>
-                        <td style={styles.dateCell}>
-                          <span style={{ 
-                            color: expired ? '#dc2626' : expiring ? '#d97706' : '#64748b',
-                            fontWeight: expired || expiring ? 600 : 400
-                          }}>
-                            {fmtDate(q.expiryDate)}
-                          </span>
-                        </td>
-                        <td style={styles.cell}>
-                          <StatusBadge status={q.status}/>
-                          <RejectionNote quotation={q}/>
-                        </td>
-                        <td style={styles.cell}>{q.createdBy?.name || '—'}</td>
-                        <td style={{ ...styles.cell, textAlign: 'center' }}>
-                          <ItemsBadge count={q.items?.length ?? 0} />
-                        </td>
-                        <td style={styles.totalCell}>
-                          {fmtCurrency(q.total, selectedCurrency)}
-                        </td>
-                        <td style={styles.actionsCell}>
-                          <div style={styles.actionsContainer}>
-                            <ActionBtn bg="#e0f2fe" color="#0369a1" onClick={() => handleView(q._id)} 
-                              icon={Eye} label="View" title="View quotation" size="small"/>
-                            
-                            {canAct && (
-                              <>
-                                <ActionBtn 
-                                  bg="#dcfce7" 
-                                  color="#166534" 
-                                  onClick={() => handleApprove(q._id)} 
-                                  icon={Check} 
-                                  label="Approve" 
-                                  title="Approve quotation"
-                                  disabled={isOp(q._id, 'approve')}
-                                  size="small"
-                                />
-                                <ActionBtn 
-                                  bg="#fee2e2" 
-                                  color="#991b1b" 
-                                  onClick={() => handleReject.open(q)} 
-                                  icon={X} 
-                                  label="Reject" 
-                                  title="Reject quotation"
-                                  disabled={isOp(q._id, 'reject')}
-                                  size="small"
-                                />
-                              </>
-                            )}
-                            {canAward && (
-                              <ActionBtn 
-                                bg="#e9d5ff" 
-                                color="#6b21a8" 
-                                onClick={() => handleAwardOpen(q)} 
-                                icon={Award} 
-                                label="Award" 
-                                title="Mark as Awarded / Not Awarded"
-                                size="small"
-                                disabled={isOp(q._id, 'award')}
-                              />
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-        
-        {/* Server-side Pagination */}
-        {!isMobile && totalFiltered > 0 && (
-          <PaginationBar
-            total={totalFiltered}
-            page={safePage}
-            limit={currentLimitValue}
-            onPage={goToPage}
-            onLimit={(l) => changeLimit(l)}
-          />
-        )}
-        
-        {/* Mobile Pagination */}
-        {isMobile && totalFiltered > 0 && (
-          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', padding: '0.5rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-              {((safePage - 1) * currentLimitValue) + 1}–{Math.min(safePage * currentLimitValue, totalFiltered)} of {totalFiltered}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button 
-                onClick={() => goToPage(safePage - 1)} 
-                disabled={safePage === 1}
-                style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === 1 ? 'not-allowed' : 'pointer', opacity: safePage === 1 ? 0.5 : 1, fontSize: '0.75rem' }}
-              >
-                Previous
-              </button>
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0f172a' }}>
-                {safePage} / {totalPages}
-              </span>
-              <button 
-                onClick={() => goToPage(safePage + 1)} 
-                disabled={safePage === totalPages}
-                style={{ padding: '0.4rem 0.8rem', borderRadius: 6, border: '1px solid #e2e8f0', background: 'white', cursor: safePage === totalPages ? 'not-allowed' : 'pointer', opacity: safePage === totalPages ? 0.5 : 1, fontSize: '0.75rem' }}
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
-      </>
-    );
+  const thStyle = {
+    padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint,
+    textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left',
+    borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap',
   };
 
-  // ─────────────────────────────────────────────────────────
-  // Main Render (keep your existing JSX with styles)
-  // ─────────────────────────────────────────────────────────
+  const isRefreshing = tableLatchRef.current && quotationsLoading;
+  const showEmptyState = tableLatchRef.current && !quotationsLoading && safeQ.length === 0;
+
+  // ── Render ────────────────────────────────────────────────
   return (
-    <div style={styles.container}>
+    <div style={{ minHeight: '100vh', backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink }}>
       <style>{`
-        @keyframes shimmer {
-          0% { background-position: 200% 0; }
-          100% { background-position: -200% 0; }
-        }
-        ${styles.animations}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        @keyframes ops-spin    { to { transform: rotate(360deg); } }
+        @keyframes ops-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+        @keyframes ops-fade-in { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+        .ops-fade-in { animation: ops-fade-in 0.32s cubic-bezier(0.22,1,0.36,1) both; }
+        .ops-row { transition: background 0.15s ease; }
+        .ops-row:hover td { background: #f9fafb !important; }
       `}</style>
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* Topbar - Responsive */}
-      <div style={{ ...styles.topbar, padding: isMobile ? '0.75rem 1rem' : '0 2rem', flexDirection: isMobile ? 'column' : 'row', height: isMobile ? 'auto' : 60, gap: isMobile ? '0.75rem' : 0 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: isMobile ? '100%' : 'auto' }}>
-          <div>
-            <div style={{ ...styles.dashboardTitle, fontSize: isMobile ? '1rem' : '1.0625rem' }}>
-              ⚙ Ops Dashboard
-            </div>
-            {!isMobile && <CompanyCurrencyDisplay />}
-          </div>
-          {isMobile && (
-            <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8, padding: '0.4rem 0.7rem', color: 'white', cursor: 'pointer' }}>
-              <Menu size={20} />
-            </button>
-          )}
-        </div>
-        
-        {isMobile && <CompanyCurrencyDisplay isMobile={true} />}
-        
-        <div style={{ 
-          display: 'flex', 
-          gap: '0.5rem', 
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          ...(isMobile && !mobileMenuOpen ? { display: 'none' } : { display: 'flex' }),
-          width: isMobile ? '100%' : 'auto',
-          justifyContent: isMobile ? 'center' : 'flex-end'
-        }}>
-          <CompanyCurrencySelector variant="compact" isMobile={isMobile} />
-          <button 
-            onClick={() => navigate('/customers')}
-            style={{
-              backgroundColor: '#e0e7ff',
-              color: '#4f46e5',
-              border: 'none',
-              borderRadius: 8,
-              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-              fontSize: isMobile ? '0.7rem' : '0.8rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem'
-            }}
-          >
-            <Users size={isMobile ? 12 : 14} /> { "Customers"}
-          </button>
-          {/* <button 
-            onClick={() => navigate('/items')}
-            style={{
-              backgroundColor: '#e0e7ff',
-              color: '#4f46e5',
-              border: 'none',
-              borderRadius: 8,
-              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-              fontSize: isMobile ? '0.7rem' : '0.8rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem'
-            }}
-          >
-            <ShoppingCart size={isMobile ? 12 : 14} /> {!isMobile && "Items"}
-          </button> */}
+      {/* ── MODALS ── */}
+      <ConfirmModal
+        open={!!rejectTarget}
+        title="Reject Quotation"
+        message={`Return ${rejectTarget?.quotationNumber} to the creator?`}
+        confirmLabel="Reject"
+        danger
+        loading={isOp(rejectTarget?._id, 'reject')}
+        onConfirm={handleReject.confirm}
+        onCancel={handleReject.close}
+      >
+        <textarea
+          value={rejectReason}
+          onChange={(e) => setRejectReason(e.target.value)}
+          placeholder="Enter rejection reason (required)…"
+          rows={4}
+          style={{ width: '100%', padding: '0.75rem', border: `1.5px solid ${T.line}`, borderRadius: T.radiusSm, fontSize: '0.875rem', fontFamily: FONT_STACK, marginBottom: '0.5rem', resize: 'vertical', outline: 'none', color: T.ink }}
+          autoFocus
+        />
+        <p style={{ fontSize: '0.75rem', color: '#c1352b', margin: 0 }}>Reason is required to reject a quotation.</p>
+      </ConfirmModal>
 
-          <button 
-            onClick={() => navigate('/quotation/new')}
-            style={{
-              backgroundColor: '#10b981',
-              color: 'white',
-              border: 'none',
-              borderRadius: 8,
-              padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.875rem',
-              fontSize: isMobile ? '0.7rem' : '0.8rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem'
-            }}
-          >
-            <FileText size={isMobile ? 12 : 14} /> {!isMobile && "New Quotation"}
-          </button>
-          <button onClick={handleLogout} style={{ ...styles.logoutBtn, padding: isMobile ? '0.35rem 0.7rem' : '0.45rem 0.85rem', fontSize: isMobile ? '0.7rem' : '0.8rem' }}>
-            <LogOut size={isMobile ? 12 : 15}/> {!isMobile && "Logout"}
-          </button>
-        </div>
-      </div>
-
-      <div style={{ ...styles.mainContent, padding: isMobile ? '0.75rem' : '2rem' }}>
-        {/* Error banner */}
-        {loadError && (
-          <div style={styles.errorBanner}>
-            <div style={styles.errorMessage}>
-              <AlertCircle size={16}/> {loadError}
-            </div>
-            <div style={styles.errorActions}>
-              <button onClick={() => clearError()} style={styles.errorDismiss}>
-                <X size={14}/>
-              </button>
-              <button onClick={handleRefresh} style={styles.errorRetry}>
-                <RefreshCw size={13}/> Retry
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Stats Cards */}
-        {renderStatCards()}
-
-        {/* Table Card */}
-        <div style={styles.tableCard}>
-          {/* Header */}
-          <div style={styles.tableHeader}>
-            <div style={styles.tabContainer}>
-              {TABS.map(({ key, label, Icon: I, count }) => {
-                const active = activeTab === key;
-                const alertColor = key === 'pending' ? '#f59e0b' : key === 'ops_approved' ? '#3b82f6' : '#ef4444';
-                const hasAlert = count > 0;
-                
-                return (
-                  <button key={key} className="ops-tab" onClick={() => handleTabChange(key)} style={{
-                    ...styles.tabButton,
-                    backgroundColor: active ? '#fff' : 'transparent',
-                    color: active ? '#0f172a' : '#64748b',
-                    boxShadow: active ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                    padding: isMobile ? '0.3rem 0.6rem' : '0.4rem 0.875rem',
-                    fontSize: isMobile ? '0.7rem' : '0.8rem'
-                  }}>
-                    <I size={isMobile ? 11 : 13}/>
-                    {!isMobile && label}
-                    <span style={{
-                      backgroundColor: active ? (hasAlert ? alertColor : '#0f172a') : (hasAlert ? alertColor : '#e2e8f0'),
-                      color: (active || hasAlert) ? '#fff' : '#64748b',
-                      ...styles.tabCount,
-                      padding: isMobile ? '1px 5px' : '1px 7px',
-                      fontSize: isMobile ? '0.6rem' : '0.68rem'
-                    }}>
-                      {isLoading ? '…' : count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div style={styles.headerActions}>
-              <button onClick={handleRefresh} disabled={isLoading || refreshInProgress.current} style={styles.refreshBtn}>
-                <RefreshCw size={isMobile ? 14 : 14} color="#64748b" style={(isLoading || refreshInProgress.current) ? styles.spin : {}}/>
-              </button>
-              <div style={styles.searchBox}>
-                <Search size={isMobile ? 14 : 14} color="#94a3b8"/>
-                <input
-                  ref={searchRef}
-                  style={{ ...styles.searchInput, width: isMobile ? '100%' : 210 }}
-                  placeholder="Search… (press /)"
-                  value={searchInput}
-                  onChange={handleSearchChange}
-                />
-                {searchInput && (
-                  <button onClick={clearSearch} style={styles.clearSearchBtn}>
-                    <X size={13}/>
-                  </button>
-                )}
-              </div>
-              {!isMobile && <ViewToggle view={viewMode} onViewChange={setViewMode} isMobile={isMobile} />}
-            </div>
-          </div>
-
-          {/* Content with Shimmer */}
-          {renderContent()}
-        </div>
-      </div>
-
-      {/* Reject Modal */}
-      {rejectTarget && (
-        <ConfirmModal
-          open={true}
-          title="Reject Quotation"
-          message={`Are you sure you want to reject ${rejectTarget.quotationNumber}? This will return it to the creator.`}
-          confirmLabel="Reject"
-          danger
-          onConfirm={handleReject.confirm}
-          onCancel={handleReject.close}
-          loading={isOp(rejectTarget._id, 'reject')}
-        >
-          <textarea
-            value={rejectReason}
-            onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="Enter rejection reason (required)…"
-            rows={4}
-            style={styles.rejectTextarea}
-            autoFocus
-          />
-          <p style={styles.rejectHint}>Reason is required to reject a quotation.</p>
-        </ConfirmModal>
-      )}
-      
-      {/* Award Modal */}
       <AwardModal
         open={awardModal.open}
         quotation={awardModal.quotation}
@@ -1274,422 +652,327 @@ const handleApprove = useCallback(async (id) => {
         onConfirm={handleAwardConfirm}
         loading={awardModal.loading}
       />
+
+      {/* ── HEADER — identical structure to HomeScreen ── */}
+      <div style={{
+        backgroundColor: T.ink,
+        padding: isMobile ? '0.75rem 1rem' : '0 2rem',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        minHeight: 64, position: 'sticky', top: 0, zIndex: 50,
+        flexWrap: 'wrap', gap: '0.75rem',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: isMobile ? '100%' : 'auto' }}>
+          <div>
+            <div style={{ fontSize: isMobile ? '1rem' : '1.05rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} />
+              Ops Dashboard
+            </div>
+            {!isMobile && <div style={{ marginTop: 2 }}><CompanyCurrencyDisplay /></div>}
+          </div>
+          {isMobile && (
+            <button onClick={() => setUiState(p => ({ ...p, mobileMenuOpen: !p.mobileMenuOpen }))} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 8, padding: '0.4rem 0.7rem', color: 'white', cursor: 'pointer' }}>
+              <Menu size={20} />
+            </button>
+          )}
+        </div>
+
+        {isMobile && <CompanyCurrencyDisplay />}
+
+        <div style={{
+          ...(isMobile && !uiState.mobileMenuOpen ? { display: 'none' } : { display: 'flex' }),
+          gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap',
+          width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'center' : 'flex-end',
+        }}>
+          <CompanyCurrencySelector variant="compact" />
+          <button onClick={() => navigate('/customers')} style={headerBtn('soft')}>
+            <Users size={isMobile ? 12 : 14} /> Customers
+          </button>
+          <button onClick={() => navigate('/quotation/new')} style={headerBtn('accent')}>
+            <FileText size={isMobile ? 12 : 14} /> {isMobile ? 'New' : 'New Quotation'}
+          </button>
+          <button onClick={handleLogout} style={headerBtn('ghost')}>
+            <LogOut size={isMobile ? 12 : 15} /> Logout
+          </button>
+        </div>
+      </div>
+
+      {/* ── MAIN CONTENT ── */}
+      <div style={{ maxWidth: 1400, margin: '0 auto', padding: isMobile ? '1.25rem 1rem' : '2.5rem 2rem' }}>
+
+        {/* Error banner */}
+        {loadError && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fdeceb', border: '1px solid #f8d6d2', borderRadius: 12, padding: '0.875rem 1rem', marginBottom: '1.5rem', fontSize: '0.875rem', color: '#c1352b', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><AlertCircle size={16} /> {loadError}</div>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <button onClick={() => clearError()} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c1352b', padding: 0 }}><X size={14} /></button>
+              <button onClick={handleRefresh} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#c1352b', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600, fontSize: '0.8rem' }}><RefreshCw size={13} /> Retry</button>
+            </div>
+          </div>
+        )}
+
+        {/* ── STATS ── */}
+        {showStatsShimmer ? (
+          <ShimmerStatsCard isMobile={isMobile} />
+        ) : (
+          <div className="ops-fade-in" style={{ marginBottom: '1.75rem' }}>
+            {isMobile ? (
+              <CompactStatsCard
+                totalRevenue={totalValue}
+                quotationsCount={totalQuotations}
+                customersCount={0}
+                selectedCurrency={selectedCurrency}
+                statusCounts={{ pending: pendingReview, in_review: awaitingAdmin, approved: 0, awarded: 0, returned: returnedByMe }}
+                loading={false}
+              />
+            ) : (
+              <DesktopStatsGrid
+                totalRevenue={totalValue}
+                quotationsCount={totalQuotations}
+                customersCount={0}
+                selectedCurrency={selectedCurrency}
+                statusCounts={{ pending: pendingReview, in_review: awaitingAdmin, approved: 0, awarded: 0, returned: returnedByMe }}
+                loading={false}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ── TABLE CARD ── */}
+        <div style={{ backgroundColor: T.surface, borderRadius: T.radius, boxShadow: T.shadow, overflow: 'visible', position: 'relative', border: `1px solid ${T.line}` }}>
+
+          {/* Toolbar */}
+          <div style={{ padding: isMobile ? '0.9rem 1rem' : '1.25rem 1.5rem', borderBottom: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.9rem' }}>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '0.15rem', padding: '0.3rem', backgroundColor: T.canvas, borderRadius: 12, overflowX: isMobile ? 'auto' : 'visible', width: isMobile ? '100%' : 'auto', border: `1px solid ${T.line}` }}>
+              {TABS.map(({ key, label, Icon: I, count }) => {
+                const active    = activeTab === key;
+                const isPending = key === 'pending';
+                const isReturned= key === 'ops_rejected' || key === 'rejected';
+                const hasAlert  = (isPending || isReturned) && count > 0;
+                const alertColor= isPending ? '#b58a3c' : '#a85563';
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleTabChange(key)}
+                    style={{
+                      padding: isMobile ? '0.35rem 0.65rem' : '0.45rem 0.9rem',
+                      borderRadius: 9, border: 'none', cursor: 'pointer',
+                      fontSize: isMobile ? '0.72rem' : '0.8rem',
+                      fontWeight: active ? 600 : 500,
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                      backgroundColor: active ? T.surface : 'transparent',
+                      color: active ? T.ink : T.inkSoft,
+                      boxShadow: active ? '0 1px 3px rgba(20,22,24,0.08)' : 'none',
+                      whiteSpace: 'nowrap', transition: 'all 0.15s ease', fontFamily: FONT_STACK,
+                    }}
+                  >
+                    <I size={isMobile ? 11 : 13} />
+                    {!isMobile && label}
+                    <span style={{
+                      backgroundColor: hasAlert ? alertColor : active ? T.ink : T.line,
+                      color: hasAlert || active ? '#fff' : T.inkSoft,
+                      borderRadius: 999, padding: isMobile ? '1px 5px' : '1px 7px',
+                      fontSize: isMobile ? '0.6rem' : '0.66rem', fontWeight: 700, minWidth: 16, textAlign: 'center',
+                    }}>
+                      {showStatsShimmer ? '…' : count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Search + actions */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', width: isMobile ? '100%' : 'auto' }}>
+              <button onClick={handleRefresh} disabled={isRefreshing} style={{ width: isMobile ? 38 : 36, height: isMobile ? 38 : 36, border: `1px solid ${T.line}`, borderRadius: T.radiusSm, background: T.canvas, cursor: isRefreshing ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: isRefreshing ? 0.5 : 1 }}>
+                <RefreshCw size={14} color={T.inkSoft} style={isRefreshing ? { animation: 'ops-spin 1s linear infinite' } : {}} />
+              </button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', backgroundColor: T.canvas, border: `1px solid ${T.line}`, borderRadius: T.radiusSm, padding: isMobile ? '0.5rem 0.8rem' : '0.45rem 0.8rem', flex: isMobile ? 1 : 'auto' }}>
+                <Search size={14} color={T.inkFaint} />
+                <input
+                  ref={searchRef}
+                  style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '0.875rem', color: T.ink, width: isMobile ? '100%' : 210, fontFamily: FONT_STACK }}
+                  placeholder="Search…  /"
+                  value={searchInput}
+                  onChange={handleSearchChange}
+                  disabled={showTableShimmer}
+                />
+                {searchInput && (
+                  <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, padding: 0 }}><X size={13} /></button>
+                )}
+              </div>
+
+              <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} />
+            </div>
+          </div>
+
+          {/* Refreshing overlay */}
+          {isRefreshing && !showTableShimmer && (
+            <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(255,255,255,0.80)', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: T.radius, backdropFilter: 'blur(1.5px)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', background: T.surface, padding: isMobile ? '1rem 1.5rem' : '1.25rem 2rem', borderRadius: 14, boxShadow: T.shadow, border: `1px solid ${T.line}` }}>
+                <RefreshCw size={isMobile ? 20 : 24} color={T.accent} style={{ animation: 'ops-spin 0.8s linear infinite' }} />
+                <span style={{ fontSize: isMobile ? '0.75rem' : '0.82rem', color: T.accentInk, fontWeight: 600 }}>Refreshing…</span>
+              </div>
+            </div>
+          )}
+
+          {/* Content */}
+          {showTableShimmer ? (
+            /* Skeleton table */
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    {['Quote #','Customer','Date','Expiry','Status','Created By','Items','Total','Actions'].map(h => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="ops-fade-in">
+              {showEmptyState ? (
+                <div style={{ textAlign: 'center', padding: isMobile ? '3.5rem 1rem' : '5rem 2rem', color: T.inkFaint }}>
+                  <div style={{ width: 64, height: 64, borderRadius: '50%', background: T.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem' }}>
+                    <FileText size={28} color={T.accent} />
+                  </div>
+                  <p style={{ fontWeight: 600, fontSize: isMobile ? '0.95rem' : '1.05rem', color: T.ink, marginBottom: '0.4rem' }}>
+                    {search ? `No results for "${search}"` : 'No quotations found'}
+                  </p>
+                  {search && (
+                    <button onClick={clearSearch} style={{ background: T.accent, color: '#fff', border: 'none', borderRadius: T.radiusSm, padding: '0.6rem 1.1rem', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer', fontFamily: FONT_STACK }}>
+                      Clear search
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* Card view */}
+                  {(isMobile || uiState.viewMode === 'card') ? (
+                    <div style={{ padding: isMobile ? '1rem' : '1.5rem', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2,1fr)', gap: isMobile ? '0.75rem' : '1rem' }}>
+                      {safeQ.map(q => (
+                        <OpsQuotationCard
+                          key={q._id}
+                          quotation={q}
+                          selectedCurrency={selectedCurrency}
+                          onView={handleView}
+                          onApprove={handleApprove}
+                          onReject={handleReject.open}
+                          onDownload={handleDownload}
+                          onAward={handleAwardOpen}
+                          isDownloading={downloadLoadingId === q._id}
+                          isApproving={isOp(q._id, 'approve')}
+                          isRejecting={isOp(q._id, 'reject')}
+                          isAwarding={isOp(q._id, 'award')}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    /* Table view */
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr>
+                            <SortHeader label="Quote #"    field="quotationNumber" sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <SortHeader label="Customer"   field="customer"        sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <SortHeader label="Date"       field="date"            sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <SortHeader label="Expiry"     field="expiryDate"      sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <SortHeader label="Status"     field="status"          sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <SortHeader label="Created By" field="createdBy"       sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
+                            <th style={{ ...thStyle, textAlign: 'center' }}>Items</th>
+                            <SortHeader label="Total"      field="total"           sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} align="right" />
+                            <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {safeQ.map(q => {
+                            const expired    = isExpired(q.expiryDate);
+                            const expiring   = !expired && isExpiringSoon(q.expiryDate);
+                            const canAct     = q.status === 'pending';
+                            const canAward   = q.status === 'approved' && (q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
+                            const isAdminRej = q.status === 'rejected';
+                            return (
+                              <tr key={q._id} className="ops-row" style={{ borderBottom: `1px solid ${T.lineSoft}`, backgroundColor: isAdminRej ? '#fef9f9' : 'transparent' }}>
+                                {/* Quote # */}
+                                <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{q.quotationNumber || '—'}</span>
+                                    {expired  && <ExpiryBadge type="expired" />}
+                                    {expiring && <ExpiryBadge type="expiring" />}
+                                  </div>
+                                </td>
+                                {/* Customer */}
+                                <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
+                                  <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
+                                  {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2 }}>{q.contact}</div>}
+                                  <RejectionNote quotation={q} />
+                                </td>
+                                {/* Date */}
+                                <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{fmtDate(q.date)}</td>
+                                {/* Expiry */}
+                                <td style={{ padding: '1rem', fontSize: '0.8rem', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
+                                  <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>{fmtDate(q.expiryDate)}</span>
+                                </td>
+                                {/* Status */}
+                                <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
+                                  <EnhancedStatusBadge status={q.status} quotation={q} />
+                                  <RejectionNote quotation={q} />
+                                </td>
+                                {/* Created by */}
+                                <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle' }}>{q.createdBy?.name || '—'}</td>
+                                {/* Items */}
+                                <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'center' }}>
+                                  <span style={{ background: T.lineSoft, color: T.inkSoft, borderRadius: 6, padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600 }}>
+                                    {q.items?.length ?? 0}
+                                  </span>
+                                </td>
+                                {/* Total */}
+                                <td style={{ padding: '1rem', fontSize: '0.9rem', fontWeight: 700, color: T.ink, verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                  {fmtCurrency(q.total, selectedCurrency)}
+                                </td>
+                                {/* Actions */}
+                                <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
+                                  <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                    <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation" />
+                                    {canAct && (
+                                      <>
+                                        <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove(q._id)} icon={Check} label="Approve" title="Approve" disabled={isOp(q._id, 'approve')} />
+                                        <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleReject.open(q)} icon={X} label="Reject" title="Reject" disabled={isOp(q._id, 'reject')} />
+                                      </>
+                                    )}
+                                    {canAward && (
+                                      <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAwardOpen(q)} icon={Award} label="Award" title="Mark awarded" disabled={isOp(q._id, 'award')} />
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Pagination */}
+                  <PaginationBar
+                    total={totalFiltered}
+                    page={currentPage}
+                    limit={currentLimit}
+                    totalPages={totalPages}
+                    onPageChange={goToPage}
+                    onLimitChange={changeLimit}
+                  />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
- 
- 
-// ─────────────────────────────────────────────────────────────
-// Styles
-// ─────────────────────────────────────────────────────────────
-const styles = {
-  animations: `
-    @keyframes slideIn { from { transform:translateX(20px);opacity:0; } to { transform:translateX(0);opacity:1; } }
-    @keyframes popIn   { from { transform:scale(0.95);opacity:0; } to { transform:scale(1);opacity:1; } }
-    @keyframes spin    { to { transform:rotate(360deg); } }
-    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
-    .ops-row:hover td  { background:#f8fafc !important; }
-    .ops-nav-btn:hover     { opacity:0.8 !important; }
-    .ops-tab:hover         { background:rgba(255,255,255,0.6) !important; }
-    .ops-action-btn:hover:not(:disabled) { opacity:0.8 !important; transform:translateY(-1px); }
-  `,
-
-  container: {
-    minHeight: '100vh',
-    backgroundColor: '#f1f5f9',
-    fontFamily: "'Segoe UI', system-ui, sans-serif"
-  },
-
-  topbar: {
-    backgroundColor: '#0f172a',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    position: 'sticky',
-    top: 0,
-    zIndex: 50,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.25)'
-  },
-
-  dashboardTitle: {
-    fontWeight: 800,
-    color: 'white',
-    letterSpacing: '-0.01em'
-  },
-
-  topbarActions: {
-    display: 'flex',
-    gap: '0.625rem',
-    alignItems: 'center'
-  },
-
-  logoutBtn: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    color: '#94a3b8',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 8,
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.4rem'
-  },
-
-  mainContent: {
-    maxWidth: 1400,
-    margin: '0 auto'
-  },
-
-  errorBanner: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#fef2f2',
-    border: '1px solid #fecaca',
-    borderRadius: 10,
-    padding: '0.875rem 1rem',
-    marginBottom: '1.25rem',
-    fontSize: '0.875rem',
-    color: '#991b1b',
-    flexWrap: 'wrap',
-    gap: '0.5rem'
-  },
-
-  errorMessage: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem'
-  },
-
-  errorActions: {
-    display: 'flex',
-    gap: '0.5rem',
-    alignItems: 'center'
-  },
-
-  errorDismiss: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    color: '#991b1b',
-    padding: 0
-  },
-
-  errorRetry: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    color: '#991b1b',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.3rem',
-    fontWeight: 600,
-    fontSize: '0.8rem'
-  },
-
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4,1fr)',
-    gap: '1rem',
-    marginBottom: '1.5rem'
-  },
-
-  tableCard: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
-    overflow: 'visible',
-    position: 'relative'
-  },
-
-  tableHeader: {
-    padding: '1.125rem 1.5rem',
-    borderBottom: '1px solid #f1f5f9',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: '0.75rem'
-  },
-
-  tabContainer: {
-    display: 'flex',
-    gap: '0.2rem',
-    padding: '0.35rem',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    overflowX: 'auto',
-    width: '100%'
-  },
-
-  tabButton: {
-    borderRadius: 8,
-    border: 'none',
-    cursor: 'pointer',
-    fontWeight: 600,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.35rem',
-    transition: 'all 0.15s',
-    whiteSpace: 'nowrap'
-  },
-
-  tabCount: {
-    borderRadius: 999,
-    fontWeight: 700
-  },
-
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.75rem',
-    flexWrap: 'wrap'
-  },
-
-  refreshBtn: {
-    width: 34,
-    height: 34,
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    background: '#f8fafc',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-
-  searchBox: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    backgroundColor: '#f8fafc',
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    padding: '0.4rem 0.75rem',
-    flex: 1
-  },
-
-  searchInput: {
-    border: 'none',
-    background: 'transparent',
-    outline: 'none',
-    fontSize: '0.875rem',
-    color: '#0f172a'
-  },
-
-  clearSearchBtn: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    color: '#94a3b8',
-    padding: 0
-  },
-
-  refreshOverlay: {
-    position: 'absolute',
-    inset: 0,
-    backgroundColor: 'rgba(255,255,255,0.72)',
-    zIndex: 10,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    backdropFilter: 'blur(1px)'
-  },
-
-  refreshCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '0.75rem',
-    background: 'white',
-    padding: '1.25rem 2rem',
-    borderRadius: 12,
-    boxShadow: '0 4px 24px rgba(15,23,42,0.12)',
-    border: '1px solid #e2e8f0'
-  },
-
-  refreshText: {
-    fontSize: '0.82rem',
-    color: '#6366f1',
-    fontWeight: 700
-  },
-
-  spin: {
-    animation: 'spin 0.8s linear infinite'
-  },
-
-  tableWrapper: {
-    overflowX: 'auto'
-  },
-
-  table: {
-    width: '100%',
-    borderCollapse: 'collapse'
-  },
-
-  itemsHeaderCell: {
-    padding: '0.75rem 1rem',
-    fontSize: '0.72rem',
-    fontWeight: 700,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    textAlign: 'center',
-    borderBottom: '1px solid #f1f5f9',
-    backgroundColor: '#fafafa',
-    whiteSpace: 'nowrap'
-  },
-
-  actionsHeaderCell: {
-    padding: '0.75rem 1rem',
-    fontSize: '0.72rem',
-    fontWeight: 700,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    textAlign: 'center',
-    borderBottom: '1px solid #f1f5f9',
-    backgroundColor: '#fafafa',
-    whiteSpace: 'nowrap'
-  },
-
-  cell: {
-    padding: '0.85rem 1rem',
-    borderBottom: '1px solid #f8fafc',
-    verticalAlign: 'middle'
-  },
-
-  dateCell: {
-    padding: '0.85rem 1rem',
-    fontSize: '0.8rem',
-    color: '#64748b',
-    borderBottom: '1px solid #f8fafc',
-    verticalAlign: 'middle',
-    whiteSpace: 'nowrap'
-  },
-
-  totalCell: {
-    padding: '0.85rem 1rem',
-    fontSize: '0.875rem',
-    fontWeight: 700,
-    color: '#0f172a',
-    borderBottom: '1px solid #f8fafc',
-    verticalAlign: 'middle',
-    textAlign: 'right',
-    whiteSpace: 'nowrap'
-  },
-
-  actionsCell: {
-    padding: '0.75rem 1rem',
-    borderBottom: '1px solid #f8fafc',
-    verticalAlign: 'middle'
-  },
-
-  actionsContainer: {
-    display: 'flex',
-    gap: '0.3rem',
-    justifyContent: 'center',
-    flexWrap: 'wrap'
-  },
-
-  quoteCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.4rem',
-    flexWrap: 'wrap'
-  },
-
-  quoteNumber: {
-    fontWeight: 700,
-    color: '#0f172a',
-    fontFamily: 'monospace',
-    fontSize: '0.8rem'
-  },
-
-  customerCell: {
-    fontWeight: 600,
-    color: '#0f172a',
-    fontSize: '0.875rem'
-  },
-
-  customerName: {
-    fontWeight: 600,
-    color: '#0f172a',
-    fontSize: '0.875rem'
-  },
-
-  contactText: {
-    fontSize: '0.75rem',
-    color: '#94a3b8',
-    marginTop: 2
-  },
-
-  emptyState: {
-    textAlign: 'center',
-    padding: '4rem 2rem',
-    color: '#94a3b8'
-  },
-
-  emptyStateTitle: {
-    fontWeight: 600,
-    fontSize: '1rem',
-    color: '#475569',
-    marginBottom: '0.5rem'
-  },
-
-  emptyStateClear: {
-    marginTop: '0.5rem',
-    background: 'none',
-    border: 'none',
-    color: '#6366f1',
-    cursor: 'pointer',
-    fontWeight: 600,
-    fontSize: '0.875rem'
-  },
-
-  noResults: {
-    padding: '3rem',
-    textAlign: 'center',
-    color: '#94a3b8',
-    fontSize: '0.875rem'
-  },
-
-  clearSearchLink: {
-    marginLeft: '0.5rem',
-    background: 'none',
-    border: 'none',
-    color: '#6366f1',
-    cursor: 'pointer',
-    fontWeight: 600,
-    fontSize: '0.875rem'
-  },
-
-  skeletonHeader: {
-    padding: '0.75rem 1rem',
-    fontSize: '0.72rem',
-    fontWeight: 700,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    borderBottom: '1px solid #f1f5f9',
-    whiteSpace: 'nowrap'
-  },
-
-  rejectTextarea: {
-    width: '100%',
-    padding: '0.75rem',
-    border: '1.5px solid #e2e8f0',
-    borderRadius: 8,
-    fontSize: '0.875rem',
-    fontFamily: 'inherit',
-    marginBottom: '0.5rem',
-    resize: 'vertical'
-  },
-
-  rejectHint: {
-    fontSize: '0.75rem',
-    color: '#ef4444',
-    margin: 0
-  }
-};
