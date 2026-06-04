@@ -1,5 +1,5 @@
-import React from "react";
-import { Plus, Trash2, Upload } from "lucide-react";
+import React, { useState } from "react";
+import { Plus, Trash2, Upload, AlertCircle } from "lucide-react";
 
 // Simple Section Structure
 export const newSection = () => ({
@@ -60,9 +60,13 @@ export default function TermsEditor({
   onChange,
   termsImages = [],
   onTermsImagesUpload,
-  onRemoveTermsImage
+  onRemoveTermsImage,
+  onError, // optional: parent can surface this via its snackbar/toast
 }) {
   const safeSections = Array.isArray(sections) && sections.length > 0 ? sections : [newSection()];
+
+  // Inline error so the component gives feedback even with no parent handler.
+  const [uploadError, setUploadError] = useState("");
 
   const updateSection = (id, patch) => {
     onChange(prev => prev.map(s => s?.id === id ? { ...s, ...patch } : s));
@@ -77,24 +81,35 @@ export default function TermsEditor({
     onChange(prev => prev.filter(s => s?.id !== id));
   };
 
-  // Pass raw File objects through to the parent handler, which compresses and
-  // uploads them directly to S3. (Previously this FileReader-ed them into base64,
-  // which bypassed the S3 upload and bloated the payload.)
+  const raiseError = (msg) => {
+    setUploadError(msg);
+    if (onError) onError(msg);
+  };
+
+  // Only images are allowed. If the user picks any non-image file, reject the
+  // whole selection with a clear error rather than silently dropping it.
   const handleImageUpload = (e) => {
-    const files = Array.from(e.target.files);
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // reset so the same file can be re-picked after fixing
     if (files.length === 0) return;
 
-    const validFiles = files.filter(file => file.type.startsWith('image/'));
-    if (validFiles.length === 0) {
-      e.target.value = "";
-      return;
+    const nonImages = files.filter(file => !file.type.startsWith("image/"));
+
+    if (nonImages.length > 0) {
+      const names = nonImages.map(f => `"${f.name}"`).join(", ");
+      raiseError(
+        nonImages.length === 1
+          ? `${names} is not an image. Only image files (JPG, PNG, GIF, WebP) are allowed.`
+          : `${names} are not images. Only image files (JPG, PNG, GIF, WebP) are allowed.`
+      );
+      return; // reject the entire selection — nothing gets uploaded
     }
 
+    // All good — clear any previous error and hand the valid images to the parent.
+    setUploadError("");
     if (onTermsImagesUpload) {
-      onTermsImagesUpload(validFiles);
+      onTermsImagesUpload(files);
     }
-
-    e.target.value = "";
   };
 
   return (
@@ -157,6 +172,26 @@ export default function TermsEditor({
               style={{ display: "none" }}
             />
           </div>
+
+          {/* Non-image rejection error */}
+          {uploadError && (
+            <div style={{
+              marginTop: "0.75rem",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "0.5rem",
+              background: "#fdeceb",
+              border: "1px solid #f8d6d2",
+              borderRadius: "8px",
+              padding: "0.6rem 0.8rem",
+              fontSize: "0.8rem",
+              color: "#c1352b",
+              fontWeight: 500
+            }}>
+              <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>{uploadError}</span>
+            </div>
+          )}
 
           {/* Preview Uploaded Images */}
           {termsImages && termsImages.length > 0 && (

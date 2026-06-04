@@ -151,28 +151,28 @@ const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   try {
-    _browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process',
-      ],
-    });
+    // _browser = await puppeteer.launch({
+    //   headless: true,
+    //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    //   args: [
+    //     '--no-sandbox',
+    //     '--disable-setuid-sandbox',
+    //     '--disable-dev-shm-usage',
+    //     '--disable-gpu',
+    //     '--no-zygote',
+    //     '--single-process',
+    //   ],
+    // });
 
-  //    _browser = await puppeteer.launch({
-  //   headless: true,
-  //   args: [
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //   ],
-  // });
+     _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
   
     _browser.on('disconnected', () => { 
       _browser = null;
@@ -745,7 +745,7 @@ exports.createQuotation = async (req, res) => {
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
-    quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,  quotationNumber, 
+    quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions,  quotationNumber, 
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
@@ -885,6 +885,23 @@ exports.createQuotation = async (req, res) => {
             });
           }
         } catch (uploadError) { logger.error(`Failed to upload terms image: ${uploadError.message}`); }
+      }
+    }
+  }
+
+  // Merge in terms images that were ALREADY uploaded to S3 on the client.
+  // These arrive as `existingTermsImages` (each with an s3Key) and must be
+  // persisted alongside any newly-uploaded base64 images — otherwise an
+  // already-uploaded terms image is silently dropped and never shows on view.
+  if (Array.isArray(existingTermsImages) && existingTermsImages.length > 0) {
+    for (const img of existingTermsImages) {
+      if (img && img.s3Key) {
+        processedTermsImages.push({
+          s3Key: img.s3Key,
+          fileName: img.fileName || 'terms_image',
+          uploadedAt: img.uploadedAt ? new Date(img.uploadedAt) : new Date(),
+          storageProvider: 's3'
+        });
       }
     }
   }

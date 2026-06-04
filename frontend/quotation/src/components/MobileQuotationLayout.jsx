@@ -14,55 +14,97 @@ import headerImage from '../assets/header.png';
 // ============================================================
 // Mobile Field Component (Updated with read-only support)
 // ============================================================
-const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false }) => (
-  <div style={styles.fieldCard}>
-    <label style={styles.fieldLabel}>
-      {label}{required && ' *'}
-      {isReadOnly && isEditing && (
-        <span style={{ marginLeft: '8px', fontSize: '10px', color: '#6b7280' }}>🔒 Auto-filled</span>
-      )}
-    </label>
-    {isEditing && !isReadOnly ? (
-      type === 'textarea' ? (
-        <textarea
-          value={value || ''}
-          onChange={(e) => onChange(field, e.target.value)}
-          rows={3}
-          style={{
-            ...inputStyle,
-            borderColor: error ? '#dc2626' : undefined,
-            backgroundColor: error ? '#fef2f2' : undefined,
-            resize: 'vertical',
-          }}
-        />
+ 
+const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false, showSnack }) => {
+  // Check if this is a phone field
+  const isPhoneField = field === 'customerPhone' || field === 'ourContact' || field === 'companyPhone';
+  
+  // Handle phone number validation
+  const handlePhoneChange = (e) => {
+    const newValue = e.target.value;
+    
+    // Remove any letters as user types
+    let cleanedValue = newValue.replace(/[a-zA-Z]/g, '');
+    
+    // Validate the cleaned value
+    const validation = validatePhoneNumber(cleanedValue);
+    if (!validation.isValid && cleanedValue) {
+      showSnack?.(validation.error, 'error');
+    }
+    
+    onChange(field, cleanedValue);
+  };
+  
+  const handlePhoneKeyDown = (e) => {
+    // Prevent letters from being typed
+    if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
+      e.preventDefault();
+      showSnack?.('Phone number cannot contain letters', 'error');
+    }
+  };
+  
+  return (
+    <div style={styles.fieldCard}>
+      <label style={styles.fieldLabel}>
+        {label}{required && ' *'}
+        {isReadOnly && isEditing && (
+          <span style={{ marginLeft: '8px', fontSize: '10px', color: '#6b7280' }}>🔒 Auto-filled</span>
+        )}
+      </label>
+      {isEditing && !isReadOnly ? (
+        type === 'textarea' ? (
+          <textarea
+            value={value || ''}
+            onChange={(e) => onChange(field, e.target.value)}
+            rows={3}
+            style={{
+              ...inputStyle,
+              borderColor: error ? '#dc2626' : undefined,
+              backgroundColor: error ? '#fef2f2' : undefined,
+              resize: 'vertical',
+            }}
+          />
+        ) : isPhoneField ? (
+          <input
+            type="tel"
+            value={value || ''}
+            onChange={handlePhoneChange}
+            onKeyDown={handlePhoneKeyDown}
+            placeholder="e.g., +971 50 123 4567"
+            style={{
+              ...inputStyle,
+              borderColor: error ? '#dc2626' : undefined,
+              backgroundColor: error ? '#fef2f2' : undefined,
+            }}
+          />
+        ) : (
+          <input
+            type={type}
+            value={value || ''}
+            onChange={(e) => onChange(field, e.target.value)}
+            style={{
+              ...inputStyle,
+              borderColor: error ? '#dc2626' : undefined,
+              backgroundColor: error ? '#fef2f2' : undefined,
+            }}
+          />
+        )
       ) : (
-        <input
-          type={type}
-          value={value || ''}
-          onChange={(e) => onChange(field, e.target.value)}
-          style={{
-            ...inputStyle,
-            borderColor: error ? '#dc2626' : undefined,
-            backgroundColor: error ? '#fef2f2' : undefined,
-          }}
-        />
-      )
-    ) : (
-      <div style={{
-        ...styles.fieldValue,
-        ...(isReadOnly && isEditing ? { backgroundColor: '#f3f4f6', padding: '0.5rem 0.75rem', borderRadius: '0.5rem' } : {})
-      }}>
-        {type === 'date' ? fmtDate(value) : (value || 'N/A')}
-      </div>
-    )}
-    {error && (
-      <div style={styles.fieldError}>
-        <AlertCircle size={10} /> {error}
-      </div>
-    )}
-  </div>
-);
-
+        <div style={{
+          ...styles.fieldValue,
+          ...(isReadOnly && isEditing ? { backgroundColor: '#f3f4f6', padding: '0.5rem 0.75rem', borderRadius: '0.5rem' } : {})
+        }}>
+          {type === 'date' ? fmtDate(value) : (value || 'N/A')}
+        </div>
+      )}
+      {error && (
+        <div style={styles.fieldError}>
+          <AlertCircle size={10} /> {error}
+        </div>
+      )}
+    </div>
+  );
+};
 // ============================================================
 // Mobile Item Card Component (Updated with search support)
 // ============================================================
@@ -543,7 +585,7 @@ const MobileQuotationLayout = ({
     { label: 'Scope of Work', field: 'scopeOfWork', type: 'textarea', required: false },
     { label: 'Company Name', field: 'customer', type: 'text', required: true },
     { label: 'Contact Name', field: 'customerName', type: 'text', required: true },
-    { label: 'Phone', field: 'customerPhone', type: 'text', required: true },
+    { label: 'Phone', field: 'customerPhone', type: 'tel', required: true, isPhone: true },  
     { label: 'Email', field: 'customerEmail', type: 'email', required: true },
     { label: 'Designation', field: 'customerDesignation', type: 'text', required: false },
     { label: 'Trade License Number', field: 'customerTradeLicenseNumber', type: 'text', required: false },
@@ -552,7 +594,7 @@ const MobileQuotationLayout = ({
 
   const RIGHT_FIELDS = [
     { label: 'Name', field: 'ourFocalPoint', type: 'text', required: true, isReadOnly: false },
-    { label: 'Phone', field: 'ourContact', type: 'text', required: false, isReadOnly: true },
+    { label: 'Phone', field: 'ourContact', type: 'tel', required: false, isReadOnly: true, isPhone: true }, 
     { label: 'Email', field: 'salesManagerEmail', type: 'email', required: false, isReadOnly: true },
     { label: 'Designation', field: 'ourFocalPointDesignation', type: 'text', required: false, isReadOnly: false },
     { label: 'Trade License Number', field: 'companyTradeLicense', type: 'text', required: false, isReadOnly: true },
@@ -635,6 +677,7 @@ const MobileQuotationLayout = ({
               error={headerErrors[field]}
               isReadOnly={false}
               required={required}
+              showSnack={showLocalSnack} 
             />
           ))}
         </div>
@@ -654,6 +697,7 @@ const MobileQuotationLayout = ({
               error={headerErrors[field]}
               isReadOnly={isReadOnly}
               required={required}
+              showSnack={showLocalSnack} 
             />
           ))}
         </div>

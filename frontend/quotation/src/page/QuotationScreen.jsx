@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
-  Building2, Mail, Phone, AlertCircle, CheckCircle, RefreshCw, Loader2, Calendar, Edit2, X
+  Building2, Mail, Phone, AlertCircle, CheckCircle, MapPin, Clock, Loader2, Calendar, Edit2, X
 } from "lucide-react";
 import QuotationTemplate from "./QuotationTemplate";
 import { CompanyCurrencySelector, useCompanyCurrency } from "../components/CompanyCurrencySelector";
@@ -136,78 +136,384 @@ const SectionHeader = ({ icon: Icon, title, required, count, loading }) => {
   );
 };
 
-const CustomerCard = ({ customer }) => {
+// ============================================================
+// VAT Type Display Helper
+// ============================================================
+const getVatTypeDisplay = (customer) => {
+  const taxTreatment = customer?.taxTreatment || customer?.customerTaxTreatment || '';
+  
+  const vatTypeMap = {
+    'vat_registered': { 
+      label: 'VAT Registered', 
+      labelShort: 'VAT Reg',
+      color: '#059669', 
+      bg: '#d1fae5', 
+      icon: '✓',
+      gradient: 'linear-gradient(135deg, #059669, #10b981)'
+    },
+    'non_vat_registered': { 
+      label: 'Non-VAT Registered', 
+      labelShort: 'Non-VAT',
+      color: '#d97706', 
+      bg: '#fed7aa', 
+      icon: '○',
+      gradient: 'linear-gradient(135deg, #d97706, #f59e0b)'
+    },
+    'gcc_vat_registered': { 
+      label: 'GCC VAT Registered', 
+      labelShort: 'GCC VAT',
+      color: '#2563eb', 
+      bg: '#dbeafe', 
+      icon: '◉',
+      gradient: 'linear-gradient(135deg, #2563eb, #3b82f6)'
+    },
+    'gcc_non_vat_registered': { 
+      label: 'GCC Non-VAT Registered', 
+      labelShort: 'GCC Non-VAT',
+      color: '#7c3aed', 
+      bg: '#ede9fe', 
+      icon: '◌',
+      gradient: 'linear-gradient(135deg, #7c3aed, #8b5cf6)'
+    },
+  };
+  
+  return vatTypeMap[taxTreatment] || { 
+    label: 'Not Set', 
+    labelShort: 'Not Set',
+    color: '#6b7280', 
+    bg: '#f3f4f6', 
+    icon: '?',
+    gradient: 'linear-gradient(135deg, #6b7280, #9ca3af)'
+  };
+};
+
+// ============================================================
+// Responsive Customer Card Component
+// ============================================================
+const CustomerCard = ({ customer, onEdit, onViewDetails }) => {
+  const [isMobile, setIsMobile] = useState(false);
+  const [isTablet, setIsTablet] = useState(false);
+
+  // Detect screen size
+  useEffect(() => {
+    const checkScreenSize = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < 480);
+      setIsTablet(width >= 480 && width < 768);
+    };
+    
+    checkScreenSize();
+    window.addEventListener('resize', checkScreenSize);
+    return () => window.removeEventListener('resize', checkScreenSize);
+  }, []);
+
   const initials = customer.name?.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase() || "CU";
+  const vatType = getVatTypeDisplay(customer);
+  const placeOfSupply = customer?.placeOfSupply || customer?.customerPlaceOfSupply || '';
+  
+  // Format date if available
+  const lastUpdated = customer?.updatedAt ? new Date(customer.updatedAt).toLocaleDateString() : null;
+
+  // Responsive sizes
+  const avatarSize = isMobile ? 48 : 56;
+  const avatarFontSize = isMobile ? '1rem' : '1.25rem';
+  const avatarRadius = isMobile ? 16 : 18;
+  const cardPadding = isMobile ? '0.875rem' : '1rem';
+  const gapSize = isMobile ? '0.75rem' : '1rem';
+
+  const badgeStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: isMobile ? '4px' : '6px',
+    padding: isMobile ? '3px 8px' : '4px 12px',
+    backgroundColor: vatType.bg,
+    color: vatType.color,
+    borderRadius: '20px',
+    fontSize: isMobile ? '0.65rem' : '0.7rem',
+    fontWeight: 600,
+    letterSpacing: '0.3px',
+    whiteSpace: 'nowrap',
+  };
+
+  const infoChipStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: isMobile ? '3px 8px' : '4px 10px',
+    backgroundColor: '#f8fafc',
+    borderRadius: '12px',
+    fontSize: isMobile ? '0.65rem' : '0.7rem',
+    color: '#475569',
+    border: '1px solid #e2e8f0',
+    whiteSpace: 'nowrap',
+  };
+
+  const actionButtonStyle = (isPrimary = false) => ({
+    padding: isMobile ? '4px 10px' : '6px 12px',
+    background: isPrimary ? 'linear-gradient(135deg, #0f172a, #1e293b)' : 'transparent',
+    border: isPrimary ? 'none' : '1px solid #e2e8f0',
+    borderRadius: '10px',
+    fontSize: isMobile ? '0.65rem' : '0.7rem',
+    fontWeight: 500,
+    color: isPrimary ? 'white' : '#475569',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    whiteSpace: 'nowrap',
+  });
+
   return (
-    <div style={{ 
-      background: "white", 
-      border: "1px solid #f1f5f9", 
-      borderRadius: 16, 
-      padding: "1rem", 
-      marginTop: "0.75rem", 
-      transition: "all 0.2s" 
-    }}>
-      <div style={{ 
-        display: "flex", 
-        alignItems: "center", 
-        gap: "0.75rem",
-        flexWrap: "wrap"
-      }}>
+    <div
+      style={{
+        background: 'white',
+        borderRadius: isMobile ? '16px' : '20px',
+        marginTop: '0.75rem',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        cursor: 'pointer',
+        border: '1px solid #eef2ff',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.02)',
+      }}
+      onMouseEnter={(e) => {
+        if (!isMobile) {
+          e.currentTarget.style.transform = 'translateY(-2px)';
+          e.currentTarget.style.boxShadow = '0 12px 24px -12px rgba(0,0,0,0.15)';
+          e.currentTarget.style.borderColor = '#c7d2fe';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isMobile) {
+          e.currentTarget.style.transform = 'translateY(0)';
+          e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.02)';
+          e.currentTarget.style.borderColor = '#eef2ff';
+        }
+      }}
+    >
+      <div style={{ padding: cardPadding }}>
+        {/* Header Section - Responsive Layout */}
         <div style={{ 
-          width: 48, 
-          height: 48, 
-          borderRadius: 14, 
-          background: `linear-gradient(135deg,${PRIMARY},#1e293b)`, 
-          display: "flex", 
-          alignItems: "center", 
-          justifyContent: "center", 
-          color: "white", 
-          fontWeight: 700, 
-          fontSize: "1.1rem", 
-          flexShrink: 0 
+          display: 'flex', 
+          flexDirection: isMobile ? 'column' : 'row',
+          alignItems: isMobile ? 'flex-start' : 'flex-start',
+          gap: gapSize,
         }}>
-          {initials}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ 
-            margin: 0, 
-            fontWeight: 700, 
-            color: PRIMARY, 
-            fontSize: "clamp(0.813rem, 4vw, 0.9rem)" 
-          }}>{customer.name}</p>
-          <div style={{ 
-            display: "flex", 
-            gap: "1rem", 
-            marginTop: "0.25rem", 
-            flexWrap: "wrap" 
-          }}>
-            {customer.email && (
-              <p style={{ 
+          {/* Avatar */}
+          <div
+            style={{
+              width: avatarSize,
+              height: avatarSize,
+              borderRadius: avatarRadius,
+              background: vatType.gradient,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontWeight: 700,
+              fontSize: avatarFontSize,
+              flexShrink: 0,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+              transition: 'transform 0.2s',
+            }}
+          >
+            {initials}
+          </div>
+
+          {/* Main Info - Takes full width on mobile */}
+          <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+            {/* Name and Badge Row */}
+            <div style={{ 
+              display: 'flex', 
+              alignItems: isMobile ? 'flex-start' : 'center',
+              flexDirection: isMobile ? 'column' : 'row',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: isMobile ? '0.5rem' : '0.75rem',
+              marginBottom: '0.5rem'
+            }}>
+              <h3 style={{ 
                 margin: 0, 
-                color: "#64748b", 
-                fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
-                display: "flex", 
-                alignItems: "center", 
-                gap: 4 
+                fontWeight: 700, 
+                color: '#0f172a', 
+                fontSize: isMobile ? '0.9rem' : '1rem',
+                letterSpacing: '-0.2px',
+                wordBreak: 'break-word',
               }}>
-                <Mail size={12} /> {customer.email}
-              </p>
-            )}
-            {customer.phone && (
-              <p style={{ 
-                margin: 0, 
-                color: "#64748b", 
-                fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
-                display: "flex", 
-                alignItems: "center", 
-                gap: 4 
+                {customer.name}
+              </h3>
+              
+              {/* VAT Status Badge */}
+              <div style={badgeStyle}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{vatType.icon}</span>
+                <span>{isMobile ? vatType.labelShort : vatType.label}</span>
+              </div>
+            </div>
+
+            {/* Contact Info - Responsive Grid on Mobile */}
+            <div style={{ 
+              display: 'flex',
+              flexDirection: isMobile ? 'column' : 'row',
+              gap: isMobile ? '0.5rem' : '0.75rem',
+              flexWrap: 'wrap',
+              marginBottom: '0.75rem'
+            }}>
+              {customer.email && (
+                <div style={infoChipStyle}>
+                  <Mail size={isMobile ? 10 : 12} color="#64748b" />
+                  <span style={{ 
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    maxWidth: isMobile ? '200px' : 'none',
+                  }}>
+                    {customer.email}
+                  </span>
+                </div>
+              )}
+              {customer.phone && (
+                <div style={infoChipStyle}>
+                  <Phone size={isMobile ? 10 : 12} color="#64748b" />
+                  <span>{customer.phone}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Additional Details - Wrap on Mobile */}
+            <div style={{ 
+              display: 'flex', 
+              gap: isMobile ? '0.5rem' : '0.75rem', 
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}>
+              {placeOfSupply && (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: isMobile ? '2px 6px' : '3px 8px',
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: '10px',
+                  fontSize: isMobile ? '0.6rem' : '0.65rem',
+                  color: '#475569',
+                }}>
+                  <MapPin size={isMobile ? 8 : 10} />
+                  <span>{placeOfSupply}</span>
+                </div>
+              )}
+              
+              {customer.tradeLicenseNumber && (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: isMobile ? '2px 6px' : '3px 8px',
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: '10px',
+                  fontSize: isMobile ? '0.6rem' : '0.65rem',
+                  color: '#475569',
+                }}>
+                  <FileText size={isMobile ? 8 : 10} />
+                  <span>TRN: {customer.tradeLicenseNumber}</span>
+                </div>
+              )}
+
+              {lastUpdated && !isMobile && (
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '3px 8px',
+                  backgroundColor: '#f1f5f9',
+                  borderRadius: '10px',
+                  fontSize: '0.65rem',
+                  color: '#94a3b8',
+                }}>
+                  <Clock size={10} />
+                  <span>Updated: {lastUpdated}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Last Updated for Mobile - Separate line */}
+            {lastUpdated && isMobile && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                marginTop: '0.5rem',
+                fontSize: '0.6rem',
+                color: '#94a3b8',
               }}>
-                <Phone size={12} /> {customer.phone}
-              </p>
+                <Clock size={10} />
+                <span>Updated: {lastUpdated}</span>
+              </div>
             )}
           </div>
+
+          {/* Action Buttons - Responsive */}
+          {(onEdit || onViewDetails) && (
+            <div style={{ 
+              display: 'flex', 
+              gap: '0.5rem', 
+              flexShrink: 0,
+              width: isMobile ? '100%' : 'auto',
+              justifyContent: isMobile ? 'flex-end' : 'flex-start',
+              marginTop: isMobile ? '0.5rem' : 0,
+            }}>
+              {onViewDetails && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewDetails(customer);
+                  }}
+                  style={actionButtonStyle(false)}
+                  onMouseEnter={(e) => {
+                    if (!isMobile) {
+                      e.currentTarget.style.background = '#f8fafc';
+                      e.currentTarget.style.borderColor = '#cbd5e1';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isMobile) {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.borderColor = '#e2e8f0';
+                    }
+                  }}
+                >
+                  {isMobile ? 'Details' : 'View Details'}
+                </button>
+              )}
+              {onEdit && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEdit(customer);
+                  }}
+                  style={actionButtonStyle(true)}
+                  onMouseEnter={(e) => {
+                    if (!isMobile) {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isMobile) {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }
+                  }}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Bottom Gradient Bar */}
+      <div style={{
+        height: isMobile ? '2px' : '3px',
+        background: vatType.gradient,
+        borderRadius: '0 0 20px 20px',
+        opacity: 0.7,
+      }} />
     </div>
   );
 };

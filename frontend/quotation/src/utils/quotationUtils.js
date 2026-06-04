@@ -84,3 +84,22 @@ export const parseQuotationItems = (items) => (items || []).map((item) => ({
 }));
 
 export const parseInternalDocuments = (docs) => (docs || []).map((doc) => ({ ...doc, id: doc._id }));
+
+export const validatePhoneNumber = (value) => {
+  // Allow empty string (optional field)
+  if (!value) return { isValid: true, error: null };
+  
+  // Check if contains any letters (a-z, A-Z)
+  const hasLetters = /[a-zA-Z]/.test(value);
+  if (hasLetters) {
+    return { isValid: false, error: "Phone number cannot contain letters" };
+  }
+  
+  // Allow: numbers, spaces, +, -, (, ), .
+  const phoneRegex = /^[0-9\s\+\-\(\)\.]+$/;
+  if (!phoneRegex.test(value)) {
+    return { isValid: false, error: "Phone number contains invalid characters" };
+  }
+  
+  return { isValid: true, error: null };
+};

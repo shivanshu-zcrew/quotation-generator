@@ -190,6 +190,18 @@ export function useQuotation() {
       };
     });
     setQuotationItems(itemsWithUrls);
+    const taxTreatment = originalQuotation.customerId?.taxTreatment ||
+    originalQuotation.customerTaxTreatment ||
+    originalQuotation.taxTreatment ||
+    'non_vat_registered';
+  
+  const placeOfSupply = originalQuotation.customerId?.placeOfSupply ||
+    originalQuotation.customerPlaceOfSupply ||
+    originalQuotation.placeOfSupply ||
+    'Dubai';
+  
+  setCustomerTaxTreatment(taxTreatment);
+  setCustomerPlaceOfSupply(placeOfSupply);
 
     // Handle terms images
     const cloudinaryImages = originalQuotation.termsImages || [];

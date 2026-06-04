@@ -1,4 +1,4 @@
-// components/CustomerSelector.jsx (Responsive Version)
+// components/CustomerSelector.jsx (Fully Responsive with Tailwind-like inline styles)
 import React, {
   useState,
   useEffect,
@@ -14,9 +14,58 @@ import {
   Loader2,
   ChevronDown,
   CheckCircle,
+  Building2,
+  Phone,
+  Mail,
 } from 'lucide-react';
 
 import useCustomerStore from '../services/customerStore';
+
+// ============================================================
+// HELPER: Get VAT Type Display
+// ============================================================
+const getVatTypeDisplay = (customer) => {
+  const taxTreatment = customer?.taxTreatment || customer?.customerTaxTreatment || '';
+  
+  const vatTypeMap = {
+    'vat_registered': { 
+      label: 'VAT Registered', 
+      labelShort: 'VAT Reg',
+      color: '#059669', 
+      bg: '#d1fae5', 
+      icon: '✓',
+    },
+    'non_vat_registered': { 
+      label: 'Non-VAT Registered', 
+      labelShort: 'Non-VAT',
+      color: '#d97706', 
+      bg: '#fed7aa', 
+      icon: '○',
+    },
+    'gcc_vat_registered': { 
+      label: 'GCC VAT Registered', 
+      labelShort: 'GCC VAT',
+      color: '#2563eb', 
+      bg: '#dbeafe', 
+      icon: '◉',
+    },
+    'gcc_non_vat_registered': { 
+      label: 'GCC Non-VAT Registered', 
+      labelShort: 'GCC Non-VAT',
+      color: '#7c3aed', 
+      bg: '#ede9fe', 
+      icon: '◌',
+    },
+  };
+  
+  return vatTypeMap[taxTreatment] || { 
+    label: 'Not Set', 
+    labelShort: 'Not Set',
+    color: '#6b7280', 
+    bg: '#f3f4f6', 
+    icon: '?',
+  };
+};
 
 const CustomerSelector = ({
   value,
@@ -28,7 +77,7 @@ const CustomerSelector = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isOpen, setIsOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
 
   const dropdownRef = useRef(null);
   const inputRef = useRef(null);
@@ -50,35 +99,30 @@ const CustomerSelector = ({
   // Responsive Detection
   // =========================
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
     };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const isMobile = windowWidth < 640;
+  const isTablet = windowWidth >= 640 && windowWidth < 768;
+  const isSmallMobile = windowWidth < 480;
 
   // =========================
   // Display Customers
   // =========================
-  // Source-of-truth logic:
-  //  - term >= 2 chars  -> server search results (even if empty; no fallback to full list)
-  //  - term == 1 char   -> client-side filter of already-loaded customers
-  //  - empty term       -> full loaded list
-  // Then inactive customers are removed regardless of source.
   const displayCustomers = useMemo(() => {
     let list;
 
     const term = searchTerm.toLowerCase().trim();
 
     if (term.length >= 2) {
-      // A server search is/was triggered for queries >= 2 chars.
-      // While the request is in flight, show [] so the loading state renders
-      // instead of stale data. Once it resolves, show the real results
-      // (including a genuine empty result — do NOT fall back to all customers).
       list = isSearching ? [] : searchResults;
     } else if (term.length > 0) {
-      // 1-char query: server search not triggered, filter loaded list locally.
       list = customers.filter(
         (customer) =>
           customer.name?.toLowerCase().includes(term) ||
@@ -86,43 +130,51 @@ const CustomerSelector = ({
           customer.phone?.includes(term)
       );
     } else {
-      // No query: show everything loaded.
       list = customers;
     }
 
-    // Exclude explicitly deactivated customers (e.g. TRN-expired).
-    // `!== false` keeps legacy records where isActive is missing/undefined.
     return list.filter((c) => c.isActive !== false);
   }, [customers, searchTerm, isSearching, searchResults]);
 
   // =========================
   // Selected Customer
   // =========================
-  // Looks at the full (unfiltered) list so a previously-selected customer
-  // still shows in the trigger even if they are now inactive.
   const selectedCustomer = useMemo(() => {
     return customers.find((c) => c._id === value) || null;
   }, [customers, value]);
+
+  const selectedVatType = useMemo(() => {
+    if (!selectedCustomer) return null;
+    return getVatTypeDisplay(selectedCustomer);
+  }, [selectedCustomer]);
 
   // =========================
   // Open / Close Dropdown
   // =========================
   const openDropdown = useCallback(() => {
     setIsOpen(true);
-  }, []);
+    // Prevent body scroll on mobile when dropdown is open
+    if (isMobile) {
+      document.body.style.overflow = 'hidden';
+    }
+  }, [isMobile]);
 
   const closeDropdown = useCallback(() => {
     setIsOpen(false);
-  }, []);
+    // Restore body scroll
+    if (isMobile) {
+      document.body.style.overflow = '';
+    }
+  }, [isMobile]);
 
   // =========================
   // Focus Input
   // =========================
   useEffect(() => {
     if (isOpen) {
-      requestAnimationFrame(() => {
+      setTimeout(() => {
         inputRef.current?.focus();
-      });
+      }, 100);
     }
   }, [isOpen]);
 
@@ -153,15 +205,18 @@ const CustomerSelector = ({
   );
 
   // =========================
-  // Cleanup Timeout
+  // Cleanup Timeout & Body Scroll
   // =========================
   useEffect(() => {
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      if (isMobile) {
+        document.body.style.overflow = '';
+      }
     };
-  }, []);
+  }, [isMobile]);
 
   // =========================
   // Select Customer
@@ -169,7 +224,6 @@ const CustomerSelector = ({
   const handleSelect = useCallback(
     (customer) => {
       onChange(customer._id, customer);
-
       setSearchTerm('');
       clearSearch();
       closeDropdown();
@@ -183,9 +237,7 @@ const CustomerSelector = ({
   const handleClear = useCallback(
     (e) => {
       e.stopPropagation();
-
       onChange(null, null);
-
       setSearchTerm('');
       clearSearch();
       closeDropdown();
@@ -198,9 +250,7 @@ const CustomerSelector = ({
   // =========================
   const handleSync = useCallback(async () => {
     if (!companyId) return;
-
     const result = await syncCustomers(companyId);
-
     onSyncComplete?.(result);
   }, [companyId, syncCustomers, onSyncComplete]);
 
@@ -209,46 +259,25 @@ const CustomerSelector = ({
   // =========================
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target)
-      ) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target) && !isMobile) {
         closeDropdown();
       }
     };
-
     document.addEventListener('mousedown', handleClickOutside);
-
-    return () => {
-      document.removeEventListener(
-        'mousedown',
-        handleClickOutside
-      );
-    };
-  }, [closeDropdown]);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [closeDropdown, isMobile]);
 
   // =========================
   // Auto Load Customers
   // =========================
   useEffect(() => {
-    if (
-      autoLoad &&
-      companyId &&
-      !isLoaded &&
-      !isLoading
-    ) {
+    if (autoLoad && companyId && !isLoaded && !isLoading) {
       loadAllCustomers(companyId);
     }
-  }, [
-    autoLoad,
-    companyId,
-    isLoaded,
-    isLoading,
-    loadAllCustomers,
-  ]);
+  }, [autoLoad, companyId, isLoaded, isLoading, loadAllCustomers]);
 
   // =========================
-  // Animation Styles
+  // Inject Global Styles
   // =========================
   useEffect(() => {
     const style = document.createElement('style');
@@ -257,125 +286,273 @@ const CustomerSelector = ({
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
       }
-      
-      @keyframes cs-dropdownSlide {
-        from {
-          opacity: 0;
-          transform: translateY(-10px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-      
-      @media (max-width: 768px) {
-        .customer-dropdown {
-          position: fixed !important;
-          top: auto !important;
-          bottom: 0 !important;
-          left: 0 !important;
-          right: 0 !important;
-          border-radius: 20px 20px 0 0 !important;
-          max-height: 80vh !important;
-          animation: cs-slideUp 0.3s ease !important;
-        }
-        
-        @keyframes cs-slideUp {
-          from {
-            transform: translateY(100%);
-          }
-          to {
-            transform: translateY(0);
-          }
-        }
-      }
     `;
     document.head.appendChild(style);
     return () => document.head.removeChild(style);
   }, []);
 
-  // Responsive styles
-  const triggerStyle = {
-    height: isMobile ? '44px' : '48px',
-    border: '1.5px solid #e2e8f0',
-    borderRadius: isMobile ? '12px' : '14px',
-    background: '#fafbff',
-    padding: isMobile ? '0 0.875rem' : '0 1rem',
-    display: 'flex',
-    alignItems: 'center',
-    gap: isMobile ? '10px' : '12px',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-  };
+  // ============================================================
+  // RESPONSIVE STYLES
+  // ============================================================
+  
+  // Trigger Button Styles
+  const getTriggerStyles = () => ({
+    container: {
+      width: '100%',
+      minHeight: isSmallMobile ? '42px' : isMobile ? '44px' : '48px',
+      border: '1.5px solid #e2e8f0',
+      borderRadius: isSmallMobile ? '10px' : isMobile ? '12px' : '14px',
+      background: '#fafbff',
+      padding: isSmallMobile ? '0 10px' : isMobile ? '0 12px' : '0 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: isSmallMobile ? '8px' : isMobile ? '10px' : '12px',
+      cursor: 'pointer',
+      transition: 'all 0.2s ease',
+      boxSizing: 'border-box',
+    },
+    avatar: {
+      width: isSmallMobile ? '28px' : isMobile ? '32px' : '36px',
+      height: isSmallMobile ? '28px' : isMobile ? '32px' : '36px',
+      borderRadius: isSmallMobile ? '8px' : isMobile ? '10px' : '12px',
+      background: selectedVatType?.bg || 'linear-gradient(135deg, #0f172a, #1e293b)',
+      color: selectedVatType?.color || 'white',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontWeight: 700,
+      fontSize: isSmallMobile ? '0.7rem' : isMobile ? '0.75rem' : '0.85rem',
+      flexShrink: 0,
+    },
+    infoContainer: {
+      flex: 1,
+      minWidth: 0,
+    },
+    name: {
+      fontWeight: 600,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      fontSize: isSmallMobile ? '0.8rem' : isMobile ? '0.85rem' : '0.9rem',
+      color: '#0f172a',
+    },
+    badgeContainer: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+      flexWrap: 'wrap',
+      marginTop: '2px',
+    },
+    badge: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '3px',
+      padding: isSmallMobile ? '2px 6px' : '3px 8px',
+      borderRadius: '20px',
+      fontSize: isSmallMobile ? '0.55rem' : isMobile ? '0.6rem' : '0.65rem',
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+    },
+    clearButton: {
+      border: 'none',
+      background: 'transparent',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: isSmallMobile ? '6px' : '8px',
+      borderRadius: '6px',
+      flexShrink: 0,
+    },
+    placeholderText: {
+      color: '#94a3b8',
+      flex: 1,
+      fontSize: isSmallMobile ? '0.8rem' : isMobile ? '0.85rem' : '0.9rem',
+    },
+    chevron: {
+      transition: 'transform 0.2s ease',
+      flexShrink: 0,
+      color: '#64748b',
+    },
+  });
 
-  const avatarStyle = {
-    width: isMobile ? '30px' : '34px',
-    height: isMobile ? '30px' : '34px',
-    borderRadius: isMobile ? '8px' : '10px',
-    background: 'linear-gradient(135deg, #0f172a, #1e293b)',
-    color: 'white',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontWeight: 700,
-    fontSize: isMobile ? '0.7rem' : '0.8rem',
-    flexShrink: 0,
-  };
+  // Dropdown Styles
+  const getDropdownStyles = () => ({
+    container: {
+      position: isMobile ? 'fixed' : 'absolute',
+      top: isMobile ? 'auto' : 'calc(100% + 8px)',
+      bottom: isMobile ? '0' : 'auto',
+      left: isMobile ? '0' : '0',
+      right: isMobile ? '0' : '0',
+      background: 'white',
+      border: isMobile ? 'none' : '1px solid #e2e8f0',
+      borderRadius: isMobile ? '20px 20px 0 0' : '12px',
+      boxShadow: isMobile 
+        ? '0 -4px 20px rgba(0,0,0,0.15)'
+        : '0 4px 20px rgba(0,0,0,0.1)',
+      overflow: 'hidden',
+      zIndex: 1000,
+      maxHeight: isMobile ? '80vh' : '400px',
+      display: 'flex',
+      flexDirection: 'column',
+    },
+    searchContainer: {
+      padding: isSmallMobile ? '12px' : isMobile ? '14px' : '16px',
+      borderBottom: '1px solid #f1f5f9',
+      background: 'white',
+      position: 'sticky',
+      top: 0,
+      zIndex: 2,
+    },
+    searchWrapper: {
+      position: 'relative',
+    },
+    searchIcon: {
+      position: 'absolute',
+      left: isSmallMobile ? '10px' : '12px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      color: '#94a3b8',
+      pointerEvents: 'none',
+    },
+    searchInput: {
+      width: '100%',
+      padding: isSmallMobile ? '10px 10px 10px 36px' : isMobile ? '12px 12px 12px 40px' : '10px 12px 10px 42px',
+      border: '1px solid #e2e8f0',
+      borderRadius: isSmallMobile ? '10px' : '12px',
+      fontSize: isSmallMobile ? '0.85rem' : '0.9rem',
+      outline: 'none',
+      boxSizing: 'border-box',
+      backgroundColor: '#f8fafc',
+    },
+    clearSearchButton: {
+      position: 'absolute',
+      right: '10px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      padding: '4px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: '4px',
+    },
+    resultsContainer: {
+      flex: 1,
+      overflowY: 'auto',
+      WebkitOverflowScrolling: 'touch',
+    },
+    loadingState: {
+      padding: isMobile ? '40px 20px' : '60px',
+      textAlign: 'center',
+    },
+    emptyState: {
+      padding: isMobile ? '40px 20px' : '60px',
+      textAlign: 'center',
+    },
+    closeButtonContainer: {
+      padding: isSmallMobile ? '12px' : '16px',
+      borderTop: '1px solid #f1f5f9',
+      background: 'white',
+    },
+    closeButton: {
+      width: '100%',
+      padding: isSmallMobile ? '12px' : '14px',
+      background: '#f1f5f9',
+      border: 'none',
+      borderRadius: isSmallMobile ? '10px' : '12px',
+      fontSize: isSmallMobile ? '0.85rem' : '0.9rem',
+      fontWeight: 600,
+      color: '#475569',
+      cursor: 'pointer',
+    },
+  });
 
-  const dropdownStyle = {
-    position: isMobile ? 'fixed' : 'absolute',
-    top: isMobile ? 'auto' : 'calc(100% + 6px)',
-    bottom: isMobile ? '0' : 'auto',
-    left: isMobile ? '0' : '0',
-    right: isMobile ? '0' : '0',
-    background: 'white',
-    border: isMobile ? 'none' : '1px solid #e2e8f0',
-    borderRadius: isMobile ? '20px 20px 0 0' : '14px',
-    boxShadow: isMobile 
-      ? '0 -5px 25px -5px rgba(0,0,0,0.15)'
-      : '0 10px 25px -5px rgba(0,0,0,0.15)',
-    overflow: 'hidden',
-    zIndex: 1000,
-    maxHeight: isMobile ? '80vh' : 'auto',
-    animation: isMobile ? 'cs-slideUp 0.3s ease' : 'cs-dropdownSlide 0.2s ease',
-  };
+  // Customer Item Styles
+  const getCustomerItemStyles = (isSelected = false) => ({
+    container: {
+      padding: isSmallMobile ? '12px' : isMobile ? '14px' : '12px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: isSmallMobile ? '10px' : isMobile ? '12px' : '14px',
+      cursor: 'pointer',
+      borderBottom: '1px solid #f8fafc',
+      backgroundColor: isSelected ? '#f0fdf4' : 'white',
+      transition: 'background 0.2s',
+    },
+    avatar: {
+      width: isSmallMobile ? '36px' : isMobile ? '40px' : '44px',
+      height: isSmallMobile ? '36px' : isMobile ? '40px' : '44px',
+      borderRadius: isSmallMobile ? '10px' : '12px',
+      background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+      color: 'white',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontWeight: 700,
+      fontSize: isSmallMobile ? '0.8rem' : isMobile ? '0.85rem' : '0.9rem',
+      flexShrink: 0,
+    },
+    infoContainer: {
+      flex: 1,
+      minWidth: 0,
+    },
+    name: {
+      fontWeight: 600,
+      fontSize: isSmallMobile ? '0.85rem' : isMobile ? '0.9rem' : '0.95rem',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      marginBottom: '4px',
+      color: '#0f172a',
+    },
+    badgeContainer: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+      flexWrap: 'wrap',
+      marginBottom: '4px',
+    },
+    badge: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '3px',
+      padding: '2px 6px',
+      borderRadius: '20px',
+      fontSize: isSmallMobile ? '0.55rem' : '0.6rem',
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+    },
+    contactInfo: {
+      display: 'flex',
+      flexDirection: isMobile ? 'column' : 'row',
+      gap: isMobile ? '4px' : '8px',
+      alignItems: isMobile ? 'flex-start' : 'center',
+    },
+    email: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '3px',
+      fontSize: isSmallMobile ? '0.6rem' : '0.65rem',
+      color: '#64748b',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      maxWidth: isMobile ? '180px' : '250px',
+    },
+    phone: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '3px',
+      fontSize: isSmallMobile ? '0.6rem' : '0.65rem',
+      color: '#64748b',
+    },
+  });
 
-  const searchContainerStyle = {
-    padding: isMobile ? '12px' : '12px 16px',
-    borderBottom: '1px solid #f1f5f9',
-    background: 'white',
-    position: isMobile ? 'sticky' : 'relative',
-    top: 0,
-    zIndex: 1,
-  };
-
-  const searchInputStyle = {
-    width: '100%',
-    padding: isMobile ? '10px 12px 10px 38px' : '10px 12px 10px 40px',
-    border: '1px solid #e2e8f0',
-    borderRadius: isMobile ? '10px' : '12px',
-    fontSize: isMobile ? '0.875rem' : '0.9rem',
-    outline: 'none',
-    boxSizing: 'border-box',
-    transition: 'border-color 0.2s',
-  };
-
-  const resultsContainerStyle = {
-    maxHeight: isMobile ? 'calc(80vh - 80px)' : '340px',
-    overflowY: 'auto',
-    WebkitOverflowScrolling: 'touch',
-  };
-
-  const customerItemStyle = {
-    padding: isMobile ? '12px' : '12px 16px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: isMobile ? '10px' : '12px',
-    cursor: 'pointer',
-    borderBottom: '1px solid #f8fafc',
-    transition: 'background 0.2s',
-  };
+  const triggerStyles = getTriggerStyles();
+  const dropdownStyles = getDropdownStyles();
 
   return (
     <div
@@ -386,108 +563,47 @@ const CustomerSelector = ({
       }}
     >
       {/* ========================= */}
-      {/* Trigger */}
+      {/* Trigger Button */}
       {/* ========================= */}
-      <div
-        onClick={openDropdown}
-        style={triggerStyle}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = '#0f172a';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = '#e2e8f0';
-        }}
-      >
+      <div onClick={openDropdown} style={triggerStyles.container}>
         {selectedCustomer ? (
           <>
-            <div style={avatarStyle}>
-              {selectedCustomer.name
-                ?.substring(0, 2)
-                .toUpperCase()}
+            <div style={triggerStyles.avatar}>
+              {selectedCustomer.name?.substring(0, 2).toUpperCase()}
             </div>
 
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-              }}
-            >
-              <div
-                style={{
-                  fontWeight: 600,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontSize: isMobile ? '0.875rem' : '0.9rem',
-                }}
-              >
+            <div style={triggerStyles.infoContainer}>
+              <div style={triggerStyles.name}>
                 {selectedCustomer.name}
               </div>
-
-              {selectedCustomer.email && !isMobile && (
-                <div
-                  style={{
-                    fontSize: '0.75rem',
-                    color: '#64748b',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {selectedCustomer.email}
-                </div>
-              )}
+              
+              
             </div>
 
             <button
               type="button"
               onClick={handleClear}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: isMobile ? '6px' : '4px',
-                borderRadius: '6px',
-                transition: 'background 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#fef2f2';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
-              }}
+              style={triggerStyles.clearButton}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#fef2f2'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
             >
-              <X size={isMobile ? 14 : 16} color="#ef4444" />
+              <X size={isSmallMobile ? 14 : 16} color="#ef4444" />
             </button>
           </>
         ) : (
           <>
-            <Search size={isMobile ? 16 : 18} color="#94a3b8" />
-
-            <span
-              style={{
-                color: '#94a3b8',
-                flex: 1,
-                fontSize: isMobile ? '0.875rem' : '0.9rem',
-              }}
-            >
-              {isMobile && placeholder.length > 30 
-                ? placeholder.substring(0, 30) + '...' 
-                : placeholder}
+            <Search size={isSmallMobile ? 16 : 18} color="#94a3b8" />
+            <span style={triggerStyles.placeholderText}>
+              {placeholder}
             </span>
           </>
         )}
 
         <ChevronDown
-          size={isMobile ? 16 : 18}
+          size={isSmallMobile ? 16 : 18}
           style={{
+            ...triggerStyles.chevron,
             transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-            transition: 'transform 0.2s ease',
-            flexShrink: 0,
-            color: '#64748b',
           }}
         />
       </div>
@@ -496,231 +612,132 @@ const CustomerSelector = ({
       {/* Dropdown */}
       {/* ========================= */}
       {isOpen && (
-        <div
-          className="customer-dropdown"
-          style={dropdownStyle}
-        >
-          {/* ========================= */}
-          {/* Search */}
-          {/* ========================= */}
-          <div style={searchContainerStyle}>
-            <div
-              style={{
-                position: 'relative',
-              }}
-            >
-              <Search
-                size={isMobile ? 14 : 16}
-                style={{
-                  position: 'absolute',
-                  left: isMobile ? '10px' : '12px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: '#94a3b8',
-                  pointerEvents: 'none',
-                }}
-              />
-
+        <div style={dropdownStyles.container}>
+          {/* Search Input */}
+          <div style={dropdownStyles.searchContainer}>
+            <div style={dropdownStyles.searchWrapper}>
+              <Search size={isSmallMobile ? 14 : 16} style={dropdownStyles.searchIcon} />
               <input
                 ref={inputRef}
                 type="text"
                 value={searchTerm}
-                placeholder={
-                  isMobile 
-                    ? "Search customers..." 
-                    : "Search by name, email or phone..."
-                }
+                placeholder="Search by name, email or phone..."
                 onClick={(e) => e.stopPropagation()}
                 onChange={handleSearchChange}
-                style={searchInputStyle}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = '#0f172a';
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = '#e2e8f0';
-                }}
+                style={dropdownStyles.searchInput}
               />
-
               {searchTerm && (
                 <button
                   onClick={() => {
                     setSearchTerm('');
                     clearSearch();
                   }}
-                  style={{
-                    position: 'absolute',
-                    right: '10px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: '4px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '6px',
-                  }}
+                  style={dropdownStyles.clearSearchButton}
                 >
-                  <X size={isMobile ? 12 : 14} color="#94a3b8" />
+                  <X size={isSmallMobile ? 12 : 14} color="#94a3b8" />
                 </button>
               )}
             </div>
           </div>
 
-          {/* ========================= */}
           {/* Results */}
-          {/* ========================= */}
-          <div style={resultsContainerStyle}>
+          <div style={dropdownStyles.resultsContainer}>
             {isSearching ? (
-              <div
-                style={{
-                  padding: isMobile ? '2rem 1rem' : '2rem',
-                  textAlign: 'center',
-                }}
-              >
+              <div style={dropdownStyles.loadingState}>
                 <Loader2
-                  size={isMobile ? 20 : 24}
+                  size={isMobile ? 32 : 40}
                   style={{
                     animation: 'cs-spin 1s linear infinite',
                     margin: '0 auto',
                     color: '#0f172a',
                   }}
                 />
-
-                <p
-                  style={{
-                    marginTop: '0.75rem',
-                    color: '#64748b',
-                    fontSize: isMobile ? '0.875rem' : '0.9rem',
-                  }}
-                >
+                <p style={{ marginTop: '12px', color: '#64748b', fontSize: '0.875rem' }}>
                   Searching...
                 </p>
               </div>
             ) : displayCustomers.length > 0 ? (
-              displayCustomers.map((customer, index) => (
-                <div
-                  key={customer._id}
-                  onClick={() => handleSelect(customer)}
-                  style={{
-                    ...customerItemStyle,
-                    background: value === customer._id ? '#f0fdf4' : 'white',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (value !== customer._id) {
-                      e.currentTarget.style.background = '#f8fafc';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (value !== customer._id) {
-                      e.currentTarget.style.background = 'white';
-                    }
-                  }}
-                >
-                  <div style={avatarStyle}>
-                    {customer.name
-                      ?.substring(0, 2)
-                      .toUpperCase()}
-                  </div>
-
+              displayCustomers.map((customer) => {
+                const customerVatType = getVatTypeDisplay(customer);
+                const isSelected = value === customer._id;
+                const itemStyles = getCustomerItemStyles(isSelected);
+                
+                return (
                   <div
-                    style={{
-                      flex: 1,
-                      minWidth: 0,
-                    }}
+                    key={customer._id}
+                    onClick={() => handleSelect(customer)}
+                    style={itemStyles.container}
                   >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        fontSize: isMobile ? '0.875rem' : '0.9rem',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {customer.name}
+                    <div style={itemStyles.avatar}>
+                      {customer.name?.substring(0, 2).toUpperCase()}
                     </div>
 
-                    {customer.email && (
-                      <div
-                        style={{
-                          fontSize: isMobile ? '0.7rem' : '0.8rem',
-                          color: '#64748b',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {customer.email}
+                    <div style={itemStyles.infoContainer}>
+                      <div style={itemStyles.name}>
+                        {customer.name}
                       </div>
-                    )}
 
-                    {isMobile && customer.phone && !customer.email && (
-                      <div
-                        style={{
-                          fontSize: '0.7rem',
-                          color: '#64748b',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {customer.phone}
+                      {customerVatType && (
+                        <div style={itemStyles.badgeContainer}>
+                          <span style={{
+                            ...itemStyles.badge,
+                            backgroundColor: customerVatType.bg,
+                            color: customerVatType.color,
+                          }}>
+                            <span>{customerVatType.icon}</span>
+                            <span>{isMobile ? customerVatType.labelShort : customerVatType.label}</span>
+                          </span>
+                        </div>
+                      )}
+
+                      <div style={itemStyles.contactInfo}>
+                        {customer.email && (
+                          <div style={itemStyles.email}>
+                            <Mail size={isSmallMobile ? 10 : 12} />
+                            <span>{customer.email}</span>
+                          </div>
+                        )}
+                        {customer.phone && (
+                          <div style={itemStyles.phone}>
+                            <Phone size={isSmallMobile ? 10 : 12} />
+                            <span>{customer.phone}</span>
+                          </div>
+                        )}
                       </div>
+                    </div>
+
+                    {isSelected && (
+                      <CheckCircle
+                        size={isSmallMobile ? 16 : 18}
+                        color="#10b981"
+                        style={{ flexShrink: 0 }}
+                      />
                     )}
                   </div>
-
-                  {value === customer._id && (
-                    <CheckCircle
-                      size={isMobile ? 16 : 20}
-                      color="#10b981"
-                      style={{ flexShrink: 0 }}
-                    />
-                  )}
-                </div>
-              ))
+                );
+              })
             ) : (
-              <div
-                style={{
-                  padding: isMobile ? '2rem 1rem' : '2.5rem',
-                  textAlign: 'center',
-                }}
-              >
-                <Users 
-                  size={isMobile ? 36 : 48} 
-                  color="#cbd5e1"
-                  style={{ margin: '0 auto' }}
-                />
-
-                <p
-                  style={{
-                    marginTop: '0.75rem',
-                    color: '#64748b',
-                    fontSize: isMobile ? '0.875rem' : '0.9rem',
-                  }}
-                >
-                  {searchTerm
-                    ? `No results for "${searchTerm}"`
-                    : 'No customers found'}
+              <div style={dropdownStyles.emptyState}>
+                <Users size={isMobile ? 40 : 48} color="#cbd5e1" style={{ margin: '0 auto' }} />
+                <p style={{ marginTop: '12px', color: '#64748b', fontSize: '0.875rem' }}>
+                  {searchTerm ? `No results for "${searchTerm}"` : 'No customers found'}
                 </p>
-
                 {companyId && !searchTerm && (
                   <button
                     onClick={handleSync}
                     style={{
-                      marginTop: '1rem',
-                      padding: '0.5rem 1rem',
+                      marginTop: '16px',
+                      padding: isMobile ? '10px 20px' : '12px 24px',
                       background: '#0f172a',
                       color: 'white',
                       border: 'none',
                       borderRadius: '10px',
-                      fontSize: isMobile ? '0.75rem' : '0.8rem',
+                      fontSize: '0.8rem',
                       fontWeight: 500,
                       cursor: 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '0.5rem',
+                      gap: '8px',
                     }}
                   >
                     <Loader2 size={14} style={{ animation: 'cs-spin 1s linear infinite' }} />
@@ -731,31 +748,10 @@ const CustomerSelector = ({
             )}
           </div>
 
-          {/* ========================= */}
           {/* Mobile Close Button */}
-          {/* ========================= */}
           {isMobile && (
-            <div
-              style={{
-                padding: '12px 16px',
-                borderTop: '1px solid #f1f5f9',
-                background: 'white',
-              }}
-            >
-              <button
-                onClick={closeDropdown}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: '#f1f5f9',
-                  border: 'none',
-                  borderRadius: '12px',
-                  fontSize: '0.875rem',
-                  fontWeight: 600,
-                  color: '#64748b',
-                  cursor: 'pointer',
-                }}
-              >
+            <div style={dropdownStyles.closeButtonContainer}>
+              <button onClick={closeDropdown} style={dropdownStyles.closeButton}>
                 Close
               </button>
             </div>

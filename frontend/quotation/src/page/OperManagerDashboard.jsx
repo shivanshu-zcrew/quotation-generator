@@ -105,6 +105,65 @@ const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
 });
 
 // ============================================================
+// STATS SHIMMER COMPONENT
+// ============================================================
+const StatsShimmer = React.memo(({ isMobile }) => {
+  const cardStyle = {
+    background: T.surface,
+    borderRadius: T.radius,
+    padding: '1.25rem',
+    border: `1px solid ${T.line}`,
+    boxShadow: T.shadow,
+  };
+
+  const shimmerLine = {
+    background: `linear-gradient(90deg, ${T.lineSoft} 25%, ${T.line} 50%, ${T.lineSoft} 75%)`,
+    backgroundSize: '200% 100%',
+    animation: 'ops-shimmer 1.4s ease infinite',
+    borderRadius: 6,
+  };
+
+  if (isMobile) {
+    return (
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={cardStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ ...shimmerLine, width: 100, height: 18 }} />
+            <div style={{ ...shimmerLine, width: 40, height: 40, borderRadius: '50%' }} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '0.75rem' }}>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i}>
+                <div style={{ ...shimmerLine, width: 60, height: 11, marginBottom: 8 }} />
+                <div style={{ ...shimmerLine, width: 80, height: 22 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '1rem' }}>
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ ...shimmerLine, width: 80, height: 11 }} />
+                <div style={{ ...shimmerLine, width: 100, height: 26, marginTop: 8 }} />
+              </div>
+              <div style={{ ...shimmerLine, width: 44, height: 44, borderRadius: 12 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// ============================================================
 // PAGINATION BAR — same as HomeScreen
 // ============================================================
 const PageBtn = React.memo(({ n, current, onPage }) => (
@@ -179,74 +238,6 @@ const PaginationBar = React.memo(({ total, page, limit, totalPages, onPageChange
 });
 
 // ============================================================
-// SHIMMER — same palette as HomeScreen
-// ============================================================
-const shimmer = {
-  background: `linear-gradient(90deg, ${T.lineSoft} 25%, ${T.line} 50%, ${T.lineSoft} 75%)`,
-  backgroundSize: '200% 100%',
-  animation: 'ops-shimmer 1.4s ease infinite',
-  borderRadius: 6,
-};
-
-const ShimmerStatsCard = ({ isMobile }) => {
-  const card = { background: T.surface, borderRadius: T.radius, padding: '1.25rem', border: `1px solid ${T.line}` };
-  if (isMobile) {
-    return (
-      <div style={{ marginBottom: '1.5rem' }}>
-        <div style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <div style={{ ...shimmer, width: 100, height: 18 }} />
-            <div style={{ ...shimmer, width: 40, height: 40, borderRadius: '50%' }} />
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '0.75rem' }}>
-            {[1,2,3,4].map((i) => (
-              <div key={i}>
-                <div style={{ ...shimmer, width: 60, height: 11, marginBottom: 8 }} />
-                <div style={{ ...shimmer, width: 80, height: 22 }} />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div style={{ marginBottom: '1.5rem' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '1rem' }}>
-        {[1,2,3,4].map((i) => (
-          <div key={i} style={card}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <div style={{ ...shimmer, width: 80, height: 11 }} />
-                <div style={{ ...shimmer, width: 100, height: 26, marginTop: 8 }} />
-              </div>
-              <div style={{ ...shimmer, width: 44, height: 44, borderRadius: 12 }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// ============================================================
-// RESPONSIVE HOOK
-// ============================================================
-const useMediaQuery = (query) => {
-  const [matches, setMatches] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia(query).matches : false
-  );
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia(query);
-    const h = (e) => setMatches(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, [query]);
-  return matches;
-};
-
-// ============================================================
 // EXPIRY BADGE
 // ============================================================
 const ExpiryBadge = React.memo(({ type }) => {
@@ -271,7 +262,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 
   return (
     <div style={{ background: T.surface, borderRadius: T.radius, padding: '1rem 1.1rem', border: `1px solid ${T.line}`, boxShadow: T.shadow, fontFamily: FONT_STACK }}>
-      {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.65rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{quotation.quotationNumber || '—'}</span>
@@ -282,7 +272,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         <span style={{ fontWeight: 700, color: T.ink, fontSize: '0.9rem' }}>{fmtCurrency(quotation.total, selectedCurrency)}</span>
       </div>
 
-      {/* Customer */}
       <div style={{ marginBottom: '0.5rem' }}>
         <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>
           {quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}
@@ -295,7 +284,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         <div style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem' }}>{quotation.projectName}</div>
       )}
 
-      {/* Meta row */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.6rem', fontSize: '0.72rem', color: T.inkSoft, flexWrap: 'wrap' }}>
         <span>Submitted: {fmtDate(quotation.date)}</span>
         <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>Expiry: {fmtDate(quotation.expiryDate)}</span>
@@ -306,7 +294,6 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         Created by: {quotation.createdBy?.name || '—'}
       </div>
 
-      {/* Actions */}
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
         <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         {canAct && (
@@ -323,6 +310,23 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
   );
 });
 OpsQuotationCard.displayName = 'OpsQuotationCard';
+
+// ============================================================
+// RESPONSIVE HOOK
+// ============================================================
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia(query);
+    const h = (e) => setMatches(e.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, [query]);
+  return matches;
+};
 
 // ============================================================
 // MAIN DASHBOARD
@@ -358,7 +362,19 @@ export default function OpsDashboard({ onViewQuotation }) {
   const clearError         = useAppStore((s) => s.clearError);
   const selectedCompany    = useAppStore((s) => s.selectedCompany);
 
-  const { loading: statsLoading, refresh: refreshStats, totalQuotations, pendingReview, awaitingAdmin, returnedByMe, totalValue, tabCounts, approved, awarded } = useOpsStats();
+  const { 
+    loading: statsLoading, 
+    refresh: refreshStats, 
+    totalQuotations, 
+    pendingReview, 
+    awaitingAdmin, 
+    returnedByMe, 
+    totalValue, 
+    tabCounts, 
+    approved, 
+    awarded 
+  } = useOpsStats();
+  
   const { selectedCurrency } = useCompanyCurrency();
   const { toasts, addToast, dismissToast } = useToast();
 
@@ -382,7 +398,8 @@ export default function OpsDashboard({ onViewQuotation }) {
   const statsLatchRef = useRef(false);
   const tableLatchRef = useRef(false);
 
-  const statsReady = totalQuotations != null;
+  // ✅ FIX: Properly determine when stats are ready
+  const statsReady = !statsLoading && totalQuotations != null;
   const tableReady = quotationsInitialized;
 
   if (statsReady) statsLatchRef.current = true;
@@ -398,7 +415,8 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [selectedCompany]);
 
-  const showStatsShimmer = !statsLatchRef.current && !statsReady;
+  // ✅ FIX: Show shimmer when stats are loading AND latch is false
+  const showStatsShimmer = !statsLatchRef.current && statsLoading;
   const showTableShimmer = !tableLatchRef.current && !tableReady;
 
   const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
@@ -433,27 +451,49 @@ export default function OpsDashboard({ onViewQuotation }) {
     return () => { isMountedRef.current = false; };
   }, []);
 
+  // ✅ FIX: Load both quotations and stats in parallel
   useEffect(() => {
     if (!selectedCompany || initialLoadDone.current) return;
+    
     const load = async () => {
       if (refreshInProgress.current) return;
       refreshInProgress.current = true;
+      
       loadingTimeoutRef.current = setTimeout(() => {
         setForceHideLoading(true);
         initialLoadDone.current = true;
         refreshInProgress.current = false;
       }, 8000);
+      
       try {
-        await refreshCompanyQuotations({ page: 1, limit: isMobile ? 10 : 20, status: undefined, search: '', sortBy: 'createdAt', sortDir: 'desc' });
-        await refreshStats();
-        if (isMountedRef.current) { initialLoadDone.current = true; setForceHideLoading(false); }
+        await Promise.all([
+          refreshCompanyQuotations({ 
+            page: 1, 
+            limit: isMobile ? 10 : 20, 
+            status: undefined, 
+            search: '', 
+            sortBy: 'createdAt', 
+            sortDir: 'desc' 
+          }),
+          refreshStats()
+        ]);
+        
+        if (isMountedRef.current) { 
+          initialLoadDone.current = true; 
+          setForceHideLoading(false); 
+        }
       } catch (e) {
-        if (isMountedRef.current) { initialLoadDone.current = true; setForceHideLoading(true); }
+        console.error('Initial load error:', e);
+        if (isMountedRef.current) { 
+          initialLoadDone.current = true; 
+          setForceHideLoading(true); 
+        }
       } finally {
         clearTimeout(loadingTimeoutRef.current);
         refreshInProgress.current = false;
       }
     };
+    
     load();
   }, [selectedCompany, refreshCompanyQuotations, refreshStats, isMobile]);
 
@@ -712,25 +752,37 @@ export default function OpsDashboard({ onViewQuotation }) {
 
         {/* ── STATS ── */}
         {showStatsShimmer ? (
-          <ShimmerStatsCard isMobile={isMobile} />
+          <StatsShimmer isMobile={isMobile} />
         ) : (
           <div className="ops-fade-in" style={{ marginBottom: '1.75rem' }}>
             {isMobile ? (
               <CompactStatsCard
-                totalRevenue={totalValue}
-                quotationsCount={totalQuotations}
+                totalRevenue={totalValue || 0}
+                quotationsCount={totalQuotations || 0}
                 customersCount={0}
                 selectedCurrency={selectedCurrency}
-                statusCounts={{ pending: pendingReview, in_review: awaitingAdmin, approved: 0, awarded: 0, returned: returnedByMe }}
+                statusCounts={{ 
+                  pending: pendingReview || 0, 
+                  in_review: awaitingAdmin || 0, 
+                  approved: approved || 0, 
+                  awarded: awarded || 0, 
+                  returned: returnedByMe || 0 
+                }}
                 loading={false}
               />
             ) : (
               <DesktopStatsGrid
-                totalRevenue={totalValue}
-                quotationsCount={totalQuotations}
+                totalRevenue={totalValue || 0}
+                quotationsCount={totalQuotations || 0}
                 customersCount={0}
                 selectedCurrency={selectedCurrency}
-                statusCounts={{ pending: pendingReview, in_review: awaitingAdmin, approved: 0, awarded: 0, returned: returnedByMe }}
+                statusCounts={{ 
+                  pending: pendingReview || 0, 
+                  in_review: awaitingAdmin || 0, 
+                  approved: approved || 0, 
+                  awarded: awarded || 0, 
+                  returned: returnedByMe || 0 
+                }}
                 loading={false}
               />
             )}
@@ -898,7 +950,6 @@ export default function OpsDashboard({ onViewQuotation }) {
                             const isAdminRej = q.status === 'rejected';
                             return (
                               <tr key={q._id} className="ops-row" style={{ borderBottom: `1px solid ${T.lineSoft}`, backgroundColor: isAdminRej ? '#fef9f9' : 'transparent' }}>
-                                {/* Quote # */}
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{q.quotationNumber || '—'}</span>
@@ -906,36 +957,28 @@ export default function OpsDashboard({ onViewQuotation }) {
                                     {expiring && <ExpiryBadge type="expiring" />}
                                   </div>
                                 </td>
-                                {/* Customer */}
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
                                   <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
                                   {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2 }}>{q.contact}</div>}
                                   <RejectionNote quotation={q} />
                                 </td>
-                                {/* Date */}
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{fmtDate(q.date)}</td>
-                                {/* Expiry */}
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
                                   <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>{fmtDate(q.expiryDate)}</span>
-                                </td>
-                                {/* Status */}
+                                 </td>
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
                                   <EnhancedStatusBadge status={q.status} quotation={q} />
                                   <RejectionNote quotation={q} />
-                                </td>
-                                {/* Created by */}
+                                 </td>
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle' }}>{q.createdBy?.name || '—'}</td>
-                                {/* Items */}
                                 <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'center' }}>
                                   <span style={{ background: T.lineSoft, color: T.inkSoft, borderRadius: 6, padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600 }}>
                                     {q.items?.length ?? 0}
                                   </span>
-                                </td>
-                                {/* Total */}
+                                 </td>
                                 <td style={{ padding: '1rem', fontSize: '0.9rem', fontWeight: 700, color: T.ink, verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>
                                   {fmtCurrency(q.total, selectedCurrency)}
-                                </td>
-                                {/* Actions */}
+                                 </td>
                                 <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
                                   <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                                     <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation" />
@@ -949,8 +992,8 @@ export default function OpsDashboard({ onViewQuotation }) {
                                       <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAwardOpen(q)} icon={Award} label="Award" title="Mark awarded" disabled={isOp(q._id, 'award')} />
                                     )}
                                   </div>
-                                </td>
-                              </tr>
+                                 </td>
+                               </tr>
                             );
                           })}
                         </tbody>

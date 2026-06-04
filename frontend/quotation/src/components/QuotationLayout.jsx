@@ -9,6 +9,7 @@ import MobileQuotationLayout from './MobileQuotationLayout';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { fmtDate } from '../utils/formatters';
 import { useAppStore } from '../services/store';
+import { validatePhoneNumber } from '../utils/quotationUtils';
 
 // ============================================================
 // CONSTANTS
@@ -585,13 +586,16 @@ const styles = {
 // ============================================================
 // DOCUMENT UPLOAD SECTION
 // ============================================================
+// ============================================================
+// DOCUMENT UPLOAD SECTION (FIXED)
+// ============================================================
 function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload, onPreview, loading = false, isEditing = false, formatFileSize, getFileIcon }) {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [docDescriptions, setDocDescriptions] = useState({});
   const [uploading, setUploading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null); // Add error state
 
-  // Helper: detect zip by MIME or extension (browsers sometimes send
-  // application/octet-stream for .zip, so check the name too).
+  // Helper: detect zip by MIME or extension
   const isZipFile = useCallback((file) => {
     const name = (file.name || '').toLowerCase();
     const type = (file.type || '').toLowerCase();
@@ -601,62 +605,112 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
       || type === 'multipart/x-zip';
   }, []);
 
+  // Show error message (replaces alert)
+  const showError = useCallback((message) => {
+    setErrorMessage(message);
+    setTimeout(() => setErrorMessage(null), 3000);
+  }, []);
+
   const validateFile = useCallback((file) => {
     if (isZipFile(file)) {
-      alert(`ZIP files are not allowed for internal documents.`);
+      showError(`ZIP files are not allowed for internal documents.`);
       return false;
     }
     if (file.size > DOCUMENT_CONFIG.MAX_SIZE_MB * 1024 * 1024) {
-      alert(`File "${file.name}" exceeds ${DOCUMENT_CONFIG.MAX_SIZE_MB}MB limit`);
+      showError(`File "${file.name}" exceeds ${DOCUMENT_CONFIG.MAX_SIZE_MB}MB limit`);
       return false;
     }
     if (!DOCUMENT_CONFIG.ALLOWED_TYPES.includes(file.type)) {
-      alert(`File "${file.name}" type is not allowed`);
+      showError(`File "${file.name}" type is not allowed`);
       return false;
     }
     return true;
-  }, [isZipFile]);
+  }, [isZipFile, showError]);
 
   const handleFileSelect = useCallback((e) => {
     const files = Array.from(e.target.files);
     e.target.value = ''; // allow re-selecting the same file after a removal
+    
+    // Filter valid files first
     const validFiles = files.filter(validateFile);
     if (!validFiles.length) return;
 
     setSelectedFiles(prev => {
-      // Cap total selected + already-saved documents at MAX_FILES.
+      // Cap total selected + already-saved documents at MAX_FILES
       const currentTotal = prev.length + documents.length;
       const slots = DOCUMENT_CONFIG.MAX_FILES - currentTotal;
+      
       if (slots <= 0) {
-        alert(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} internal documents allowed. You already have ${currentTotal}.`);
+        showError(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} internal documents allowed. You already have ${currentTotal}.`);
         return prev;
       }
+      
       if (validFiles.length > slots) {
-        alert(`Only ${slots} more document(s) allowed — adding the first ${slots}.`);
+        showError(`Only ${slots} more document(s) allowed — adding the first ${slots}.`);
       }
-      return [...prev, ...validFiles.slice(0, slots)];
+      
+      const filesToAdd = validFiles.slice(0, slots);
+      return [...prev, ...filesToAdd];
     });
-  }, [validateFile, documents.length]);
+  }, [validateFile, documents.length, showError]);
 
   const handleUpload = useCallback(async () => {
     if (selectedFiles.length === 0 || !onUpload) return;
+    
+    // Check again before upload to prevent race conditions
+    const currentTotal = selectedFiles.length + documents.length;
+    if (currentTotal > DOCUMENT_CONFIG.MAX_FILES) {
+      showError(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} documents allowed.`);
+      return;
+    }
+    
     setUploading(true);
     try {
       const descriptions = selectedFiles.map(file => docDescriptions[file.name] || '');
       await onUpload(selectedFiles, descriptions);
       setSelectedFiles([]);
       setDocDescriptions({});
+    } catch (error) {
+      showError('Failed to upload documents');
     } finally {
       setUploading(false);
     }
-  }, [selectedFiles, docDescriptions, onUpload]);
+  }, [selectedFiles, docDescriptions, onUpload, documents.length, showError]);
 
   return (
     <div style={{ marginBottom: '2rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', padding: '1.25rem', border: '1px solid #e2e8f0' }}>
+      {/* Error Snackbar */}
+      {errorMessage && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 1000,
+          backgroundColor: '#ef4444',
+          color: 'white',
+          padding: '12px 20px',
+          borderRadius: '8px',
+          fontSize: '14px',
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+          animation: 'slideIn 0.3s ease'
+        }}>
+          {errorMessage}
+        </div>
+      )}
+      
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
         <FileText size={20} color="#4b5563" />
         <h3 style={styles.sectionTitle}>Internal Documents</h3>
         <span style={styles.internalBadge}>For internal team only</span>
+        <span style={{
+          fontSize: '0.7rem',
+          color: '#6b7280',
+          backgroundColor: '#f3f4f6',
+          padding: '0.2rem 0.6rem',
+          borderRadius: '999px'
+        }}>
+          {documents.length + selectedFiles.length} / {DOCUMENT_CONFIG.MAX_FILES}
+        </span>
       </div>
 
       {isEditing && (
@@ -668,28 +722,51 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
             onChange={handleFileSelect}
             style={{ display: 'none' }}
             id="internal-doc-upload"
+            disabled={documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES}
           />
-          <label htmlFor="internal-doc-upload" style={{ ...styles.uploadButton, backgroundColor: uploading ? '#9ca3af' : '#4f46e5', cursor: uploading ? 'not-allowed' : 'pointer' }}>
-            <Upload size={16} /> {uploading ? 'Uploading...' : 'Select Documents'}
+          <label 
+            htmlFor="internal-doc-upload" 
+            style={{ 
+              ...styles.uploadButton, 
+              backgroundColor: uploading || (documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES) ? '#9ca3af' : '#4f46e5', 
+              cursor: uploading || (documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES) ? 'not-allowed' : 'pointer',
+              opacity: documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES ? 0.6 : 1
+            }}
+          >
+            <Upload size={16} /> 
+            {uploading ? 'Uploading...' : documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES ? 'Maximum Reached' : 'Select Documents'}
           </label>
-          <p style={styles.uploadHint}>Supports PDF, DOC, XLS, Images, TXT (Max {DOCUMENT_CONFIG.MAX_FILES} files, {DOCUMENT_CONFIG.MAX_SIZE_MB}MB each).</p>
+          <p style={styles.uploadHint}>
+            Supports PDF, DOC, XLS, Images, TXT (Max {DOCUMENT_CONFIG.MAX_FILES} files, {DOCUMENT_CONFIG.MAX_SIZE_MB}MB each). ZIP files are not allowed.
+          </p>
 
           {selectedFiles.length > 0 && (
             <div style={{ marginTop: '1rem' }}>
-              <h4 style={styles.fileListTitle}>Files ready to upload:</h4>
+              <h4 style={styles.fileListTitle}>Files ready to upload ({selectedFiles.length}):</h4>
               {selectedFiles.map((file, index) => (
                 <div key={index} style={styles.fileRow}>
                   <FileText size={16} color="#6b7280" />
                   <span style={styles.fileName}>{file.name}</span>
-                  <input type="text" placeholder="Description (optional)" value={docDescriptions[file.name] || ''}
+                  <input 
+                    type="text" 
+                    placeholder="Description (optional)" 
+                    value={docDescriptions[file.name] || ''}
                     onChange={(e) => setDocDescriptions(prev => ({ ...prev, [file.name]: e.target.value }))}
-                    style={styles.fileDescriptionInput} />
-                  <button onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== index))} style={styles.removeFileBtn}>
+                    style={styles.fileDescriptionInput} 
+                  />
+                  <button 
+                    onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== index))} 
+                    style={styles.removeFileBtn}
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
               ))}
-              <button onClick={handleUpload} disabled={uploading} style={styles.uploadConfirmBtn}>
+              <button 
+                onClick={handleUpload} 
+                disabled={uploading} 
+                style={styles.uploadConfirmBtn}
+              >
                 {uploading ? 'Uploading...' : `Upload ${selectedFiles.length} File(s)`}
               </button>
             </div>
@@ -697,6 +774,7 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
         </div>
       )}
 
+      {/* Rest of your document list rendering remains the same */}
       {loading ? (
         <div style={styles.loadingText}>Loading documents...</div>
       ) : documents.length > 0 ? (
@@ -730,6 +808,20 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
           {isEditing && <p style={{ margin: '0.25rem 0 0', fontSize: '0.75rem' }}>Upload documents for internal team reference</p>}
         </div>
       )}
+      
+      {/* Add animation styles */}
+      <style>{`
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `}</style>
     </div>
   );
 }
@@ -771,23 +863,16 @@ export default function QuotationLayout({
   onDocumentDownload, onDocumentPreview, documentLoading = false, formatFileSize, getFileIcon,
   companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai', 
   termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
-  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = '',  selectedCurrency: propSelectedCurrency = null 
+  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = ''
 }) {
-  const { selectedCurrency: globalSelectedCurrency } = useCompanyCurrency();
+  const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
   
   const displayCurrency = useMemo(() => {
-     if (!isEditing && quotationData?.currency?.code) {
-      return quotationData.currency.code;
-    }
-     if (propSelectedCurrency) {
-      return propSelectedCurrency;
-    }
-     if (quotationData?.currency?.code) {
-      return quotationData.currency.code;
-    }
-     return globalSelectedCurrency || 'AED';
-  }, [isEditing, quotationData?.currency?.code, propSelectedCurrency, globalSelectedCurrency]);
+    if (!isEditing || quotationData.currency?.code) return quotationData.currency?.code || 'AED';
+    if (quotationData.currency?.code) return quotationData.currency.code;
+    return selectedCurrency || 'AED';
+  }, [isEditing, quotationData.currency, selectedCurrency]);
 
   const isPlaceOfSupplyUAE = useMemo(() => UAE_EMIRATES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);
   const isPlaceOfSupplyGCC = useMemo(() => GCC_COUNTRIES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);
@@ -806,12 +891,31 @@ export default function QuotationLayout({
   }, [customerTaxTreatment, isPlaceOfSupplyUAE, isPlaceOfSupplyGCC]);
 
   const taxPresets = getTaxPresets();
-  const showTaxSection = taxPresets.length > 0;
+
+  // Does this quotation already carry a tax/discount value? (saved quote being
+  // viewed or edited). Numbers can live on quotationData.tax/discount OR on the
+  // computed taxAmount/discountAmount passed in by the parent.
+  const hasSavedTax = (Number(quotationData.tax) || 0) > 0 || (Number(taxAmount) || 0) > 0;
+  const hasSavedDiscount = (Number(quotationData.discount) || 0) > 0 || (Number(discountAmount) || 0) > 0;
+
+  // The editable Tax & Discount controls show when presets are available OR
+  // when an existing quote already has tax/discount to edit (so the controls
+  // don't vanish just because the tax-treatment prop didn't thread through on
+  // view/edit, e.g. for ops manager).
+  const showTaxSection = taxPresets.length > 0 || hasSavedTax || hasSavedDiscount;
+
+  // The read-only VAT row in the totals table shows whenever there's a tax
+  // value to display — independent of preset logic.
+  const showTaxRow = showTaxSection || hasSavedTax;
+
   const defaultTaxValue = useMemo(() => {
-    if (!showTaxSection) return "0";
+    if (taxPresets.length === 0) {
+      // No presets resolved — fall back to whatever the quote already has.
+      return (quotationData.tax != null ? String(quotationData.tax) : "0");
+    }
     const fivePercent = taxPresets.find(p => p.value === "5");
     return fivePercent ? "5" : taxPresets[0].value;
-  }, [showTaxSection, taxPresets]);
+  }, [taxPresets, quotationData.tax]);
 
   const READONLY_FIELDS_IN_EDIT_MODE = ['customer', 'companyPhone', 'companyEmail', 'companyTradeLicense', 'companyTaxRegistration'];
 
@@ -838,7 +942,27 @@ export default function QuotationLayout({
         // Make Company Name (customer) and Customer Name (customerName) read-only
         const isReadOnlyField = field === 'date' || field === 'expiryDate' || 
                                 field === 'companyTradeLicense' || field === 'companyTaxRegistration' ||
-                                field === 'customer' || field === 'customerName';  // ✅ ADD THESE TWO LINES
+                                field === 'customer' || field === 'customerName';
+        
+        // Check if this is a phone field that needs validation
+        const isPhoneField = field === 'customerPhone' || field === 'ourContact' || field === 'companyPhone';
+        
+        // Handle phone number validation
+        const handlePhoneChange = (e) => {
+          const value = e.target.value;
+          
+          // Remove any letters as user types
+          let cleanedValue = value.replace(/[a-zA-Z]/g, '');
+          
+          // Validate the cleaned value
+          const validation = validatePhoneNumber(cleanedValue);
+          if (!validation.isValid && cleanedValue) {
+            setSnackbar({ show: true, message: validation.error, type: 'error' });
+            setTimeout(() => setSnackbar(prev => ({ ...prev, show: false })), 3000);
+          }
+          
+          handleFieldChange(field, cleanedValue);
+        };
         
         return (
           <React.Fragment key={field}>
@@ -867,6 +991,27 @@ export default function QuotationLayout({
                     style={{
                       ...inputStyle,
                       resize: 'vertical',
+                      borderColor: errorMessage ? '#dc2626' : undefined,
+                      backgroundColor: errorMessage ? '#fef2f2' : undefined
+                    }}
+                  />
+                ) : isPhoneField ? (
+                  <input
+                    type="tel"
+                    className="edit-input"
+                    value={fieldValue || ''}
+                    onChange={handlePhoneChange}
+                    onKeyDown={(e) => {
+                      // Prevent letters from being typed
+                      if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
+                        e.preventDefault();
+                        setSnackbar({ show: true, message: 'Phone number cannot contain letters', type: 'error' });
+                        setTimeout(() => setSnackbar(prev => ({ ...prev, show: false })), 3000);
+                      }
+                    }}
+                    placeholder="e.g., +971 50 123 4567"
+                    style={{
+                      ...inputStyle,
                       borderColor: errorMessage ? '#dc2626' : undefined,
                       backgroundColor: errorMessage ? '#fef2f2' : undefined
                     }}
@@ -1155,6 +1300,7 @@ export default function QuotationLayout({
       customerTaxTreatment={customerTaxTreatment}
       customerPlaceOfSupply={customerPlaceOfSupply}
       showTaxSection={showTaxSection}
+      showTaxRow={showTaxRow}
       taxPresets={taxPresets}
       defaultTaxValue={defaultTaxValue}
       handleTaxChange={handleTaxChange}
@@ -1234,7 +1380,7 @@ export default function QuotationLayout({
                 <td style={styles.totalValueCell}>{subtotal.toFixed(2)}</td>
                 {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
               </tr>
-              {showTaxSection && (
+              {showTaxRow && (
                 <tr style={styles.totalRow}>
                   <td colSpan={isEditing ? 4 : 3} style={{ border: '1px solid #e5e7eb' }} />
                   <td style={styles.totalLabelCell}>VAT ({quotationData.tax || 0}%)</td>
