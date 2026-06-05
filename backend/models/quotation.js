@@ -33,9 +33,16 @@ const ExchangeRate =
 
 // ===== EXCHANGE RATE SERVICE =====
 class ExchangeRateService {
-  static async getRates(baseCurrency) {
+  // Fetch rates with `baseCurrency` as the base, i.e. open.er-api latest/{base}.
+  // Returns an object meaning "1 <base> = value <currency>", always including
+  // { [base]: 1 }. Callers convert a quote-currency amount INTO the base
+  // currency by reading rates[targetBase]; e.g. getRates("SAR").AED is the
+  // SAR->AED multiplier.
+  static async getRates(baseCurrency = "AED") {
+    // Declared outside try so the catch can use the cached row on API failure.
+    let cached;
     try {
-      const cached = await ExchangeRate.findOne({ baseCurrency }).sort({
+      cached = await ExchangeRate.findOne({ baseCurrency }).sort({
         fetchedAt: -1,
       });
 
@@ -49,13 +56,20 @@ class ExchangeRateService {
       }
       throw new Error("API failed");
     } catch (apiError) {
-      if (cached) return cached.rates;
-      return this.getFallbackRates();
+      if (cached) {
+        return cached.rates instanceof Map
+          ? Object.fromEntries(cached.rates)
+          : cached.rates;
+      }
+      return this.getFallbackRates(baseCurrency);
     }
   }
 
-  static getFallbackRates() {
-    return {
+  // Canonical AED-based table. For any requested base, derive cross-rates so
+  // the returned object means "1 <base> = value <currency>".
+  // rate(base -> X) = AED_TABLE[X] / AED_TABLE[base].
+  static getFallbackRates(baseCurrency = "AED") {
+    const AED_TABLE = {
       AED: 1,
       USD: 0.2723,
       EUR: 0.2512,
@@ -66,6 +80,18 @@ class ExchangeRateService {
       BHD: 0.1026,
       OMR: 0.1048,
     };
+
+    if (baseCurrency === "AED") return { ...AED_TABLE };
+
+    const baseInAed = AED_TABLE[baseCurrency];
+    if (!baseInAed) return { [baseCurrency]: 1, AED: 1 };
+
+    const out = {};
+    for (const [cur, aedRate] of Object.entries(AED_TABLE)) {
+      out[cur] = aedRate / baseInAed;
+    }
+    out[baseCurrency] = 1;
+    return out;
   }
 
   static async convert(amount, fromCurrency, toCurrency = "AED") {
@@ -76,12 +102,22 @@ class ExchangeRateService {
 }
 
 // ===== SUB-SCHEMAS =====
+// Internal documents — supports S3 (current) and Cloudinary (legacy).
+// Legacy fields are optional so old records still validate; new S3 records
+// validate because nothing Cloudinary-only is required.
 const quotationDocumentSchema = new mongoose.Schema({
   fileName: { type: String, required: true },
-  fileType: { type: String, required: true },
-  fileSize: { type: Number, required: true },
-  fileUrl: { type: String, required: true },
-  publicId: { type: String, required: true },
+  fileType: { type: String },
+  fileSize: { type: Number },
+
+  // S3 (current)
+  s3Key: { type: String },
+  storageProvider: { type: String, enum: ["s3", "cloudinary"], default: "s3" },
+
+  // Cloudinary (legacy) — optional
+  fileUrl: { type: String },
+  publicId: { type: String },
+
   uploadedAt: { type: Date, default: Date.now },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   description: { type: String, default: "" },
@@ -89,7 +125,7 @@ const quotationDocumentSchema = new mongoose.Schema({
 
 const quotationItemSchema = new mongoose.Schema(
   {
-     
+
     zohoItemId: {
       type: String,
       index: true,
@@ -121,6 +157,10 @@ const quotationItemSchema = new mongoose.Schema(
       required: true,
       set: (v) => Math.round(v * 100) / 100,
     },
+    // S3 (current)
+    imageS3Keys: [{ type: String }],
+    storageProvider: { type: String, enum: ["s3", "cloudinary"], default: "s3" },
+    // Cloudinary (legacy)
     imagePaths: [{ type: String }],
     imagePublicIds: [{ type: String }],
   },
@@ -177,7 +217,7 @@ const quotationSchema = new mongoose.Schema(
 
     // Core fields
     quotationNumber: { type: String, required: true, index: true },
-    
+
     // NEW: Scope of Work
     scopeOfWork: { type: String, default: "" },
 
@@ -290,10 +330,16 @@ const quotationSchema = new mongoose.Schema(
     // Notes & Terms
     notes: { type: String, default: "" },
     termsAndConditions: { type: String, default: "" },
+    // Terms images — supports S3 (current) and Cloudinary (legacy).
+    // url/publicId are NO LONGER required so S3 records (s3Key only) validate.
     termsImages: [
       {
-        url: { type: String, required: true },
-        publicId: { type: String, required: true },
+        // S3 (current)
+        s3Key: { type: String },
+        storageProvider: { type: String, enum: ["s3", "cloudinary"], default: "s3" },
+        // Cloudinary (legacy) — optional
+        url: { type: String },
+        publicId: { type: String },
         fileName: { type: String },
         uploadedAt: { type: Date, default: Date.now },
       },
@@ -407,7 +453,7 @@ quotationSchema.pre("save", async function (next) {
         this.currency.decimalPlaces = currency.decimalPlaces;
       }
     }
-    
+
     if (this.isNew || this.isModified("customerId")) {
       const Customer = mongoose.model("Customer");
       const customer = await Customer.findById(this.customerId);
