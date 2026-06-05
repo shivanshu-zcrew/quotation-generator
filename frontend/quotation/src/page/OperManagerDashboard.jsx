@@ -31,6 +31,14 @@ import { DEBOUNCE_MS, PAGE_SIZE_OPTIONS } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import AwardModal from '../components/AwardModal';
 
+// Helper function to format amount without currency symbol
+const formatAmount = (amount) => {
+  return (amount || 0).toLocaleString('en-AE', { 
+    minimumFractionDigits: 2, 
+    maximumFractionDigits: 2 
+  });
+};
+
 // ============================================================
 // DESIGN TOKENS — identical to HomeScreen
 // ============================================================
@@ -164,78 +172,211 @@ const StatsShimmer = React.memo(({ isMobile }) => {
 });
 
 // ============================================================
-// PAGINATION BAR — same as HomeScreen
+// PAGINATION BAR — Responsive with mobile optimization
 // ============================================================
 const PageBtn = React.memo(({ n, current, onPage }) => (
   <button
     onClick={() => onPage(n)}
     style={{
-      minWidth: 32, height: 32, borderRadius: 8,
-      border: n === current ? '1px solid transparent' : `1px solid ${T.line}`,
-      backgroundColor: n === current ? T.ink : T.surface,
+      minWidth: 34,
+      height: 34,
+      borderRadius: 8,
+      border: n === current ? 'none' : `1px solid ${T.line}`,
+      backgroundColor: n === current ? T.accent : T.surface,
       color: n === current ? '#fff' : T.inkSoft,
-      fontWeight: n === current ? 600 : 500, fontSize: '0.8rem',
-      cursor: 'pointer', transition: 'all 0.15s ease',
+      fontWeight: n === current ? 600 : 500,
+      fontSize: '0.8rem',
+      cursor: 'pointer',
+      transition: 'all 0.2s ease',
+      boxShadow: n === current ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+    }}
+    onMouseEnter={(e) => {
+      if (n !== current) {
+        e.currentTarget.style.backgroundColor = T.accentSoft;
+        e.currentTarget.style.borderColor = T.accent;
+        e.currentTarget.style.color = T.accentInk;
+      }
+    }}
+    onMouseLeave={(e) => {
+      if (n !== current) {
+        e.currentTarget.style.backgroundColor = T.surface;
+        e.currentTarget.style.borderColor = T.line;
+        e.currentTarget.style.color = T.inkSoft;
+      }
     }}
   >
     {n}
   </button>
 ));
 
-const PaginationBar = React.memo(({ total, page, limit, totalPages, onPageChange, onLimitChange }) => {
-  if (totalPages <= 1 && total <= (PAGE_SIZE_OPTIONS?.[0] ?? 10)) return null;
+const PaginationBar = React.memo(
+  ({ total, page, limit, totalPages, onPageChange, onLimitChange }) => {
+    const [isNarrow, setIsNarrow] = React.useState(false);
+    
+    React.useEffect(() => {
+      const checkWidth = () => {
+        setIsNarrow(window.innerWidth <= 600);
+      };
+      checkWidth();
+      window.addEventListener('resize', checkWidth);
+      return () => window.removeEventListener('resize', checkWidth);
+    }, []);
+    
+    const windowSize = isNarrow ? 1 : 2;
 
-  const start = (page - 1) * limit + 1;
-  const end   = Math.min(page * limit, total);
+    const pages = React.useMemo(() => {
+      const p = [];
+      const startPage = Math.max(1, page - windowSize);
+      const endPage = Math.min(totalPages, page + windowSize);
+      for (let i = startPage; i <= endPage; i++) p.push(i);
+      return p;
+    }, [page, totalPages, windowSize]);
 
-  const pages = useMemo(() => {
-    const p = [];
-    const s = Math.max(1, page - 2);
-    const e = Math.min(totalPages, page + 2);
-    for (let i = s; i <= e; i++) p.push(i);
-    return p;
-  }, [page, totalPages]);
+    if (totalPages <= 1 && total <= PAGE_SIZE_OPTIONS[0]) return null;
 
-  const showStart = pages[0] > 1;
-  const showEnd   = pages[pages.length - 1] < totalPages;
+    const start = (page - 1) * limit + 1;
+    const end = Math.min(page * limit, total);
 
-  const arrowBtn = (disabled) => ({
-    width: 32, height: 32, border: `1px solid ${T.line}`, borderRadius: 8,
-    background: T.surface, cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.4 : 1, display: 'flex', alignItems: 'center',
-    justifyContent: 'center', color: T.inkSoft,
-  });
+    const showStartEllipsis = pages[0] > 1;
+    const showEndEllipsis = pages[pages.length - 1] < totalPages;
 
-  return (
-    <div style={{ padding: '0.9rem 1.5rem', borderTop: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', backgroundColor: T.surface }}>
-      <span style={{ fontSize: '0.8rem', color: T.inkSoft }}>
-        Showing <strong style={{ color: T.ink, fontWeight: 600 }}>{start}–{end}</strong> of <strong style={{ color: T.ink, fontWeight: 600 }}>{total}</strong>
-      </span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        {onLimitChange && PAGE_SIZE_OPTIONS && (
-          <select value={limit} onChange={(e) => onLimitChange(Number(e.target.value))} style={{ padding: '0.3rem 0.6rem', borderRadius: 8, border: `1px solid ${T.line}`, fontSize: '0.75rem', backgroundColor: T.surface, color: T.inkSoft, cursor: 'pointer', fontFamily: FONT_STACK }}>
-            {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s} per page</option>)}
-          </select>
+    const arrowBtn = (disabled) => ({
+      width: 34,
+      height: 34,
+      border: `1px solid ${T.line}`,
+      borderRadius: 8,
+      background: T.surface,
+      cursor: disabled ? "not-allowed" : "pointer",
+      opacity: disabled ? 0.4 : 1,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: T.inkSoft,
+      flexShrink: 0,
+      transition: 'all 0.2s ease',
+    });
+
+    return (
+      <div
+        style={{
+          padding: isNarrow ? "0.8rem 1rem" : "0.9rem 1.5rem",
+          borderTop: `1px solid ${T.lineSoft}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: isNarrow ? "center" : "space-between",
+          flexWrap: "wrap",
+          gap: "0.75rem",
+          backgroundColor: T.surface,
+          borderBottomLeftRadius: T.radius,
+          borderBottomRightRadius: T.radius,
+        }}
+      >
+        {!isNarrow && (
+          <span style={{ fontSize: "0.8rem", color: T.inkSoft }}>
+            Showing{" "}
+            <strong style={{ color: T.ink, fontWeight: 600 }}>{start}–{end}</strong> of{" "}
+            <strong style={{ color: T.ink, fontWeight: 600 }}>{total}</strong>
+          </span>
         )}
-        <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1} style={arrowBtn(page === 1)}><ChevronLeft size={14} /></button>
-        {showStart && (
-          <>
-            <PageBtn n={1} current={page} onPage={onPageChange} />
-            {pages[0] > 2 && <span style={{ color: T.inkFaint, fontSize: '0.8rem' }}>…</span>}
-          </>
-        )}
-        {pages.map((n) => <PageBtn key={n} n={n} current={page} onPage={onPageChange} />)}
-        {showEnd && (
-          <>
-            {pages[pages.length - 1] < totalPages - 1 && <span style={{ color: T.inkFaint, fontSize: '0.8rem' }}>…</span>}
-            <PageBtn n={totalPages} current={page} onPage={onPageChange} />
-          </>
-        )}
-        <button onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} style={arrowBtn(page === totalPages)}><ChevronRight size={14} /></button>
+
+        <div style={{ 
+          display: "flex", 
+          alignItems: "center", 
+          gap: "0.5rem", 
+          flexWrap: "wrap", 
+          justifyContent: "center",
+          width: isNarrow ? '100%' : 'auto',
+        }}>
+          {onLimitChange && PAGE_SIZE_OPTIONS && !isNarrow && (
+            <select
+              value={limit}
+              onChange={(e) => onLimitChange(Number(e.target.value))}
+              style={{
+                padding: "0.3rem 0.6rem",
+                borderRadius: 8,
+                border: `1px solid ${T.line}`,
+                fontSize: "0.75rem",
+                backgroundColor: T.surface,
+                color: T.inkSoft,
+                cursor: "pointer",
+                fontFamily: FONT_STACK,
+                outline: 'none',
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((s) => (
+                <option key={s} value={s}>
+                  {s} per page
+                </option>
+              ))}
+            </select>
+          )}
+
+          <button
+            onClick={() => onPageChange(Math.max(1, page - 1))}
+            disabled={page === 1}
+            style={arrowBtn(page === 1)}
+            onMouseEnter={(e) => {
+              if (page !== 1) {
+                e.currentTarget.style.backgroundColor = T.accentSoft;
+                e.currentTarget.style.borderColor = T.accent;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (page !== 1) {
+                e.currentTarget.style.backgroundColor = T.surface;
+                e.currentTarget.style.borderColor = T.line;
+              }
+            }}
+          >
+            <ChevronLeft size={14} />
+          </button>
+
+          {showStartEllipsis && (
+            <>
+              <PageBtn n={1} current={page} onPage={onPageChange} />
+              {pages[0] > 2 && (
+                <span style={{ color: T.inkFaint, fontSize: "0.8rem", padding: "0 2px" }}>…</span>
+              )}
+            </>
+          )}
+
+          {pages.map((n) => (
+            <PageBtn key={n} n={n} current={page} onPage={onPageChange} />
+          ))}
+
+          {showEndEllipsis && (
+            <>
+              {pages[pages.length - 1] < totalPages - 1 && (
+                <span style={{ color: T.inkFaint, fontSize: "0.8rem", padding: "0 2px" }}>…</span>
+              )}
+              <PageBtn n={totalPages} current={page} onPage={onPageChange} />
+            </>
+          )}
+
+          <button
+            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            disabled={page === totalPages}
+            style={arrowBtn(page === totalPages)}
+            onMouseEnter={(e) => {
+              if (page !== totalPages) {
+                e.currentTarget.style.backgroundColor = T.accentSoft;
+                e.currentTarget.style.borderColor = T.accent;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (page !== totalPages) {
+                e.currentTarget.style.backgroundColor = T.surface;
+                e.currentTarget.style.borderColor = T.line;
+              }
+            }}
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
       </div>
-    </div>
-  );
-});
+    );
+  }
+);
 
 // ============================================================
 // EXPIRY BADGE
@@ -252,13 +393,14 @@ const ExpiryBadge = React.memo(({ type }) => {
 });
 
 // ============================================================
-// OPS MOBILE CARD — HomeScreen card style
+// OPS MOBILE CARD — with updated currency formatting
 // ============================================================
 const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onApprove, onReject, onDownload, onAward, isDownloading, isApproving, isRejecting, isAwarding }) => {
   const expired  = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct   = quotation.status === 'pending';
   const canAward = quotation.status === 'approved' && (quotation.createdBy?.role === 'ops_manager' || quotation.createdBySnapshot?.role === 'ops_manager');
+  const quoteCurrency = quotation.currency?.code || selectedCurrency;
 
   return (
     <div style={{ background: T.surface, borderRadius: T.radius, padding: '1rem 1.1rem', border: `1px solid ${T.line}`, boxShadow: T.shadow, fontFamily: FONT_STACK }}>
@@ -269,7 +411,27 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
           {expired  && <ExpiryBadge type="expired" />}
           {expiring && <ExpiryBadge type="expiring" />}
         </div>
-        <span style={{ fontWeight: 700, color: T.ink, fontSize: '0.9rem' }}>{fmtCurrency(quotation.total, selectedCurrency)}</span>
+        <div style={{ textAlign: 'right' }}>
+          <div>
+            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: T.ink }}>
+              {formatAmount(quotation.total)}
+            </span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.25rem' }}>
+              {quoteCurrency}
+            </span>
+          </div>
+          {(quoteCurrency !== 'AED' && quotation.totalInBaseCurrency != null) && (
+            <div style={{ marginTop: 1 }}>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>≈ </span>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>
+                {formatAmount(quotation.totalInBaseCurrency)}
+              </span>
+              <span style={{ fontSize: '0.55rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.15rem' }}>
+                AED
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ marginBottom: '0.5rem' }}>
@@ -398,7 +560,6 @@ export default function OpsDashboard({ onViewQuotation }) {
   const statsLatchRef = useRef(false);
   const tableLatchRef = useRef(false);
 
-  // ✅ FIX: Properly determine when stats are ready
   const statsReady = !statsLoading && totalQuotations != null;
   const tableReady = quotationsInitialized;
 
@@ -415,7 +576,6 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [selectedCompany]);
 
-  // ✅ FIX: Show shimmer when stats are loading AND latch is false
   const showStatsShimmer = !statsLatchRef.current && statsLoading;
   const showTableShimmer = !tableLatchRef.current && !tableReady;
 
@@ -451,7 +611,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     return () => { isMountedRef.current = false; };
   }, []);
 
-  // ✅ FIX: Load both quotations and stats in parallel
+  // ── Load both quotations and stats in parallel ────────────
   useEffect(() => {
     if (!selectedCompany || initialLoadDone.current) return;
     
@@ -623,7 +783,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     { key: 'awarded',      label: 'Awarded',         Icon: Award,       count: tabCountsResolved.awarded },
   ], [tabCountsResolved]);
 
-  // ── Header button style (same as HomeScreen) ──────────────
+  // ── Header button style ──────────────────────────────────
   const headerBtn = (variant) => {
     const variants = {
       ghost:  { background: 'transparent', color: '#c7cccf', border: '1px solid rgba(255,255,255,0.14)' },
@@ -871,7 +1031,6 @@ export default function OpsDashboard({ onViewQuotation }) {
 
           {/* Content */}
           {showTableShimmer ? (
-            /* Skeleton table */
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
@@ -948,6 +1107,8 @@ export default function OpsDashboard({ onViewQuotation }) {
                             const canAct     = q.status === 'pending';
                             const canAward   = q.status === 'approved' && (q.createdBy?.role === 'ops_manager' || q.createdBySnapshot?.role === 'ops_manager');
                             const isAdminRej = q.status === 'rejected';
+                            const quoteCurrency = q.currency?.code || selectedCurrency;
+                            
                             return (
                               <tr key={q._id} className="ops-row" style={{ borderBottom: `1px solid ${T.lineSoft}`, backgroundColor: isAdminRej ? '#fef9f9' : 'transparent' }}>
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
@@ -965,20 +1126,38 @@ export default function OpsDashboard({ onViewQuotation }) {
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{fmtDate(q.date)}</td>
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
                                   <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>{fmtDate(q.expiryDate)}</span>
-                                 </td>
+                                </td>
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
                                   <EnhancedStatusBadge status={q.status} quotation={q} />
                                   <RejectionNote quotation={q} />
-                                 </td>
+                                </td>
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle' }}>{q.createdBy?.name || '—'}</td>
                                 <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'center' }}>
                                   <span style={{ background: T.lineSoft, color: T.inkSoft, borderRadius: 6, padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600 }}>
                                     {q.items?.length ?? 0}
                                   </span>
-                                 </td>
-                                <td style={{ padding: '1rem', fontSize: '0.9rem', fontWeight: 700, color: T.ink, verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                  {fmtCurrency(q.total, selectedCurrency)}
-                                 </td>
+                                </td>
+                                <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                  <div>
+                                    <span style={{ fontSize: '0.9rem', fontWeight: 700, color: T.ink }}>
+                                      {formatAmount(q.total)}
+                                    </span>
+                                    <span style={{ fontSize: '0.65rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.25rem' }}>
+                                      {quoteCurrency}
+                                    </span>
+                                  </div>
+                                  {(quoteCurrency !== 'AED' && q.totalInBaseCurrency != null) && (
+                                    <div style={{ marginTop: 1 }}>
+                                      <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>≈ </span>
+                                      <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>
+                                        {formatAmount(q.totalInBaseCurrency)}
+                                      </span>
+                                      <span style={{ fontSize: '0.55rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.15rem' }}>
+                                        AED
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
                                 <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
                                   <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                                     <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation" />
@@ -992,8 +1171,8 @@ export default function OpsDashboard({ onViewQuotation }) {
                                       <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAwardOpen(q)} icon={Award} label="Award" title="Mark awarded" disabled={isOp(q._id, 'award')} />
                                     )}
                                   </div>
-                                 </td>
-                               </tr>
+                                </td>
+                              </tr>
                             );
                           })}
                         </tbody>

@@ -1,6 +1,6 @@
 // components/mobile/MobileQuotationLayout.jsx
 import React, { useState, useCallback, useEffect } from 'react';
-import { Plus, Trash2, Upload, FileText, Download, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Upload, FileText,Eye , Download, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import ValidatedInput from './ValidatedInput';
 import TermsEditor, { TermsViewer } from './TermsCondition';
 import Snackbar from './Snackbar';
@@ -325,86 +325,131 @@ const MobileItemCard = ({
 // ============================================================
 // Mobile Document Section Component (Updated)
 // ============================================================
-const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPreview, isEditing, formatFileSize, getFileIcon }) => {
+// ============================================================
+
+const DOCUMENT_CONFIG = {
+  MAX_SIZE_MB: 10,
+  MAX_FILES: 5,
+  ALLOWED_TYPES: [
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+    'application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/plain'
+  ]
+};
+
+ 
+const MobileDocumentSection = ({ documents = [], onUpload, onDelete, onDownload, onPreview, isEditing, formatFileSize, getFileIcon }) => {
   const [expanded, setExpanded] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [docDescriptions, setDocDescriptions] = useState({});
   const [uploading, setUploading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
 
-  const isMobile = () => {
-    return /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  };
+  const isMobileDevice = () => /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-  // NEW: Mobile-friendly preview handler
+  const atMax = documents.length + selectedFiles.length >= DOCUMENT_CONFIG.MAX_FILES;
+
+  const showError = useCallback((message) => {
+    setErrorMessage(message);
+    setTimeout(() => setErrorMessage(null), 3000);
+  }, []);
+
+  const isZipFile = useCallback((file) => {
+    const name = (file.name || '').toLowerCase();
+    const type = (file.type || '').toLowerCase();
+    return name.endsWith('.zip')
+      || type === 'application/zip'
+      || type === 'application/x-zip-compressed'
+      || type === 'multipart/x-zip';
+  }, []);
+
+  const validateFile = useCallback((file) => {
+    if (isZipFile(file)) {
+      showError(`ZIP files are not allowed for internal documents.`);
+      return false;
+    }
+    if (file.size > DOCUMENT_CONFIG.MAX_SIZE_MB * 1024 * 1024) {
+      showError(`File "${file.name}" exceeds ${DOCUMENT_CONFIG.MAX_SIZE_MB}MB limit`);
+      return false;
+    }
+    if (!DOCUMENT_CONFIG.ALLOWED_TYPES.includes(file.type)) {
+      showError(`File "${file.name}" type is not allowed`);
+      return false;
+    }
+    return true;
+  }, [isZipFile, showError]);
+
+  // Mobile-friendly preview: open images in a new tab; fall back to download.
   const handlePreview = async (documentId) => {
     try {
-      // Get the document from the list
       const doc = documents.find(d => (d._id || d.id) === documentId);
-      
-      if (!doc) {
-        console.error('Document not found');
-        return;
-      }
+      if (!doc) return;
 
-      // Check if document has a direct URL
       if (doc.fileUrl) {
-        // On mobile, open in new tab
         window.open(doc.fileUrl, '_blank');
         return;
       }
 
-      // For images on mobile, use the preview function but open in new tab
-      if (doc.fileType?.startsWith('image/') || doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-        // Call the preview function which should return a blob URL
+      const isImage = doc.fileType?.startsWith('image/') || doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+      if (isImage) {
         const result = await onPreview?.(documentId);
-        
-        // If preview returned a URL, open it in new tab
-        if (result?.url) {
-          if (isMobile()) {
-            window.open(result.url, '_blank');
-          }
-        } else if (result === undefined && onPreview) {
-          // If onPreview doesn't return anything, it might handle it internally
-          // For mobile, we'll just use the download as fallback
-          console.log('Preview handled internally');
+        if (result?.url && isMobileDevice()) {
+          window.open(result.url, '_blank');
         }
       } else {
-        // For non-images, download instead (mobile can't preview PDFs/docs well)
         await onDownload(documentId);
       }
     } catch (error) {
-      console.error('Preview error:', error);
-      // Fallback to download if preview fails
-      try {
-        await onDownload(documentId);
-      } catch (downloadError) {
-        console.error('Download fallback error:', downloadError);
-      }
+      try { await onDownload(documentId); } catch (e) { /* ignore */ }
     }
   };
 
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
-    setSelectedFiles(prev => [...prev, ...files]);
+    e.target.value = '';
+
+    const validFiles = files.filter(validateFile);
+    if (!validFiles.length) return;
+
+    setSelectedFiles(prev => {
+      const currentTotal = prev.length + documents.length;
+      const slots = DOCUMENT_CONFIG.MAX_FILES - currentTotal;
+      if (slots <= 0) {
+        showError(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} internal documents allowed. You already have ${currentTotal}.`);
+        return prev;
+      }
+      if (validFiles.length > slots) {
+        showError(`Only ${slots} more document(s) allowed — adding the first ${slots}.`);
+      }
+      return [...prev, ...validFiles.slice(0, slots)];
+    });
   };
 
   const removeFile = (index) => {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-    setDocDescriptions(prev => {
-      const newDesc = { ...prev };
-      delete newDesc[prev[index]?.name];
-      return newDesc;
-    });
   };
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) return;
+    const currentTotal = selectedFiles.length + documents.length;
+    if (currentTotal > DOCUMENT_CONFIG.MAX_FILES) {
+      showError(`Maximum ${DOCUMENT_CONFIG.MAX_FILES} documents allowed.`);
+      return;
+    }
     setUploading(true);
-    const descriptions = selectedFiles.map(file => docDescriptions[file.name] || '');
-    await onUpload(selectedFiles, descriptions);
-    setSelectedFiles([]);
-    setDocDescriptions({});
-    setUploading(false);
+    try {
+      const descriptions = selectedFiles.map(file => docDescriptions[file.name] || '');
+      await onUpload(selectedFiles, descriptions);
+      setSelectedFiles([]);
+      setDocDescriptions({});
+    } catch (error) {
+      showError('Failed to upload documents');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleDescriptionChange = (fileName, value) => {
@@ -413,30 +458,62 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
 
   return (
     <div style={styles.docSection}>
+      {/* Error snackbar */}
+      {errorMessage && (
+        <div style={{
+          position: 'fixed', bottom: '20px', right: '20px', left: '20px', zIndex: 1000,
+          backgroundColor: '#ef4444', color: 'white', padding: '12px 16px', borderRadius: '8px',
+          fontSize: '13px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', textAlign: 'center',
+        }}>
+          {errorMessage}
+        </div>
+      )}
+
       <div style={styles.docHeader} onClick={() => setExpanded(!expanded)}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <FileText size={18} />
           <span style={styles.docTitle}>Internal Documents ({documents.length})</span>
           <span style={styles.internalBadge}>Internal only</span>
+          <span style={{ fontSize: '0.65rem', color: '#6b7280', backgroundColor: '#f3f4f6', padding: '0.15rem 0.5rem', borderRadius: '999px' }}>
+            {documents.length + selectedFiles.length} / {DOCUMENT_CONFIG.MAX_FILES}
+          </span>
         </div>
         {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </div>
-      
+
       {expanded && (
         <div style={styles.docBody}>
           {isEditing && (
             <div style={{ marginBottom: '1rem' }}>
-              <input type="file" multiple onChange={handleFileSelect} style={{ display: 'none' }} id="mobile-doc-upload" />
-              <label htmlFor="mobile-doc-upload" style={styles.uploadBtn}>
-                <Upload size={14} /> Select Documents
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,image/jpeg,image/png,image/gif,image/webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain"
+                onChange={handleFileSelect}
+                style={{ display: 'none' }}
+                id="mobile-doc-upload"
+                disabled={atMax}
+              />
+              <label
+                htmlFor="mobile-doc-upload"
+                style={{
+                  ...styles.uploadBtn,
+                  backgroundColor: uploading || atMax ? '#9ca3af' : '#4f46e5',
+                  cursor: uploading || atMax ? 'not-allowed' : 'pointer',
+                  opacity: atMax ? 0.6 : 1,
+                }}
+              >
+                <Upload size={14} /> {uploading ? 'Uploading...' : atMax ? 'Maximum Reached' : 'Select Documents'}
               </label>
-              <p style={styles.uploadHint}>PDF, DOC, XLS, Images, TXT, ZIP (Max 10MB each)</p>
+              <p style={styles.uploadHint}>
+                Supports PDF, DOC, XLS, Images, TXT (Max {DOCUMENT_CONFIG.MAX_FILES} files, {DOCUMENT_CONFIG.MAX_SIZE_MB}MB each).
+              </p>
             </div>
           )}
-          
+
           {selectedFiles.length > 0 && (
             <div style={styles.selectedFiles}>
-              <h4 style={styles.selectedFilesTitle}>Files ready to upload:</h4>
+              <h4 style={styles.selectedFilesTitle}>Files ready to upload ({selectedFiles.length}):</h4>
               {selectedFiles.map((file, idx) => (
                 <div key={idx} style={styles.selectedFile}>
                   <div style={styles.selectedFileInfo}>
@@ -449,7 +526,7 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
                       style={styles.fileDescInput}
                     />
                   </div>
-                  <button onClick={() => removeFile(idx)} style={styles.removeBtn}>✕</button>
+                  <button onClick={() => removeFile(idx)} style={styles.removeBtn}><Trash2 size={14} /></button>
                 </div>
               ))}
               <button onClick={handleUpload} disabled={uploading} style={styles.uploadConfirm}>
@@ -457,7 +534,7 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
               </button>
             </div>
           )}
-          
+
           {documents.length === 0 ? (
             <div style={styles.emptyDocs}>
               <FileText size={24} color="#d1d5db" style={{ marginBottom: '0.5rem' }} />
@@ -467,9 +544,7 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
           ) : (
             documents.map(doc => {
               const docId = doc._id || doc.id;
-              const isImage = doc.fileType?.startsWith('image/') || 
-                             doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
-              
+              const isImage = doc.fileType?.startsWith('image/') || doc.fileName?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
               return (
                 <div key={docId} style={styles.docItem}>
                   <div style={styles.docIcon}>{getFileIcon?.(doc.fileType) || '📎'}</div>
@@ -479,19 +554,18 @@ const MobileDocumentSection = ({ documents, onUpload, onDelete, onDownload, onPr
                     <div style={styles.docDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
                   </div>
                   <div style={styles.docActions}>
-                    {/* CHANGED: Now uses handlePreview for images instead of direct onPreview */}
                     {isImage ? (
-                      <button onClick={() => handlePreview(docId)} style={styles.docAction}>
-                        👁️
+                      <button onClick={() => handlePreview(docId)} style={styles.previewBtn} title="Preview">
+                        <Eye size={14} />
                       </button>
                     ) : (
-                      <button onClick={() => onDownload(docId)} style={styles.docAction}>
-                        📥
+                      <button onClick={() => onDownload(docId)} style={styles.downloadBtn} title="Download">
+                        <Download size={14} />
                       </button>
                     )}
                     {isEditing && (
-                      <button onClick={() => onDelete(docId)} style={{ ...styles.docAction, color: '#dc2626' }}>
-                        🗑️
+                      <button onClick={() => onDelete(docId)} style={styles.deleteBtn} title="Delete">
+                        <Trash2 size={14} />
                       </button>
                     )}
                   </div>
@@ -1395,6 +1469,40 @@ const styles = {
     width: '100%',
     justifyContent: 'center',
   },
+ 
+previewBtn: {
+  padding: '0.35rem',
+  backgroundColor: '#e0f2fe',
+  color: '#0369a1',
+  border: 'none',
+  borderRadius: '0.375rem',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+downloadBtn: {
+  padding: '0.35rem',
+  backgroundColor: '#e0f2fe',
+  color: '#0369a1',
+  border: 'none',
+  borderRadius: '0.375rem',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+deleteBtn: {
+  padding: '0.35rem',
+  backgroundColor: '#fee2e2',
+  color: '#dc2626',
+  border: 'none',
+  borderRadius: '0.375rem',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
 };
 
 export default MobileQuotationLayout;

@@ -1038,12 +1038,26 @@ exports.getOpsDashboardStats = async (req, res) => {
     
     console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
 
-    const totalValueResult = await Quotation.aggregate([
+    // ✅ FIXED: Calculate awarded value (only awarded quotations)
+    const awardedValueResult = await Quotation.aggregate([
       { 
         $match: { 
           ...matchStage,
-          status: { $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected'] } 
+          status: 'awarded'
         } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: '$totalInBaseCurrency' } 
+        } 
+      },
+    ]);
+
+    // ✅ Calculate total value (all quotations for reference)
+    const totalValueResult = await Quotation.aggregate([
+      { 
+        $match: matchStage 
       },
       { 
         $group: { 
@@ -1076,6 +1090,8 @@ exports.getOpsDashboardStats = async (req, res) => {
     console.log('   - approved:', approvedCount);
     console.log('   - awarded:', awardedCount);
     console.log('   - not_awarded:', notAwardedCount);
+    console.log('   - awardedValue (AED):', awardedValueResult[0]?.total || 0);
+    console.log('   - totalValue (AED):', totalValueResult[0]?.total || 0);
 
     const stats = {
       totalQuotations: totalQuotations || 0,
@@ -1086,7 +1102,10 @@ exports.getOpsDashboardStats = async (req, res) => {
       approved: approvedCount || 0,
       awarded: awardedCount || 0,
       notAwarded: notAwardedCount || 0,
-      totalValue: totalValueResult[0]?.total || 0,
+      // ✅ FIXED: This now shows awarded value only
+      totalValue: awardedValueResult[0]?.total || 0,
+      // Optional: add total value for reference
+      totalQuotationsValue: totalValueResult[0]?.total || 0,
       isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL',
       tabCounts: {
         all: totalQuotations || 0,
@@ -1115,7 +1134,7 @@ exports.getOpsDashboardStats = async (req, res) => {
     });
   } catch (err) {
     const duration = Date.now() - startTime;
-    LoggerHelper.logError('getOpsDashboardStats', err, req);
+    console.error('Error fetching ops dashboard stats:', err);
     logger.error('Error fetching ops dashboard stats', {
       error: err.message,
       stack: err.stack,
@@ -1133,7 +1152,7 @@ exports.getOpsDashboardStats = async (req, res) => {
 exports.getUserQuotationStats = async (req, res) => {
   const startTime = Date.now();
   try {
-    let companyId = req.companyId || req.headers['x-company-id'];
+    let companyId = req.query.companyId || req.headers['x-company-id'];
     let matchStage = {};
     
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
@@ -1156,11 +1175,19 @@ exports.getUserQuotationStats = async (req, res) => {
         $group: {
           _id: '$createdBy',
           totalQuotations: { $sum: 1 },
-          totalValue: { $sum: '$totalInBaseCurrency' },
+          // ✅ FIXED: Awarded value only (sum of totalInBaseCurrency for awarded quotations)
+          totalAwardedValue: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'awarded'] }, '$totalInBaseCurrency', 0]
+            }
+          },
+          totalValueAll: { $sum: '$totalInBaseCurrency' }, // Keep for reference
           quotationsByStatus: {
             $push: {
               status: '$status',
-              total: '$totalInBaseCurrency'
+              totalInBaseCurrency: '$totalInBaseCurrency',
+              total: '$total',
+              currency: '$currency.code'
             }
           }
         }
@@ -1180,13 +1207,20 @@ exports.getUserQuotationStats = async (req, res) => {
           userName: { $ifNull: ['$userInfo.name', 'Unknown User'] },
           userEmail: { $ifNull: ['$userInfo.email', 'N/A'] },
           totalQuotations: 1,
-          totalValue: 1,
+          // ✅ This now shows awarded value only
+          totalValue: '$totalAwardedValue',
+          totalValueAll: 1,  
           pending: {
             $size: {
               $filter: {
                 input: '$quotationsByStatus',
                 as: 'q',
-                cond: { $eq: ['$$q.status', 'pending'] }
+                cond: { 
+                  $or: [
+                    { $eq: ['$$q.status', 'pending'] },
+                    { $eq: ['$$q.status', 'pending_admin'] }
+                  ]
+                }
               }
             }
           },
@@ -1195,7 +1229,12 @@ exports.getUserQuotationStats = async (req, res) => {
               $filter: {
                 input: '$quotationsByStatus',
                 as: 'q',
-                cond: { $eq: ['$$q.status', 'approved'] }
+                cond: { 
+                  $or: [
+                    { $eq: ['$$q.status', 'approved'] },
+                    { $eq: ['$$q.status', 'ops_approved'] }
+                  ]
+                }
               }
             }
           },
@@ -1215,10 +1254,20 @@ exports.getUserQuotationStats = async (req, res) => {
                 as: 'q',
                 cond: { 
                   $or: [
-                    { $eq: ['$$q.status', 'rejected'] }, 
+                    { $eq: ['$$q.status', 'rejected'] },
+                    { $eq: ['$$q.status', 'not_awarded'] },
                     { $eq: ['$$q.status', 'ops_rejected'] }
                   ] 
                 }
+              }
+            }
+          },
+          returned: {
+            $size: {
+              $filter: {
+                input: '$quotationsByStatus',
+                as: 'q',
+                cond: { $eq: ['$$q.status', 'ops_rejected'] }
               }
             }
           }
@@ -1227,13 +1276,26 @@ exports.getUserQuotationStats = async (req, res) => {
       { $sort: { totalQuotations: -1 } }
     ]);
 
+    // ✅ Calculate total awarded value across all users (AED)
+    const totalAwardedValue = await Quotation.aggregate([
+      { $match: { ...matchStage, status: 'awarded' } },
+      { $group: { _id: null, total: { $sum: '$totalInBaseCurrency' } } }
+    ]);
+    
+    // Total quotations count
     const totalQuotations = await Quotation.countDocuments(matchStage);
+    
+    // Total awarded quotations count
+    const totalAwardedQuotations = await Quotation.countDocuments({ ...matchStage, status: 'awarded' });
+    
     const totalUsers = userStats.length;
     const duration = Date.now() - startTime;
     
     logger.info(`User quotation stats fetched`, {
       totalUsers,
       totalQuotations,
+      totalAwardedQuotations,
+      totalAwardedValue: totalAwardedValue[0]?.total || 0,
       averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0,
       companyId: companyId || 'all',
       duration: `${duration}ms`,
@@ -1245,15 +1307,18 @@ exports.getUserQuotationStats = async (req, res) => {
       stats: userStats,
       summary: {
         totalQuotations,
+        totalAwardedQuotations,
         totalUsers,
+        totalAwardedValue: totalAwardedValue[0]?.total || 0, 
         averagePerUser: totalUsers > 0 ? (totalQuotations / totalUsers).toFixed(2) : 0,
+        averageAwardedValuePerUser: totalUsers > 0 ? ((totalAwardedValue[0]?.total || 0) / totalUsers).toFixed(2) : 0,
         isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL'
       }
     });
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    LoggerHelper.logError('getUserQuotationStats', error, req);
+    console.error('Error getting user quotation stats:', error);
     logger.error('Error getting user quotation stats', {
       error: error.message,
       stack: error.stack,
@@ -1268,6 +1333,117 @@ exports.getUserQuotationStats = async (req, res) => {
   }
 };
 
+exports.getQuotationsByUser = async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { userId } = req.params;
+    const companyId = req.query.companyId || req.headers['x-company-id'];
+    
+    // Get selected currency from query params (optional)
+    const selectedCurrency = req.query.currency || 'AED';
+    
+    if (!companyId) {
+      logger.warn('Company ID missing in getQuotationsByUser', {
+        userId: req.user?.id,
+        targetUserId: userId
+      });
+      return res.status(400).json({ message: 'Company ID is required' });
+    }
+
+    if (req.user?.role !== 'admin') {
+      logger.warn(`Non-admin user attempted to view user quotations`, {
+        userId: req.user?.id,
+        userRole: req.user?.role,
+        targetUserId: userId
+      });
+      return res.status(403).json({ message: 'Unauthorized to view user quotations' });
+    }
+
+    const quotations = await Quotation.find({ 
+      companyId: new mongoose.Types.ObjectId(companyId),
+      createdBy: new mongoose.Types.ObjectId(userId)
+    })
+      .sort({ createdAt: -1 })
+      .populate('customerId', 'name email phone')
+      .populate('companyId', 'name code baseCurrency')
+      .lean();
+
+    // Get exchange rates for currency conversion if needed
+    let exchangeRates = null;
+    if (selectedCurrency !== 'AED') {
+      try {
+        exchangeRates = await ExchangeRateService.getRates(selectedCurrency);
+      } catch (rateError) {
+        logger.error(`Error fetching exchange rates: ${rateError.message}`);
+      }
+    }
+
+    // ✅ Calculate user's awarded total
+    const userAwardedTotal = quotations
+      .filter(q => q.status === 'awarded')
+      .reduce((sum, q) => sum + (q.totalInBaseCurrency || 0), 0);
+
+    // Process quotations to include converted values
+    const processedQuotations = quotations.map(quotation => {
+      const result = { ...quotation };
+      const quoteCurrency = quotation.currency?.code || 'AED';
+      
+      // Add display currency conversion if needed
+      if (selectedCurrency !== 'AED' && selectedCurrency !== quoteCurrency) {
+        // Convert from AED to selected currency
+        const rate = exchangeRates ? (exchangeRates[quoteCurrency] || 1) : 1;
+        result.totalInSelectedCurrency = quotation.totalInBaseCurrency * rate;
+        result.subtotalInSelectedCurrency = quotation.subtotalInBaseCurrency * rate;
+        result.taxAmountInSelectedCurrency = quotation.taxAmountInBaseCurrency * rate;
+        result.discountAmountInSelectedCurrency = quotation.discountAmountInBaseCurrency * rate;
+      } else if (selectedCurrency !== quoteCurrency && quoteCurrency !== 'AED') {
+        // Convert from quote currency to AED (already have totalInBaseCurrency)
+        result.totalInSelectedCurrency = quotation.totalInBaseCurrency;
+      } else {
+        result.totalInSelectedCurrency = quotation.total;
+      }
+      
+      result.displayCurrency = selectedCurrency;
+      return result;
+    });
+
+    const duration = Date.now() - startTime;
+    
+    logger.info(`Fetched ${quotations.length} quotations for user ${userId}`, {
+      targetUserId: userId,
+      count: quotations.length,
+      awardedTotal: userAwardedTotal,
+      companyId,
+      displayCurrency: selectedCurrency,
+      duration: `${duration}ms`,
+      adminId: req.user?.id
+    });
+
+    res.json({
+      success: true,
+      quotations: processedQuotations,
+      count: quotations.length,
+      awardedTotal: userAwardedTotal, // ✅ User's awarded total in AED
+      displayCurrency: selectedCurrency
+    });
+
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error('Error fetching user quotations:', error);
+    logger.error('Error fetching user quotations', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      userId: req.user?.id,
+      targetUserId: req.params.userId
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching user quotations', 
+      error: error.message 
+    });
+  }
+};
 exports.getQuotationsByUser = async (req, res) => {
   const startTime = Date.now();
   try {

@@ -1,8 +1,16 @@
 import { CURRENCY_SYMBOLS } from './constants';
 
-export const fmtCurrency = (n, currency = 'AED') => {
-  const symbol = CURRENCY_SYMBOLS[currency] || currency;
-  return `${symbol} ${(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+ export const fmtCurrency = (n, currency = 'AED') => {
+  const amount = (n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return amount;
+};
+
+export const fmtCurrencyWithCode = (n, currency = 'AED') => {
+  const amount = (n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return {
+    amount,
+    code: currency
+  };
 };
 
 export const fmtDate = (d) => {

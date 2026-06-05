@@ -10,9 +10,68 @@ import {
 import { adminAPI } from '../services/api';
 import { useCompanyCurrency, CompanyCurrencyDisplay } from '../components/CompanyCurrencySelector';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
-import { fmtCurrency, fmtDate } from '../utils/formatters';
+import { fmtCurrency, fmtDate, formatLargeCurrency } from '../utils/formatters';
 import { StatusBadge } from '../components/SharedComponents';
 import useToast, { ToastContainer } from '../hooks/useToast';
+
+// Helper function to format amount without currency symbol for large values
+const formatLargeAmount = (amount, currency) => {
+  return formatLargeCurrency(amount, currency);
+};
+
+// Helper function to render currency with small code (for regular amounts)
+const CurrencyAmount = ({ amount, currency, size = 'normal' }) => {
+  const amountFontSize = size === 'small' ? '0.75rem' : '0.9rem';
+  const codeFontSize = size === 'small' ? '0.6rem' : '0.65rem';
+  
+  // Use large format for amounts >= 10,000
+  const shouldUseLargeFormat = Math.abs(amount) >= 10000;
+  
+  if (shouldUseLargeFormat) {
+    const formatted = formatLargeCurrency(amount, currency);
+    // Extract the formatted string to split number and currency
+    const parts = formatted.split(' ');
+    const numberPart = parts.slice(0, -1).join(' ');
+    const currencyPart = parts[parts.length - 1];
+    
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.25rem' }}>
+        <span style={{ fontSize: amountFontSize, fontWeight: 700, color: '#0f172a' }}>
+          {numberPart}
+        </span>
+        <span style={{ 
+          fontSize: codeFontSize, 
+          fontWeight: 400, 
+          color: '#94a3b8',
+          letterSpacing: '0.02em'
+        }}>
+          {currencyPart}
+        </span>
+      </span>
+    );
+  }
+  
+  const formattedAmount = (amount || 0).toLocaleString('en-AE', { 
+    minimumFractionDigits: 2, 
+    maximumFractionDigits: 2 
+  });
+  
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.25rem' }}>
+      <span style={{ fontSize: amountFontSize, fontWeight: 700, color: '#0f172a' }}>
+        {formattedAmount}
+      </span>
+      <span style={{ 
+        fontSize: codeFontSize, 
+        fontWeight: 400, 
+        color: '#94a3b8',
+        letterSpacing: '0.02em'
+      }}>
+        {currency}
+      </span>
+    </span>
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Responsive hook
@@ -295,7 +354,7 @@ function Button({ onClick, disabled, children, variant = 'primary' }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mobile User Card
+// Mobile User Card with updated currency
 // ─────────────────────────────────────────────────────────────────────────────
 function MobileUserCard({ user, selectedCurrency, onViewQuotations }) {
   const [expanded, setExpanded] = useState(false);
@@ -362,9 +421,7 @@ function MobileUserCard({ user, selectedCurrency, onViewQuotations }) {
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '0.7rem', color: C.textMuted }}>Total Value</span>
-            <span style={{ fontWeight: 700, color: C.green, fontSize: '0.85rem' }}>
-              {fmtCurrency(user.totalValue, selectedCurrency)}
-            </span>
+            <CurrencyAmount amount={user.totalValue} currency={selectedCurrency} size="small" />
           </div>
           
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
@@ -388,9 +445,11 @@ function MobileUserCard({ user, selectedCurrency, onViewQuotations }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mobile Quotation Card
+// Mobile Quotation Card with updated currency
 // ─────────────────────────────────────────────────────────────────────────────
 function MobileQuotationCard({ quotation, selectedCurrency, onDownload, isExporting }) {
+  const quoteCurrency = quotation.currency?.code || selectedCurrency;
+  
   return (
     <div style={{
       background: C.surface,
@@ -418,9 +477,12 @@ function MobileQuotationCard({ quotation, selectedCurrency, onDownload, isExport
         paddingTop: '0.75rem',
         borderTop: `1px solid ${C.border}`,
       }}>
-        <span style={{ fontWeight: 700, color: C.green, fontSize: '0.9rem' }}>
-          {fmtCurrency(quotation.total, selectedCurrency)}
-        </span>
+        <CurrencyAmount amount={quotation.total} currency={quoteCurrency} />
+        {(quoteCurrency !== 'AED' && quotation.totalInBaseCurrency != null) && (
+          <div style={{ fontSize: '0.6rem', color: C.textMuted, marginTop: 2 }}>
+            ≈ <CurrencyAmount amount={quotation.totalInBaseCurrency} currency="AED" size="small" />
+          </div>
+        )}
         <Button variant="download" onClick={() => onDownload(quotation)} disabled={isExporting === quotation._id}>
           <Download size={13}/>
           {isExporting === quotation._id ? 'Saving…' : 'PDF'}
@@ -727,7 +789,9 @@ export default function UserQuotationStatsPage() {
                             </div>
                           </Td>
                           <Td align="center"><span style={{ fontWeight: 700, color: C.primary }}>{user.totalQuotations}</span></Td>
-                          <Td align="right"><span style={{ fontWeight: 600, color: C.green }}>{fmtCurrency(user.totalValue, selectedCurrency)}</span></Td>
+                          <Td align="right">
+                            <CurrencyAmount amount={user.totalValue} currency={selectedCurrency} />
+                          </Td>
                           <Td align="center"><Badge value={user.pending} variant="pending"/></Td>
                           <Td align="center"><Badge value={user.approved} variant="approved"/></Td>
                           <Td align="center"><Badge value={user.awarded} variant="awarded"/></Td>
@@ -809,22 +873,32 @@ export default function UserQuotationStatsPage() {
                   <tbody>
                     {userQuotations.length === 0 ? (
                       <tr><td colSpan={7}><EmptyState message="No quotations" icon={FileText}/></td></tr>
-                    ) : userQuotations.map(q => (
-                      <tr key={q._id} className="uqs-tr">
-                        <Td align="left"><span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem' }}>{q.quotationNumber}</span></Td>
-                        <Td align="left">{q.customerSnapshot?.name || q.customer || 'N/A'}</Td>
-                        <Td align="center" style={{ color: C.textMid }}>{fmtDate(q.date)}</Td>
-                        <Td align="center" style={{ color: C.textMid }}>{fmtDate(q.expiryDate)}</Td>
-                        <Td align="center"><StatusBadge status={q.status}/></Td>
-                        <Td align="right"><span style={{ fontWeight: 600, color: C.green }}>{fmtCurrency(q.total, selectedCurrency)}</span></Td>
-                        <Td align="center">
-                          <Button variant="download" onClick={() => handleDownload(q)} disabled={exportingId === q._id}>
-                            <Download size={12}/>
-                            {exportingId === q._id ? 'Saving…' : 'PDF'}
-                          </Button>
-                        </Td>
-                      </tr>
-                    ))}
+                    ) : userQuotations.map(q => {
+                      const quoteCurrency = q.currency?.code || selectedCurrency;
+                      return (
+                        <tr key={q._id} className="uqs-tr">
+                          <Td align="left"><span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.75rem' }}>{q.quotationNumber}</span></Td>
+                          <Td align="left">{q.customerSnapshot?.name || q.customer || 'N/A'}</Td>
+                          <Td align="center" style={{ color: C.textMid }}>{fmtDate(q.date)}</Td>
+                          <Td align="center" style={{ color: C.textMid }}>{fmtDate(q.expiryDate)}</Td>
+                          <Td align="center"><StatusBadge status={q.status}/></Td>
+                          <Td align="right">
+                            <CurrencyAmount amount={q.total} currency={quoteCurrency} />
+                            {(quoteCurrency !== 'AED' && q.totalInBaseCurrency != null) && (
+                              <div style={{ fontSize: '0.6rem', marginTop: 2 }}>
+                                ≈ <CurrencyAmount amount={q.totalInBaseCurrency} currency="AED" size="small" />
+                              </div>
+                            )}
+                          </Td>
+                          <Td align="center">
+                            <Button variant="download" onClick={() => handleDownload(q)} disabled={exportingId === q._id}>
+                              <Download size={12}/>
+                              {exportingId === q._id ? 'Saving…' : 'PDF'}
+                            </Button>
+                          </Td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

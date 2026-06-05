@@ -1,70 +1,24 @@
 // components/CompactStatsCard.jsx
 import React, { useState } from 'react';
-import { TrendingUp, FileText, Users, ChevronDown, ChevronUp, Clock, CheckCircle, Award, Ban, Shield } from 'lucide-react';
+import { TrendingUp, FileText, Users, ChevronDown, ChevronUp, Clock, CheckCircle, Award, Ban } from 'lucide-react';
 import { formatLargeCurrency } from '../../utils/formatters';
 
 const CompactStatsCard = React.memo(({ 
-  totalRevenue,        // Awarded Value
-  quotationsCount,     // Total Quotations
-  customersCount,      // Total Customers
-  selectedCurrency,
-  loading,
-  // Additional stats for dropdown
-  actionRequired,
-  approved,
-  awarded,
-  rejected,
-  conversionRate,
-  awardedValue
+  totalRevenue, 
+  quotationsCount, 
+  customersCount, 
+  selectedCurrency, 
+  statusCounts, 
+  loading 
 }) => {
   const [expanded, setExpanded] = useState(false);
 
-  // Helper function to format large numbers
-  const formatLargeNumber = (num) => {
-    if (num === null || num === undefined || isNaN(num)) return '0';
-    if (num === 0) return '0';
-    
-    const absNum = Math.abs(num);
-    
-    if (absNum >= 1_000_000_000) {
-      return (absNum / 1_000_000_000).toFixed(1) + 'B';
-    }
-    if (absNum >= 1_000_000) {
-      return (absNum / 1_000_000).toFixed(1) + 'M';
-    }
-    if (absNum >= 1_000) {
-      return (absNum / 1_000).toFixed(1) + 'K';
-    }
-    
-    return num.toString();
-  };
-
-  // Format currency
-  const formatCurrency = (num, currency) => {
-    if (num === null || num === undefined || isNaN(num)) return `0 ${currency}`;
-    if (num === 0) return `0 ${currency}`;
-    
-    const absNum = Math.abs(num);
-    
-    if (absNum >= 1_000_000_000) {
-      return `${(absNum / 1_000_000_000).toFixed(1)}B ${currency}`;
-    }
-    if (absNum >= 1_000_000) {
-      return `${(absNum / 1_000_000).toFixed(1)}M ${currency}`;
-    }
-    if (absNum >= 1_000) {
-      return `${(absNum / 1_000).toFixed(1)}K ${currency}`;
-    }
-    
-    return `${num.toLocaleString()} ${currency}`;
-  };
-
-  // Stats for dropdown (matches desktop row 1 card 2-3 + row 2)
-  const dropdownStats = [
-    { label: 'Action Required', value: formatLargeNumber(actionRequired), fullValue: actionRequired?.toLocaleString(), icon: Shield, color: '#3b82f6', bg: '#dbeafe' },
-    { label: 'Approved', value: formatLargeNumber(approved), fullValue: approved?.toLocaleString(), icon: CheckCircle, color: '#10b981', bg: '#d1fae5' },
-    { label: 'Conversion Rate', value: `${conversionRate || 0}%`, icon: TrendingUp, color: '#f59e0b', bg: '#fef3c7' },
-    { label: 'Rejected by Admin', value: formatLargeNumber(rejected), fullValue: rejected?.toLocaleString(), icon: Ban, color: '#ec4899', bg: '#fce7f3' },
+  // Only show statuses that match desktop stats
+  const statusItems = [
+    { label: 'Pending', value: statusCounts?.pending || 0, icon: Clock, color: '#f59e0b', bg: '#fef3c7' },
+    { label: 'Approved', value: statusCounts?.approved || 0, icon: CheckCircle, color: '#10b981', bg: '#d1fae5' },
+    { label: 'Awarded', value: statusCounts?.awarded || 0, icon: Award, color: '#059669', bg: '#d1fae5' },
+    { label: 'Returned', value: statusCounts?.returned || 0, icon: Ban, color: '#ec4899', bg: '#fce7f3' },
   ];
 
   return (
@@ -75,46 +29,42 @@ const CompactStatsCard = React.memo(({
       marginBottom: '1rem',
       boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
     }}>
-      {/* Main stats row - 3 main stats */}
+      {/* Main stats row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-        {/* Awarded Value */}
         <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontSize: '0.65rem', fontWeight: 500, color: '#94a3b8', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            <Award size={11} style={{ display: 'inline', marginRight: '0.25rem' }} />
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <TrendingUp size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
             Awarded Value
           </div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
-            {loading ? '...' : formatCurrency(awardedValue || totalRevenue, selectedCurrency)}
+            {loading ? '...' : formatLargeCurrency(totalRevenue, selectedCurrency)}
           </div>
         </div>
         
         <div style={{ width: '1px', height: '35px', background: '#334155' }} />
         
-        {/* Total Quotations */}
         <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontSize: '0.65rem', fontWeight: 500, color: '#94a3b8', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            <FileText size={11} style={{ display: 'inline', marginRight: '0.25rem' }} />
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <FileText size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
             Total Quotations
           </div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
-            {loading ? '...' : formatLargeNumber(quotationsCount)}
+            {loading ? '...' : quotationsCount}
           </div>
         </div>
         
         <div style={{ width: '1px', height: '35px', background: '#334155' }} />
         
-        {/* Total Customers */}
         <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontSize: '0.65rem', fontWeight: 500, color: '#94a3b8', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            <Users size={11} style={{ display: 'inline', marginRight: '0.25rem' }} />
+          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+            <Users size={12} style={{ display: 'inline', marginRight: '0.25rem' }} />
             Total Customers
           </div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: 'white' }}>
-            {loading ? '...' : formatLargeNumber(customersCount)}
+            {loading ? '...' : customersCount}
           </div>
         </div>
         
-        {/* Expand/Collapse Button */}
         <button
           onClick={() => setExpanded(!expanded)}
           style={{
@@ -126,55 +76,49 @@ const CompactStatsCard = React.memo(({
             color: '#94a3b8',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.2s'
+            justifyContent: 'center'
           }}
-          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
         >
           {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
       </div>
 
-      {/* Expanded dropdown with additional stats */}
+      {/* Expanded status breakdown - matches desktop statuses */}
       {expanded && (
         <div style={{
           marginTop: '1rem',
           paddingTop: '1rem',
-          borderTop: '1px solid #334155'
+          borderTop: '1px solid #334155',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, 1fr)',
+          gap: '0.5rem'
         }}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, 1fr)',
-            gap: '0.5rem'
-          }}>
-            {dropdownStats.map((item, idx) => (
-              <div key={idx} style={{
+          {statusItems.map((item) => (
+            <div key={item.label} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.5rem',
+              backgroundColor: 'rgba(255,255,255,0.05)',
+              borderRadius: '8px'
+            }}>
+              <div style={{
+                width: '28px',
+                height: '28px',
+                borderRadius: '6px',
+                backgroundColor: item.bg,
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.5rem',
-                padding: '0.5rem',
-                backgroundColor: 'rgba(255,255,255,0.05)',
-                borderRadius: '8px'
+                justifyContent: 'center'
               }}>
-                <div style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '6px',
-                  backgroundColor: item.bg,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <item.icon size={14} color={item.color} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>{item.label}</div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'white' }}>{item.value}</div>
-                </div>
+                <item.icon size={14} color={item.color} />
               </div>
-            ))}
-          </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>{item.label}</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'white' }}>{item.value}</div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

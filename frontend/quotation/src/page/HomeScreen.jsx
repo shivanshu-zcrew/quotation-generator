@@ -306,6 +306,22 @@ const ShimmerStatsCard = ({ isMobile }) => {
   );
 };
 
+// Helper function to get currency symbol
+const getCurrencySymbol = (currencyCode) => {
+  const symbols = {
+    AED: "AED",
+    USD: "USD",
+    EUR: "EUR",
+    GBP: "GBP",
+    SAR: "SAR",
+    QAR: "QAR",
+    KWD: "KWD",
+    BHD: "BHD",
+    OMR: "OMR",
+  };
+  return symbols[currencyCode] || currencyCode;
+};
+
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const isMobile = useMediaQuery("(max-width: 768px)");
   useEffect(() => {
@@ -852,24 +868,26 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
               ) : (
                 <>
                   {isMobile || uiState.viewMode === "card" ? (
-                    <div style={{ padding: "1rem", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: "1rem" }}>
-                      {safeQ.map((q) => (
-                        <QuotationCard
-                          key={q._id}
-                          quotation={q}
-                          selectedCurrency={selectedCurrency}
-                          onView={onViewQuotation}
-                          onFollowUp={(quotation) => setModalsState((prev) => ({ ...prev, queryDateModal: { open: true, quotation } }))}
-                          onDownload={handleDownload}
-                          onAward={(quotation) => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation, busy: false } }))}
-                          onDelete={(quotation) => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation, busy: false } }))}
-                          isExporting={modalsState.exportingId === q._id}
-                        />
-                      ))}
+                    <>
+                      <div style={{ padding: isMobile ? "0.75rem" : "1rem", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: isMobile ? "0.75rem" : "1rem" }}>
+                        {safeQ.map((q) => (
+                          <QuotationCard
+                            key={q._id}
+                            quotation={q}
+                            selectedCurrency={selectedCurrency}
+                            onView={onViewQuotation}
+                            onFollowUp={(quotation) => setModalsState((prev) => ({ ...prev, queryDateModal: { open: true, quotation } }))}
+                            onDownload={handleDownload}
+                            onAward={(quotation) => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation, busy: false } }))}
+                            onDelete={(quotation) => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation, busy: false } }))}
+                            isExporting={modalsState.exportingId === q._id}
+                          />
+                        ))}
+                      </div>
                       {totalCount > 0 && (
                         <PaginationBar total={totalCount} page={currentPage} limit={currentLimit} totalPages={totalPages} onPageChange={handlePageChange} onLimitChange={handleLimitChange} />
                       )}
-                    </div>
+                    </>
                   ) : (
                     <>
                       <div style={{ overflowX: "auto" }}>
@@ -924,7 +942,27 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                   <td style={{ padding: "1rem", fontSize: "0.8rem", verticalAlign: "middle", whiteSpace: "nowrap" }}>
                                     <span style={{ color: expired ? "#c1352b" : expiring ? "#b45309" : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>{fmtDate(q.expiryDate)}</span>
                                   </td>
-                                  <td style={{ padding: "1rem", fontSize: "0.9rem", fontWeight: 700, color: T.ink, verticalAlign: "middle", textAlign: "right", whiteSpace: "nowrap" }}>{fmtCurrency(q.total, selectedCurrency)}</td>
+                                  <td style={{ padding: "1rem", verticalAlign: "middle", textAlign: "right", whiteSpace: "nowrap" }}>
+  <div>
+    <span style={{ fontSize: "0.9rem", fontWeight: 700, color: T.ink }}>
+      {fmtCurrency(q.total)}
+    </span>
+    <span style={{ fontSize: "0.65rem", fontWeight: 400, color: T.inkFaint, marginLeft: "0.25rem" }}>
+      {q.currency?.code || selectedCurrency}
+    </span>
+  </div>
+  {(q.currency?.code && q.currency.code !== selectedCurrency && q.totalInBaseCurrency != null) && (
+    <div style={{ marginTop: 2 }}>
+      <span style={{ fontSize: "0.7rem", fontWeight: 500, color: T.inkFaint }}>≈ </span>
+      <span style={{ fontSize: "0.7rem", fontWeight: 500, color: T.inkFaint }}>
+        {fmtCurrency(q.totalInBaseCurrency)}
+      </span>
+      <span style={{ fontSize: "0.6rem", fontWeight: 400, color: T.inkFaint, marginLeft: "0.2rem" }}>
+        {selectedCurrency}
+      </span>
+    </div>
+  )}
+</td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}><EnhancedStatusBadge status={q.status} quotation={q} /></td>
                                   <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }}>
                                     <div style={{ display: "flex", gap: "0.3rem", justifyContent: "center", flexWrap: "wrap" }}>
@@ -932,7 +970,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                       {canAward && <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation: q, busy: false } }))} icon={Award} label="Award" title="Mark awarded / not awarded" />}
                                       {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation: q, busy: false } }))} icon={Trash2} label="Del" title="Delete quotation" />}
                                     </div>
-                                  </td>
+                                   </td>
                                 </tr>
                               );
                             })}

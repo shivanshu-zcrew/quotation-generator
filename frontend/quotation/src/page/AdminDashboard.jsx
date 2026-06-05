@@ -36,6 +36,14 @@ import AwardModal from '../components/AwardModal';
 import { adminAPI } from '../services/api';
 import AdminDesktopStatsGrid from '../components/AdminDesktopstatsCard';
 
+// Helper function to format amount without currency symbol
+const formatAmount = (amount) => {
+  return (amount || 0).toLocaleString('en-AE', { 
+    minimumFractionDigits: 2, 
+    maximumFractionDigits: 2 
+  });
+};
+
 // ============================================================
 // DESIGN TOKENS — identical to HomeScreen / OpsDashboard
 // ============================================================
@@ -117,11 +125,6 @@ const PaginationBar = React.memo(({ total, page, limit, totalPages, onPageChange
     <div style={{ padding: '0.9rem 1.5rem', borderTop: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', backgroundColor: T.surface }}>
       <span style={{ fontSize: '0.8rem', color: T.inkSoft }}>Showing <strong style={{ color: T.ink }}>{start}–{end}</strong> of <strong style={{ color: T.ink }}>{total}</strong></span>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        {/* {onLimitChange && PAGE_SIZE_OPTIONS && (
-          <select value={limit} onChange={(e) => onLimitChange(Number(e.target.value))} style={{ padding: '0.3rem 0.6rem', borderRadius: 8, border: `1px solid ${T.line}`, fontSize: '0.75rem', backgroundColor: T.surface, color: T.inkSoft, cursor: 'pointer', fontFamily: FONT_STACK }}>
-            {PAGE_SIZE_OPTIONS.map((s) => <option key={s} value={s}>{s} per page</option>)}
-          </select>
-        )} */}
         <button onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page === 1} style={arrowBtn(page === 1)}><ChevronLeft size={14} /></button>
         {showStart && <><PageBtn n={1} current={page} onPage={onPageChange} />{pages[0] > 2 && <span style={{ color: T.inkFaint, fontSize: '0.8rem' }}>…</span>}</>}
         {pages.map((n) => <PageBtn key={n} n={n} current={page} onPage={onPageChange} />)}
@@ -194,7 +197,7 @@ const QueryDateBadge = React.memo(({ date, passed }) => (
   </span>
 ));
 
-// Admin mobile card
+// Admin mobile card with updated currency formatting
 const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
   const expired  = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
@@ -202,6 +205,8 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
   const canDelete= DELETABLE.has(quotation.status);
   const canAward = quotation.status === 'approved' && (quotation.createdBy?.role === 'admin' || quotation.createdBySnapshot?.role === 'admin');
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
+  const quoteCurrency = quotation.currency?.code || selectedCurrency;
+  
   return (
     <div style={{ background: T.surface, borderRadius: T.radius, padding: '1rem 1.1rem', border: `1px solid ${T.line}`, boxShadow: T.shadow, fontFamily: FONT_STACK }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.65rem' }}>
@@ -211,7 +216,27 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
           {expired  && <ExpiryBadge type="expired" />}
           {expiring && <ExpiryBadge type="expiring" />}
         </div>
-        <span style={{ fontWeight: 700, color: T.ink, fontSize: '0.9rem' }}>{fmtCurrency(quotation.total, selectedCurrency)}</span>
+        <div style={{ textAlign: 'right' }}>
+          <div>
+            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: T.ink }}>
+              {formatAmount(quotation.total)}
+            </span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.25rem' }}>
+              {quoteCurrency}
+            </span>
+          </div>
+          {(quoteCurrency !== 'AED' && quotation.totalInBaseCurrency != null) && (
+            <div style={{ marginTop: 1 }}>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>≈ </span>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>
+                {formatAmount(quotation.totalInBaseCurrency)}
+              </span>
+              <span style={{ fontSize: '0.55rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.15rem' }}>
+                AED
+              </span>
+            </div>
+          )}
+        </div>
       </div>
       <div style={{ marginBottom: '0.5rem' }}>
         <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}</div>
@@ -524,7 +549,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   const thStyle = { padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left', borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap' };
 
-  // ── Table row renderer ────────────────────────────────────
+  // ── Table row renderer with updated currency formatting ───
   const renderTableRow = (q) => {
     if (!q) return null;
     const expired  = isExpired(q.expiryDate);
@@ -534,6 +559,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     const canDelete= DELETABLE.has(q.status);
     const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
     const createdByName = q.createdBy?.name || q.createdBySnapshot?.name || '—';
+    const quoteCurrency = q.currency?.code || selectedCurrency;
+    
     return (
       <tr key={q._id} className="adm-row" style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
         <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
@@ -562,7 +589,27 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           <RejectionNote quotation={q} />
         </td>
         <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle' }}>{createdByName}</td>
-        <td style={{ padding: '1rem', fontSize: '0.9rem', fontWeight: 700, color: T.ink, verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtCurrency(q.total, selectedCurrency)}</td>
+        <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'right', whiteSpace: 'nowrap' }}>
+          <div>
+            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: T.ink }}>
+              {formatAmount(q.total)}
+            </span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.25rem' }}>
+              {quoteCurrency}
+            </span>
+          </div>
+          {(quoteCurrency !== 'AED' && q.totalInBaseCurrency != null) && (
+            <div style={{ marginTop: 1 }}>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>≈ </span>
+              <span style={{ fontSize: '0.6rem', fontWeight: 500, color: T.inkFaint }}>
+                {formatAmount(q.totalInBaseCurrency)}
+              </span>
+              <span style={{ fontSize: '0.55rem', fontWeight: 400, color: T.inkFaint, marginLeft: '0.15rem' }}>
+                AED
+              </span>
+            </div>
+          )}
+        </td>
         <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
           <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             {canAct && (
@@ -693,20 +740,20 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
               />
             ) : (
               <AdminDesktopStatsGrid
-        totalRevenue={totalAwardedValue}
-        quotationsCount={totalQuotations}
-        customersCount={totalCustomers}
-        selectedCurrency={selectedCurrency}
-        statusCounts={statusCounts}
-        loading={false}
-        actionRequired={actionRequired}
-        approved={approved}
-        awarded={awarded}
-        rejected={rejected}
-        totalAwardedValue={totalAwardedValue}
-        conversionDetails={conversionDetails}
-        conversionRate={conversionRate}
-      />
+                totalRevenue={totalAwardedValue}
+                quotationsCount={totalQuotations}
+                customersCount={totalCustomers}
+                selectedCurrency={selectedCurrency}
+                statusCounts={statusCounts}
+                loading={false}
+                actionRequired={actionRequired}
+                approved={approved}
+                awarded={awarded}
+                rejected={rejected}
+                totalAwardedValue={totalAwardedValue}
+                conversionDetails={conversionDetails}
+                conversionRate={conversionRate}
+              />
             )}
           </div>
         )}
@@ -764,7 +811,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           {showTableShimmer ? (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr>{['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Created By','Total','Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}</tr></thead>
+                <thead>{['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Created By','Total','Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}</thead>
                 <tbody>{[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}</tbody>
               </table>
             </div>

@@ -177,6 +177,9 @@ export function useQuotation() {
       tax: originalQuotation.taxPercent || 0,
       discount: originalQuotation.discountPercent || 0,
       notes: originalQuotation.notes || "",
+      // Preserve the currency the quotation was saved in, so the view page
+      // formats totals in that currency (e.g. USD) instead of defaulting to AED.
+      currency: originalQuotation.currency || { code: 'AED', symbol: 'د.إ' },
     });
 
     // Parse items - convert S3 keys to URLs for display
@@ -190,18 +193,6 @@ export function useQuotation() {
       };
     });
     setQuotationItems(itemsWithUrls);
-    const taxTreatment = originalQuotation.customerId?.taxTreatment ||
-    originalQuotation.customerTaxTreatment ||
-    originalQuotation.taxTreatment ||
-    'non_vat_registered';
-  
-  const placeOfSupply = originalQuotation.customerId?.placeOfSupply ||
-    originalQuotation.customerPlaceOfSupply ||
-    originalQuotation.placeOfSupply ||
-    'Dubai';
-  
-  setCustomerTaxTreatment(taxTreatment);
-  setCustomerPlaceOfSupply(placeOfSupply);
 
     // Handle terms images
     const cloudinaryImages = originalQuotation.termsImages || [];
