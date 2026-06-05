@@ -470,7 +470,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     setActionLoading(id, 'approve', true);
     try {
       const result = await approveQuotation(id);
-      if (result?.success) { addToast('Quotation approved', 'success'); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit }), refreshStats()]); }
+      if (result?.success) { addToast('Quotation approved', 'success'); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit, forceRefresh: true }), refreshStats()]); }
       else addToast(result?.error || 'Failed to approve', 'error');
     } finally { setActionLoading(id, 'approve', false); }
   }, [approveQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit]);

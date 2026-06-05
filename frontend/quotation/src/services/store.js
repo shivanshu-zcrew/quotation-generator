@@ -400,7 +400,7 @@ export const useAppStore = create(
           // Prevent rapid consecutive calls
           const now = Date.now();
           const lastCall = get()._lastRefetchTime || 0;
-          if (now - lastCall < 300) {
+          if (!options.forceRefresh && now - lastCall < 300) {
             return { success: false, message: 'Throttled' };
           }
           set({ _lastRefetchTime: now });
@@ -599,7 +599,7 @@ export const useAppStore = create(
             if (res?.data?.success) {
               const updatedQuotation = res.data.quotation;
               set(s => ({ quotations: s.quotations.map(q => q._id === id ? updatedQuotation : q), lastError: null }));
-              await get().refetchQuotations();
+              await get().refetchQuotations({ forceRefresh: true });
               return { success: true, quotation: updatedQuotation };
             }
             throw new Error(res?.data?.message || 'Failed to approve quotation');
