@@ -1005,12 +1005,15 @@ exports.getOpsDashboardStats = async (req, res) => {
     // ✅ Get companyId from query params or headers (consistent with getAllOpsQuotations)
     let companyId = req.query.companyId || req.headers['x-company-id'];
     let matchStage = {};
+    let customerMatchStage = {};
     
     console.log('🔍 getOpsDashboardStats - companyId:', companyId);
     
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
-        matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+        const companyObjectId = new mongoose.Types.ObjectId(companyId);
+        matchStage = { companyId: companyObjectId };
+        customerMatchStage = { companyId: companyObjectId };
         console.log('🔍 matchStage with companyId:', JSON.stringify(matchStage, null, 2));
       } else {
         console.log('⚠️ Invalid companyId format:', companyId);
@@ -1031,41 +1034,99 @@ exports.getOpsDashboardStats = async (req, res) => {
       'not_awarded'
     ];
     
-    const allStatusCounts = await Quotation.aggregate([
-      { $match: { ...matchStage, status: { $in: opsVisibleStatuses } } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
+    // Run all aggregations in parallel for better performance
+    const [
+      allStatusCounts,
+      awardedValueResult,
+      totalValueResult,
+      customerStats
+    ] = await Promise.all([
+      // Quotation status counts
+      Quotation.aggregate([
+        { $match: { ...matchStage, status: { $in: opsVisibleStatuses } } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      
+      // Awarded value
+      Quotation.aggregate([
+        { 
+          $match: { 
+            ...matchStage,
+            status: 'awarded'
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$totalInBaseCurrency' } 
+          } 
+        }
+      ]),
+      
+      // Total value (all quotations)
+      Quotation.aggregate([
+        { 
+          $match: matchStage 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: '$totalInBaseCurrency' } 
+          } 
+        }
+      ]),
+      
+      // ✅ NEW: Customer statistics
+      Customer.aggregate([
+        { $match: customerMatchStage },
+        { 
+          $facet: {
+            totalCustomers: [{ $count: 'count' }],
+            activeCustomers: [
+              { $match: { isActive: true } },
+              { $count: 'count' }
+            ],
+            inactiveCustomers: [
+              { $match: { isActive: false } },
+              { $count: 'count' }
+            ],
+            vatRegistered: [
+              { 
+                $match: { 
+                  $or: [
+                    { taxTreatment: 'vat_registered' },
+                    { taxTreatment: 'gcc_vat_registered' }
+                  ]
+                } 
+              },
+              { $count: 'count' }
+            ],
+            nonVatRegistered: [
+              { 
+                $match: { 
+                  $or: [
+                    { taxTreatment: 'non_vat_registered' },
+                    { taxTreatment: 'gcc_non_vat_registered' }
+                  ]
+                } 
+              },
+              { $count: 'count' }
+            ],
+            customersWithTrn: [
+              { 
+                $match: { 
+                  taxRegistrationNumber: { $exists: true, $ne: '' } 
+                } 
+              },
+              { $count: 'count' }
+            ]
+          }
+        }
+      ])
     ]);
-    
+
     console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
-
-    // ✅ FIXED: Calculate awarded value (only awarded quotations)
-    const awardedValueResult = await Quotation.aggregate([
-      { 
-        $match: { 
-          ...matchStage,
-          status: 'awarded'
-        } 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: '$totalInBaseCurrency' } 
-        } 
-      },
-    ]);
-
-    // ✅ Calculate total value (all quotations for reference)
-    const totalValueResult = await Quotation.aggregate([
-      { 
-        $match: matchStage 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: '$totalInBaseCurrency' } 
-        } 
-      },
-    ]);
+    console.log('📊 customerStats:', JSON.stringify(customerStats, null, 2));
 
     const countsMap = {};
     allStatusCounts.forEach(item => {
@@ -1082,7 +1143,17 @@ exports.getOpsDashboardStats = async (req, res) => {
     const awardedCount = countsMap['awarded'] || 0;
     const notAwardedCount = countsMap['not_awarded'] || 0;
 
+    // Extract customer stats from facet result
+    const customerStatsData = customerStats[0] || {};
+    const totalCustomers = customerStatsData.totalCustomers?.[0]?.count || 0;
+    const activeCustomers = customerStatsData.activeCustomers?.[0]?.count || 0;
+    const inactiveCustomers = customerStatsData.inactiveCustomers?.[0]?.count || 0;
+    const vatRegistered = customerStatsData.vatRegistered?.[0]?.count || 0;
+    const nonVatRegistered = customerStatsData.nonVatRegistered?.[0]?.count || 0;
+    const customersWithTrn = customerStatsData.customersWithTrn?.[0]?.count || 0;
+
     console.log('📊 Individual counts:');
+    console.log('   - totalQuotations:', totalQuotations);
     console.log('   - pending (including pending_admin):', pendingCount);
     console.log('   - ops_approved:', opsApprovedCount);
     console.log('   - ops_rejected:', opsRejectedCount);
@@ -1092,8 +1163,16 @@ exports.getOpsDashboardStats = async (req, res) => {
     console.log('   - not_awarded:', notAwardedCount);
     console.log('   - awardedValue (AED):', awardedValueResult[0]?.total || 0);
     console.log('   - totalValue (AED):', totalValueResult[0]?.total || 0);
+    console.log('📊 Customer counts:');
+    console.log('   - totalCustomers:', totalCustomers);
+    console.log('   - activeCustomers:', activeCustomers);
+    console.log('   - inactiveCustomers:', inactiveCustomers);
+    console.log('   - vatRegistered:', vatRegistered);
+    console.log('   - nonVatRegistered:', nonVatRegistered);
+    console.log('   - customersWithTrn:', customersWithTrn);
 
     const stats = {
+      // Quotation stats
       totalQuotations: totalQuotations || 0,
       pendingReview: pendingCount || 0,
       awaitingAdmin: opsApprovedCount || 0,
@@ -1102,11 +1181,21 @@ exports.getOpsDashboardStats = async (req, res) => {
       approved: approvedCount || 0,
       awarded: awardedCount || 0,
       notAwarded: notAwardedCount || 0,
-      // ✅ FIXED: This now shows awarded value only
       totalValue: awardedValueResult[0]?.total || 0,
-      // Optional: add total value for reference
       totalQuotationsValue: totalValueResult[0]?.total || 0,
+      
+      // ✅ NEW: Customer stats
+      totalCustomers: totalCustomers || 0,
+      activeCustomers: activeCustomers || 0,
+      inactiveCustomers: inactiveCustomers || 0,
+      vatRegisteredCustomers: vatRegistered || 0,
+      nonVatRegisteredCustomers: nonVatRegistered || 0,
+      customersWithTrn: customersWithTrn || 0,
+      
+      // Metadata
       isAllCompanies: !companyId || companyId === 'all' || companyId === 'ALL',
+      
+      // Tab counts for UI
       tabCounts: {
         all: totalQuotations || 0,
         pending: pendingCount || 0,

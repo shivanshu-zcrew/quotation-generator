@@ -295,6 +295,7 @@ export const useOpsStats = () => {
     approved: opsStats?.approved || 0,
     awarded: opsStats?.awarded || 0,
     totalValue: opsStats?.totalValue || 0,
+    totalCustomers: opsStats?.totalCustomers || 0,
     tabCounts,
   };
 };

@@ -534,7 +534,8 @@ export default function OpsDashboard({ onViewQuotation }) {
     totalValue, 
     tabCounts, 
     approved, 
-    awarded 
+    awarded,
+    totalCustomers
   } = useOpsStats();
   
   const { selectedCurrency } = useCompanyCurrency();
@@ -919,7 +920,7 @@ export default function OpsDashboard({ onViewQuotation }) {
               <CompactStatsCard
                 totalRevenue={totalValue || 0}
                 quotationsCount={totalQuotations || 0}
-                customersCount={0}
+                customersCount={totalCustomers || 0}
                 selectedCurrency={selectedCurrency}
                 statusCounts={{ 
                   pending: pendingReview || 0, 
@@ -934,7 +935,7 @@ export default function OpsDashboard({ onViewQuotation }) {
               <DesktopStatsGrid
                 totalRevenue={totalValue || 0}
                 quotationsCount={totalQuotations || 0}
-                customersCount={0}
+                customersCount={totalCustomers || 0}
                 selectedCurrency={selectedCurrency}
                 statusCounts={{ 
                   pending: pendingReview || 0, 

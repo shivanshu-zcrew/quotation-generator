@@ -1,9 +1,9 @@
-import React, { useState, useRef , useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import {
   Plus, Edit2, Trash2, ArrowLeft, Search, RefreshCw, AlertCircle, ChevronDown,
   CheckCircle, Users, Building2, Tag, User, X,
   Mail, Phone, MapPin, Shield, ChevronLeft, ChevronRight, Download,
-  Filter,  Loader, Star,
+  Filter, Loader, Star,
   Briefcase,
   CreditCard,
   ChevronUp
@@ -55,7 +55,6 @@ const fadeInUp = {
 const staggerContainer = {
   animate: { transition: { staggerChildren: 0.05 } }
 };
-
 
 // Toast Component
 const Toast = ({ message, type = 'success', onClose }) => {
@@ -134,8 +133,6 @@ const StatCard = ({ label, value, icon: Icon, color, loading, trend, trendValue 
     </div>
   </motion.div>
 );
-
-
 
 const PaginationControls = ({ pagination, onPageChange, loading, isMobile = false }) => {
   if (!pagination || pagination.totalPages <= 1) return null;
@@ -241,8 +238,6 @@ const PaginationControls = ({ pagination, onPageChange, loading, isMobile = fals
     </div>
   );
 };
-
-
 
 // CustomerCard Component
 const CustomerCard = ({ customer, onEdit, onDelete, deletingId }) => {
@@ -559,7 +554,7 @@ const MobileStatsCard = ({ stats, loading }) => {
         </button>
       </div>
 
-       {expanded && (
+      {expanded && (
         <div style={{
           marginTop: '1rem',
           paddingTop: '1rem',
@@ -597,8 +592,20 @@ const MobileStatsCard = ({ stats, loading }) => {
   );
 };
 
-// Mobile Filter Drawer Component
-const FilterDrawer = ({ isOpen, onClose, filters, onFilterChange, onReset, currentPagination, onLimitChange, sortOption, onSortChange, viewMode, onViewChange }) => {
+// Mobile Filter Drawer Component (Fixed)
+const FilterDrawer = ({ 
+  isOpen, 
+  onClose, 
+  filters, 
+  onFilterChange, 
+  onReset, 
+  pagination, 
+  onLimitChange, 
+  sortOption, 
+  onSortChange, 
+  viewMode, 
+  onViewChange 
+}) => {
   if (!isOpen) return null;
 
   return (
@@ -720,7 +727,7 @@ const FilterDrawer = ({ isOpen, onClose, filters, onFilterChange, onReset, curre
               Items per page
             </label>
             <CommonSelect
-              value={currentPagination?.limit || 10}
+              value={pagination?.limit || 10}
               onChange={(value) => onLimitChange(value)}
               options={[
                 { value: '10', label: '10 / page' },
@@ -818,7 +825,7 @@ const FilterDrawer = ({ isOpen, onClose, filters, onFilterChange, onReset, curre
   );
 };
 
- const Toolbar = ({
+const Toolbar = ({
   searchValue,
   onSearchChange,
   filters,
@@ -1067,7 +1074,7 @@ const FilterDrawer = ({ isOpen, onClose, filters, onFilterChange, onReset, curre
         filters={filters}
         onFilterChange={onFilterChange}
         onReset={onResetFilters}
-        currentPagination={currentPagination}
+        pagination={currentPagination}
         onLimitChange={onLimitChange}
         sortOption={sortOption}
         onSortChange={onSortChange}
@@ -1113,6 +1120,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const loading = useAppStore((state) => state.loading);
   const customerStats = useAppStore((state) => state.customerStats);
 
+  // Refs for cleanup and abort control
+  const searchTimer = useRef(null);
+  const abortControllerRef = useRef(null);
+
   // Local state
   const [isSyncing, setIsSyncing] = useState(false);
   const [progressData, setProgressData] = useState(null);
@@ -1130,17 +1141,29 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const [searchInput, setSearchInput] = useState(customerFilters.search || '');
 
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const searchTimer = useRef(null);
 
   const currentCustomers = useMemo(() => customers || [], [customers]);
   const currentLoading = loading;
   const currentPagination = customersPagination;
+
+  // Sync local search input with store filters
+  useEffect(() => {
+    setSearchInput(customerFilters.search || '');
+  }, [customerFilters.search]);
 
   // Load initial data when company changes
   useEffect(() => {
     if (!effectiveCompanyId) return;
 
     const loadData = async () => {
+      // Cancel previous request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      
+      // Create new abort controller
+      abortControllerRef.current = new AbortController();
+      
       let sortBy = 'createdAt';
       let sortOrder = 'desc';
 
@@ -1156,27 +1179,70 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
         filters.companyId = 'all';
       }
 
-      await Promise.all([
-        fetchCustomerStats(filters),
-        fetchFilteredCustomers(filters, { page: 1, limit: isMobile ? 10 : 20 })
-      ]);
+      try {
+        await Promise.all([
+          fetchCustomerStats(filters, { signal: abortControllerRef.current.signal }),
+          fetchFilteredCustomers(filters, { 
+            page: 1, 
+            limit: isMobile ? 10 : 20,
+            signal: abortControllerRef.current.signal 
+          })
+        ]);
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          console.error('Error loading data:', error);
+        }
+      }
     };
 
     loadData();
-  }, [effectiveCompanyId, sortOption]);
+    
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [effectiveCompanyId, sortOption, customerFilters.status, customerFilters.taxStatus, customerFilters.placeOfSupply, customerFilters.search]);
 
-  // Debounced search
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimer.current) {
+        clearTimeout(searchTimer.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  // Debounced search (Fixed)
   const handleSearchChange = useCallback((value) => {
     setSearchInput(value);
-    clearTimeout(searchTimer.current);
+    
+    // Clear existing timer
+    if (searchTimer.current) {
+      clearTimeout(searchTimer.current);
+    }
+    
+    // Set new timer
     searchTimer.current = setTimeout(() => {
-      setCustomerFilters({ ...customerFilters, search: value?.trim() || '' });
+      if (value !== customerFilters.search) {
+        setCustomerFilters({ ...customerFilters, search: value?.trim() || '' });
+      }
     }, 500);
   }, [setCustomerFilters, customerFilters]);
 
+  // Fixed limit change handler
   const handleLimitChange = useCallback((newLimit) => {
-    fetchFilteredCustomers(customerFilters, { page: 1, limit: parseInt(newLimit, 10) });
-  }, [fetchFilteredCustomers, customerFilters]);
+    const parsedLimit = parseInt(newLimit, 10);
+    // Update the customerFilters with the new limit
+    setCustomerFilters({ 
+      ...customerFilters, 
+      limit: parsedLimit 
+    });
+    fetchFilteredCustomers(customerFilters, { page: 1, limit: parsedLimit });
+  }, [fetchFilteredCustomers, customerFilters, setCustomerFilters]);
 
   const handleOpenModal = useCallback((customer = null) => {
     if (isAllCompanies) {
@@ -1185,7 +1251,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     }
     setEditingCustomer(customer);
     setShowModal(true);
-  }, []);
+  }, [isAllCompanies]);
 
   const handleCloseModal = useCallback(() => {
     setShowModal(false);
@@ -1264,6 +1330,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     setDeleteModal({ open: false, customer: null });
   };
 
+  // Fixed reset filters handler
   const handleResetFilters = useCallback(async () => {
     const resetFilters = {
       status: 'all',
@@ -1277,16 +1344,23 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
       maxTotalValue: null,
       zohoSyncStatus: 'all'
     };
+    
     setCustomerFilters(resetFilters);
     setSearchInput('');
     setSortOption('newest');
-    await fetchFilteredCustomers({ ...resetFilters, sortBy: 'createdAt', sortOrder: 'desc' }, { page: 1 });
+    
+    // Reset to page 1 with default limit
+    await fetchFilteredCustomers(
+      { ...resetFilters, sortBy: 'createdAt', sortOrder: 'desc' }, 
+      { page: 1, limit: isMobile ? 10 : 20 }
+    );
+    
     showToast('All filters reset', 'success');
-  }, [setCustomerFilters, fetchFilteredCustomers]);
+  }, [setCustomerFilters, fetchFilteredCustomers, isMobile]);
 
-  const handleFilterChange = (key, value) => {
+  const handleFilterChange = useCallback((key, value) => {
     setCustomerFilters({ ...customerFilters, [key]: value });
-  };
+  }, [customerFilters, setCustomerFilters]);
 
   const handleExportCustomers = useCallback(async (format = 'xlsx') => {
     if (isAllCompanies) {
@@ -1327,7 +1401,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
       console.error('Export failed:', error);
       showToast(error?.response?.data?.message || 'Failed to export customers', 'error');
     }
-  }, [customerFilters, effectiveCompanyId]);
+  }, [customerFilters, effectiveCompanyId, isAllCompanies]);
 
   const handleSync = useCallback(async (fullSync = false) => {
     if (isAllCompanies) {
@@ -1357,7 +1431,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     } finally {
       setIsSyncing(false);
     }
-  }, [effectiveCompanyId]);
+  }, [effectiveCompanyId, isAllCompanies]);
 
   const refreshData = useCallback(async () => {
     setIsRefreshing(true);
@@ -1423,12 +1497,6 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     return () => clearInterval(interval);
   }, [showProgressModal, effectiveCompanyId, refreshData]);
 
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => clearTimeout(searchTimer.current);
-  }, []);
-
-
   const AllCompaniesWarning = () => {
     if (!isAllCompanies) return null;
 
@@ -1458,7 +1526,6 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
             You are currently viewing customers from all companies. To add, edit, or delete customers, please select a specific company from the company selector.
           </p>
         </div>
-
       </motion.div>
     );
   };
@@ -1482,6 +1549,24 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
         fontFamily: "'Inter', system-ui, -apple-system, sans-serif"
       }}
     >
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        @keyframes slideInRight {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+      `}</style>
       <div style={{ maxWidth: '1400px', margin: '0 auto', padding: 'clamp(1rem, 5vw, 2rem) clamp(1rem, 4vw, 1.5rem)' }}>
 
         {/* Header Section */}
@@ -1616,7 +1701,9 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
             </motion.button>
           </div>
         </motion.div>
+        
         <AllCompaniesWarning/>
+        
         {/* Stats Cards */}
         {isMobile ? (
           <MobileStatsCard stats={statsData} loading={currentLoading} />
@@ -1788,24 +1875,6 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
       />
 
       <CustomerModal isOpen={showModal} onClose={handleCloseModal} onSubmit={handleSubmit} initialData={editingCustomer} isSubmitting={isSubmitting} />
-
-      <AnimatePresence>
-        {showFilterDrawer && (
-          <FilterDrawer
-            isOpen={showFilterDrawer}
-            onClose={() => setShowFilterDrawer(false)}
-            filters={customerFilters}
-            onFilterChange={handleFilterChange}
-            onReset={handleResetFilters}
-            currentPagination={currentPagination}
-            onLimitChange={handleLimitChange}
-            sortOption={sortOption}
-            onSortChange={handleSortChange}
-            viewMode={viewMode}
-            onViewChange={setViewMode}
-          />
-        )}
-      </AnimatePresence>
 
       <AnimatePresence>
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
