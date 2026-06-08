@@ -982,21 +982,26 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                               {errors.taxRegistrationNumber && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.taxRegistrationNumber}</p>}
 
                               {/* TRN Expiry Date */}
-                              <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
-                                <label style={{ ...labelStyle, color: '#0c4a6e' }}>
-                                  TRN Expiry Date
-                                </label>
-                                <input
-                                  type="date"
-                                  name="trnExpiryDate"
-                                  value={formData.trnExpiryDate}
-                                  onChange={handleChange}
-                                  style={{ ...inputStyle, background: 'white' }}
-                                />
-                                <p style={{ color: '#64748b', fontSize: '0.65rem', marginTop: '0.25rem', margin: '0.25rem 0 0' }}>
-                                  Leave blank if the TRN does not expire. When this date passes, the customer is automatically deactivated.
-                                </p>
-                              </div>
+ <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
+  <label style={{ ...labelStyle, color: '#0c4a6e' }}>
+    TRN Expiry Date
+  </label>
+  <input
+    type="date"
+    name="trnExpiryDate"
+    value={formData.trnExpiryDate}
+    onChange={handleChange}
+    onClick={(e) => e.target.showPicker()} 
+    style={{ 
+      ...inputStyle, 
+      background: 'white',
+      cursor: 'pointer' 
+    }}
+  />
+  <p style={{ color: '#64748b', fontSize: '0.65rem', marginTop: '0.25rem', margin: '0.25rem 0 0' }}>
+    Leave blank if the TRN does not expire. When this date passes, the customer is automatically deactivated.
+  </p>
+</div>
                             </div>
                           </motion.div>
                         )}

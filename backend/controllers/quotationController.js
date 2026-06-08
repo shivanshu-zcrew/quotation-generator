@@ -151,28 +151,28 @@ const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   try {
-    // _browser = await puppeteer.launch({
-    //   headless: true,
-    //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-    //   args: [
-    //     '--no-sandbox',
-    //     '--disable-setuid-sandbox',
-    //     '--disable-dev-shm-usage',
-    //     '--disable-gpu',
-    //     '--no-zygote',
-    //     '--single-process',
-    //   ],
-    // });
+    _browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process',
+      ],
+    });
 
-     _browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  });
+  //    _browser = await puppeteer.launch({
+  //   headless: true,
+  //   args: [
+  //     '--no-sandbox',
+  //     '--disable-setuid-sandbox',
+  //     '--disable-dev-shm-usage',
+  //     '--disable-gpu',
+  //   ],
+  // });
   
     _browser.on('disconnected', () => { 
       _browser = null;
@@ -1418,19 +1418,19 @@ exports.awardQuotation = async (req, res) => {
     const { awarded, awardNote } = req.body;
     const quotationId = req.params.id;
     const companyId = req.companyId || req.headers['x-company-id'];
-    
+
     if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
     if (typeof awarded !== 'boolean') return res.status(400).json({ success: false, message: '`awarded` (boolean) is required' });
 
     const quotation = await Quotation.findOne({ _id: quotationId, companyId })
       .populate('companyId').populate('createdBy', 'name email');
-    
+
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
-    
+
     const existingOpsApprovedBySnapshot = quotation.opsApprovedBySnapshot;
     const existingApprovedBySnapshot = quotation.approvedBySnapshot;
     const existingCreatedBySnapshot = quotation.createdBySnapshot;
-    
+
     const customer = await Customer.findOne({ _id: quotation.customerId, companyId }).lean();
     if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
 
@@ -1448,16 +1448,16 @@ exports.awardQuotation = async (req, res) => {
 
     const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
     const customerPlaceOfSupply = customer?.placeOfSupply || 'Dubai';
-    
+
     const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
     const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
-    
+
     const isPlaceOfSupplyUAE = UAE_EMIRATES.includes(customerPlaceOfSupply);
     const isPlaceOfSupplyGCC = GCC_COUNTRIES.includes(customerPlaceOfSupply);
-    
+
     const companyZohoId = quotation.companyId?.zohoOrganizationId;
     let TAX_IDS = {};
-     
+
     if (companyZohoId === '870392017') {
       TAX_IDS = { '0%': '5723933000000089262', '5%': '5723933000000089256' };
     } else if (companyZohoId === '886656701') {
@@ -1467,9 +1467,9 @@ exports.awardQuotation = async (req, res) => {
     } else {
       TAX_IDS = { '0%': '8731317000000093294', '5%': '8731317000000093290' };
     }
-    
+
     let taxRate = 0, taxId = TAX_IDS['0%'], taxTreatment = 'vat_not_registered', placeOfSupplyCode = 'AE';
-    
+
     if (customerTaxTreatment === 'vat_registered') {
       if (isPlaceOfSupplyUAE) {
         taxRate = quotation.taxPercent || 5;
@@ -1503,141 +1503,211 @@ exports.awardQuotation = async (req, res) => {
       }
     }
 
-    let zohoEstimate = null;
-    
+    // ── AWARDED PATH ─────────────────────────────────────────────────────
+    // Zoho estimate MUST succeed before we touch the DB. If it fails for any
+    // reason (network, timeout, missing zohoId, API error) we return an error
+    // and leave the quotation in its current 'approved' state untouched.
     if (awarded) {
-      try {
-        let customerZohoId = customer?.zohoId;
-        if (!customerZohoId) throw new Error('Customer Zoho ID not found. Please sync customer with Zoho first.');
-        
-        const originalDiscountPercent = quotation.discountPercent || 0;
-        let effectiveDiscountPercent = 0;
-        let lineItemsWithDiscount = [];
-        const subtotal = quotation.subtotal || 0;
-        
-        for (let i = 0; i < quotation.items.length; i++) {
-          const item = quotation.items[i];
-          const originalRate = item.unitPrice;
-          let finalRate = originalRate;
-          let itemDiscountPercent = 0;
-          
-          if (taxRate > 0 && originalDiscountPercent > 0) {
-            finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
-            itemDiscountPercent = 0;
-          } else if (!(taxRate > 0) && originalDiscountPercent > 0) {
-            effectiveDiscountPercent = originalDiscountPercent;
-          }
-          
-          const itemTotal = item.quantity * finalRate;
-          
-          const lineItem = {
-            description: item.description || "",
-            quantity: item.quantity,
-            rate: finalRate,
-            discount: itemDiscountPercent,
-            discount_amount: 0,
-            item_total: itemTotal,
-            item_order: i + 1
-          };
-          
-          if (taxRate > 0) {
-            lineItem.tax_id = taxId;
-            lineItem.tax_percentage = taxRate;
-            lineItem.tax_name = 'VAT';
-            lineItem.tax_type = 'tax';
-          }
-          
-          lineItemsWithDiscount.push(lineItem);
-        }
-        
-        const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
-        const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
-        const recalculatedDiscountAmount = (taxRate > 0) ? 0 : (subtotal * originalDiscountPercent / 100);
-        const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
-        
-        const estimateData = {
-          customer_id: customerZohoId,
-          reference_number: quotation.quotationNumber,
-          date: new Date(quotation.date).toISOString().split('T')[0],
-          expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
-          exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
-          discount: effectiveDiscountPercent,
-          is_discount_before_tax: false,
-          discount_type: 'entity_level',
-          is_inclusive_tax: false,
-          custom_body: quotation.notes || '',
-          custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
-          salesperson_name: quotation?.createdBy?.name || '',
-          notes: awardNote || '',
-          terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
-          line_items: lineItemsWithDiscount,
-          tax_treatment: taxTreatment,
-          place_of_supply: placeOfSupplyCode,
-          is_taxable: taxRate > 0,
-          total: recalculatedGrandTotal,
-          total_before_tax: recalculatedSubtotal,
-          tax_total: recalculatedTaxAmount,
-          discount_total: recalculatedDiscountAmount
-        };
-        
-        if (taxRate > 0) estimateData.tax_id = taxId;
-        
-        zohoEstimate = await zohoBooksService.createEstimate(estimateData);
-        
-        if (!zohoEstimate.success) {
-          throw new Error(`Zoho estimate creation failed: ${zohoEstimate.error}`);
-        }
-        
-        quotation.zohoEstimateId = zohoEstimate.estimateId;
-        quotation.zohoEstimateNumber = zohoEstimate.estimateNumber;
-        quotation.zohoEstimateUrl = zohoEstimate.estimateUrl;
-        quotation.zohoReferenceNumber = quotation.quotationNumber;
-        quotation.zohoSyncedAt = new Date();
-        
-      } catch (zohoError) {
-        logger.error(`Zoho estimate creation error: ${zohoError.message}`);
-        return res.status(500).json({ 
-          success: false, 
-          message: `Failed to create estimate in Zoho Books: ${zohoError.message}`,
-          error: zohoError.message 
+      const customerZohoId = customer?.zohoId;
+      if (!customerZohoId) {
+        return res.status(422).json({
+          success: false,
+          message: 'Customer is not synced with Zoho Books. Please sync the customer first before awarding.',
+          code: 'CUSTOMER_NOT_SYNCED'
         });
       }
+
+      const originalDiscountPercent = quotation.discountPercent || 0;
+      let effectiveDiscountPercent = 0;
+      let lineItemsWithDiscount = [];
+      const subtotal = quotation.subtotal || 0;
+
+      for (let i = 0; i < quotation.items.length; i++) {
+        const item = quotation.items[i];
+        const originalRate = item.unitPrice;
+        let finalRate = originalRate;
+        let itemDiscountPercent = 0;
+
+        if (taxRate > 0 && originalDiscountPercent > 0) {
+          finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
+          itemDiscountPercent = 0;
+        } else if (!(taxRate > 0) && originalDiscountPercent > 0) {
+          effectiveDiscountPercent = originalDiscountPercent;
+        }
+
+        const itemTotal = item.quantity * finalRate;
+        const lineItem = {
+          description: item.description || '',
+          quantity: item.quantity,
+          rate: finalRate,
+          discount: itemDiscountPercent,
+          discount_amount: 0,
+          item_total: itemTotal,
+          item_order: i + 1
+        };
+
+        if (taxRate > 0) {
+          lineItem.tax_id = taxId;
+          lineItem.tax_percentage = taxRate;
+          lineItem.tax_name = 'VAT';
+          lineItem.tax_type = 'tax';
+        }
+
+        lineItemsWithDiscount.push(lineItem);
+      }
+
+      const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
+      const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
+      const recalculatedDiscountAmount = (taxRate > 0) ? 0 : (subtotal * originalDiscountPercent / 100);
+      const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
+
+      const estimateData = {
+        customer_id: customerZohoId,
+        reference_number: quotation.quotationNumber,
+        date: new Date(quotation.date).toISOString().split('T')[0],
+        expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
+        exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
+        discount: effectiveDiscountPercent,
+        is_discount_before_tax: false,
+        discount_type: 'entity_level',
+        is_inclusive_tax: false,
+        custom_body: quotation.notes || '',
+        custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
+        salesperson_name: quotation?.createdBy?.name || '',
+        notes: awardNote || '',
+        terms: cleanHtmlForZoho(quotation.termsAndConditions) || 'No terms and conditions provided.',
+        line_items: lineItemsWithDiscount,
+        tax_treatment: taxTreatment,
+        place_of_supply: placeOfSupplyCode,
+        is_taxable: taxRate > 0,
+        total: recalculatedGrandTotal,
+        total_before_tax: recalculatedSubtotal,
+        tax_total: recalculatedTaxAmount,
+        discount_total: recalculatedDiscountAmount
+      };
+
+      if (taxRate > 0) estimateData.tax_id = taxId;
+
+      // ── Call Zoho FIRST — do not touch the DB until this succeeds ────────
+      let zohoEstimate;
+      try {
+        zohoEstimate = await zohoBooksService.createEstimate(estimateData);
+      } catch (zohoErr) {
+        // Unexpected thrown error (should normally be caught inside the service,
+        // but guard here in case something slips through)
+        logger.error(`Zoho createEstimate threw unexpectedly: ${zohoErr.message}`, {
+          quotationId, quotationNumber: quotation.quotationNumber
+        });
+        return res.status(502).json({
+          success: false,
+          message: 'Unable to reach Zoho Books. The quotation has NOT been awarded. Please try again.',
+          error: zohoErr.message,
+          code: 'ZOHO_UNREACHABLE'
+        });
+      }
+
+      // Service returns { success: false } for any Zoho-side failure
+      if (!zohoEstimate?.success) {
+        const zohoError = zohoEstimate?.error || 'Unknown Zoho error';
+        const zohoKind = zohoEstimate?.kind || 'unknown';
+
+        logger.error(`Zoho estimate creation failed — quotation NOT awarded`, {
+          quotationId,
+          quotationNumber: quotation.quotationNumber,
+          zohoError,
+          zohoKind
+        });
+
+        // Surface a specific, actionable message per error kind
+        const kindMessages = {
+          timeout:      'Zoho Books did not respond in time.',
+          network:      'Could not connect to Zoho Books.',
+          rate_limit:   'Zoho Books rate limit reached. Please wait a moment and try again.',
+          server_error: 'Zoho Books returned a server error.',
+          auth:         'Zoho Books authentication failed. Please contact your administrator.',
+          circuit_open: 'Zoho Books is currently unavailable (too many recent failures). Please try again in a minute.'
+        };
+        const userMessage = kindMessages[zohoKind] || `Zoho Books rejected the request: ${zohoError}`;
+
+        return res.status(502).json({
+          success: false,
+          message: `Failed to create estimate in Zoho Books. The quotation has NOT been awarded. ${userMessage}`,
+          error: zohoError,
+          code: 'ZOHO_ESTIMATE_FAILED',
+          kind: zohoKind
+        });
+      }
+
+      // ── Zoho succeeded — now safe to update the DB ────────────────────────
+      quotation.status = 'awarded';
+      quotation.awardedBy = req.user.id;
+      quotation.awardedAt = new Date();
+      quotation.awardNote = awardNote?.trim() || '';
+
+      quotation.zohoEstimateId = zohoEstimate.estimateId;
+      quotation.zohoEstimateNumber = zohoEstimate.estimateNumber;
+      quotation.zohoEstimateUrl = zohoEstimate.estimateUrl;
+      quotation.zohoReferenceNumber = quotation.quotationNumber;
+      quotation.zohoSyncedAt = new Date();
+
+      quotation.opsApprovedBySnapshot = existingOpsApprovedBySnapshot;
+      quotation.approvedBySnapshot = existingApprovedBySnapshot;
+      quotation.createdBySnapshot = existingCreatedBySnapshot;
+      quotation.awardedBySnapshot = {
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        awardedAt: new Date(),
+        awarded: true,
+        awardNote: awardNote?.trim() || ''
+      };
+
+      await quotation.save();
+
+      const updated = await Quotation.findOne({ _id: quotationId, companyId })
+        .populate('customerId').populate('companyId').lean();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Quotation awarded and synced to Zoho Books successfully',
+        quotation: updated,
+        zohoEstimate
+      });
     }
-    
-    quotation.status = awarded ? 'awarded' : 'not_awarded';
+
+    // ── NOT-AWARDED PATH ─────────────────────────────────────────────────
+    // No Zoho call needed — save immediately.
+    quotation.status = 'not_awarded';
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
     quotation.awardNote = awardNote?.trim() || '';
-    
+
     quotation.opsApprovedBySnapshot = existingOpsApprovedBySnapshot;
     quotation.approvedBySnapshot = existingApprovedBySnapshot;
     quotation.createdBySnapshot = existingCreatedBySnapshot;
-    
     quotation.awardedBySnapshot = {
       name: req.user.name,
       email: req.user.email,
       role: req.user.role,
       awardedAt: new Date(),
-      awarded: awarded,
+      awarded: false,
       awardNote: awardNote?.trim() || ''
     };
-    
+
     await quotation.save();
-    
+
     const updated = await Quotation.findOne({ _id: quotationId, companyId })
-      .populate('customerId')
-      .populate('companyId')
-      .lean();
-    
-    res.status(200).json({
+      .populate('customerId').populate('companyId').lean();
+
+    return res.status(200).json({
       success: true,
-      message: awarded ? 'Quotation awarded and synced to Zoho Books successfully' : 'Quotation marked as not awarded',
+      message: 'Quotation marked as not awarded',
       quotation: updated,
-      zohoEstimate: zohoEstimate || null
+      zohoEstimate: null
     });
-    
+
   } catch (err) {
-    logger.error(`Award quotation error: ${err.message}`);
+    logger.error(`Award quotation error: ${err.message}`, { quotationId: req.params.id, error: err.message, stack: err.stack });
     res.status(500).json({ success: false, message: 'Error awarding quotation', error: err.message });
   }
 };

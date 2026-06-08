@@ -975,7 +975,7 @@ export default function QuotationScreen({ onBack }) {
   // --------------------------------------------------------------------------
   if (step === STEP.TEMPLATE) {
     const quotationData = {
-      currency: { code: selectedCurrency, symbol: currency?.symbol || selectedCurrency },
+      currency: { code: localCurrency, symbol: currency?.symbol || localCurrency },
       companySnapshot: selectedCompany,
       customerSnapshot: selectedCustomer,
       customer: selectedCustomer?.name,
@@ -1153,7 +1153,7 @@ export default function QuotationScreen({ onBack }) {
                     onUpdate={handleItemChange} 
                     onRemove={handleRemoveItem}
                     onEdit={handleOpenEditModal}  
-                    selectedCurrency={selectedCurrency} 
+                    selectedCurrency={localCurrency} 
                   />
                 ))}
               </div>
@@ -1278,7 +1278,7 @@ export default function QuotationScreen({ onBack }) {
               <SummaryCard 
                 grandTotal={grandTotal} 
                 exchangeRates={exchangeRates} 
-                selectedCurrency={selectedCurrency} 
+                selectedCurrency={localCurrency} 
               />
             </div>
           )}
@@ -1380,7 +1380,7 @@ export default function QuotationScreen({ onBack }) {
         onAddItem={handleAddManualItem}
         onEditItem={handleEditItem}
         editingItem={editingItem}
-        selectedCurrency={selectedCurrency}
+        selectedCurrency={localCurrency}
       />
 
       {/* Toast Notifications */}

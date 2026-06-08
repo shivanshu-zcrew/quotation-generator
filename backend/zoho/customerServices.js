@@ -17,19 +17,110 @@ const customerSyncCancelMap = new Map();
 const REQUEST_TIMEOUT_MS = 30000;
 const TOKEN_REFRESH_TIMEOUT_MS = 10000;
 const MAX_REQUEST_RETRIES = 3;
-const MAX_PAGES_SAFETY = 1000;        // was 50 (10k cap) — now ~200k records
+const MAX_PAGES_SAFETY = 1000;
 const PER_PAGE = 200;
 const PAGE_DELAY_MS = 400;
 const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 500;
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
+// Circuit breaker thresholds
+const CIRCUIT_BREAKER_THRESHOLD = 5;   // consecutive failures before opening
+const CIRCUIT_BREAKER_RESET_MS = 60000; // 60s before half-open probe
+const CIRCUIT_BREAKER_PROBE_TIMEOUT_MS = 10000; // shorter timeout for probe requests
+
+// Per-page retry
+const MAX_PAGE_RETRIES = 2;
+
+// Mutation retry (create / update / delete / markInactive)
+// _request already did its own HTTP retries; this layer retries the whole
+// operation (re-acquiring a fresh token if needed) for transient outages.
+const MAX_MUTATION_RETRIES = 2;
+const MUTATION_RETRY_KINDS = new Set(['timeout', 'network', 'server_error', 'rate_limit']);
+
+// ─────────────────────────────────────────────────────────────────────────
+// ERROR CLASSIFIER
+// Attaches a .kind to every error returned by _request so callers can
+// branch on type instead of parsing strings.
+// Kinds: 'auth' | 'rate_limit' | 'server_error' | 'timeout' | 'network' | 'client_error' | 'unknown'
+// ─────────────────────────────────────────────────────────────────────────
+function classifyError(status, errorCode, isAbort) {
+  if (status === 401 || status === 403) return 'auth';
+  if (status === 429) return 'rate_limit';
+  if (status >= 500 && status < 600) return 'server_error';
+  if (isAbort) return 'timeout';
+  if (errorCode === 'ECONNRESET' || errorCode === 'ETIMEDOUT' || errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED') return 'network';
+  if (status >= 400 && status < 500) return 'client_error';
+  return 'unknown';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CIRCUIT BREAKER
+// Prevents hammering Zoho when it's clearly down. State per-service
+// instance (one global service = one breaker covers all orgs).
+// States: CLOSED (normal) → OPEN (failing) → HALF_OPEN (probe)
+// ─────────────────────────────────────────────────────────────────────────
+class CircuitBreaker {
+  constructor() {
+    this.state = 'CLOSED'; // CLOSED | OPEN | HALF_OPEN
+    this.failures = 0;
+    this.lastFailureAt = null;
+    this.openedAt = null;
+  }
+
+  // Returns true if this request should be allowed through
+  allowRequest() {
+    if (this.state === 'CLOSED') return true;
+    if (this.state === 'OPEN') {
+      const elapsed = Date.now() - this.openedAt;
+      if (elapsed >= CIRCUIT_BREAKER_RESET_MS) {
+        this.state = 'HALF_OPEN';
+        logger.info('Circuit breaker entering HALF_OPEN — probing Zoho API');
+        return true;
+      }
+      return false;
+    }
+    // HALF_OPEN: allow exactly one probe
+    return true;
+  }
+
+  onSuccess() {
+    if (this.state === 'HALF_OPEN') {
+      logger.info('Circuit breaker probe succeeded — returning to CLOSED');
+    }
+    this.state = 'CLOSED';
+    this.failures = 0;
+    this.lastFailureAt = null;
+    this.openedAt = null;
+  }
+
+  onFailure(kind) {
+    // Auth and client-side (4xx) errors are not Zoho outage signals
+    if (kind === 'auth' || kind === 'client_error') return;
+
+    this.failures++;
+    this.lastFailureAt = Date.now();
+
+    if (this.state === 'HALF_OPEN') {
+      logger.warn('Circuit breaker probe failed — returning to OPEN');
+      this.state = 'OPEN';
+      this.openedAt = Date.now();
+      return;
+    }
+
+    if (this.failures >= CIRCUIT_BREAKER_THRESHOLD) {
+      logger.error(`Circuit breaker OPENED after ${this.failures} consecutive failures`);
+      this.state = 'OPEN';
+      this.openedAt = Date.now();
+    }
+  }
+
+  get isOpen() { return this.state === 'OPEN'; }
+  get status() { return { state: this.state, failures: this.failures, openedAt: this.openedAt }; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // SCOPED CLIENT
-// Returned by setCompany(). Carries its OWN companyId/organizationId so that
-// concurrent syncs for different companies can never clobber each other.
-// Delegates token + low-level HTTP to the shared ZohoBooksService instance,
-// but always passes its own organizationId explicitly.
 // ─────────────────────────────────────────────────────────────────────────
 class ScopedZohoClient {
   constructor(service, companyId, organizationId) {
@@ -45,19 +136,16 @@ class ScopedZohoClient {
     return { companyId: this.companyId, organizationId: this.organizationId };
   }
 
-  // Low-level request bound to THIS scope's organizationId
   _request(method, endpoint, data = null) {
     return this._service._request(method, endpoint, data, this.organizationId);
   }
 
-  // ---- cache helpers (delegate; keys already namespaced by companyId) ----
   _getFromCache(key) { return this._service._getFromCache(key); }
   _setToCache(key, data, ttl) { return this._service._setToCache(key, data, ttl); }
   _clearCache(key) { return this._service._clearCache(key); }
   _clearCachePattern(p) { return this._service._clearCachePattern(p); }
   get CACHE_KEYS() { return this._service.CACHE_KEYS; }
 
-  // ---- delegate pure mappers to the shared service ----
   _mapTaxTreatmentToZoho(t) { return this._service._mapTaxTreatmentToZoho(t); }
   _getPlaceOfSupplyData(t, p) { return this._service._getPlaceOfSupplyData(t, p); }
   _mapTaxTreatment(c) { return this._service._mapTaxTreatment(c); }
@@ -79,6 +167,36 @@ class ScopedZohoClient {
   _buildAddress(d, prefix) { return this._service._buildAddress(d, prefix); }
   _getCurrencyId(code) { return this._service._getCurrencyId(code, this.organizationId); }
 
+  // ─────────────────────────── MUTATION RETRY ─────────────────────────
+  // Wraps a single write operation (fn) with operation-level retry logic.
+  // _request already handles HTTP-level retries; this layer retries the
+  // *entire operation* (including token re-acquisition) for transient
+  // infrastructure failures — timeouts, network resets, 5xx bursts — that
+  // slip through after _request exhausts its own budget.
+  //
+  // Usage:
+  //   return this._mutationWithRetry('updateContact', () =>
+  //     this._request('PUT', `/contacts/${contactId}`, payload));
+  //
+  // opName is only used for logging.
+  async _mutationWithRetry(opName, fn, attempt = 0) {
+    const result = await fn();
+    if (result.success) return result;
+
+    // Don't retry permanent errors — bad data, auth exhausted, circuit open
+    if (!MUTATION_RETRY_KINDS.has(result.kind)) return result;
+    if (result.kind === 'circuit_open') return result;
+    if (attempt >= MAX_MUTATION_RETRIES) return result;
+
+    const delay = 1500 * Math.pow(2, attempt) + Math.floor(Math.random() * 400);
+    logger.warn(
+      `${opName} failed (${result.kind}) — mutation retry ${attempt + 1}/${MAX_MUTATION_RETRIES} in ${delay}ms`,
+      { companyId: this.companyId }
+    );
+    await sleep(delay);
+    return this._mutationWithRetry(opName, fn, attempt + 1);
+  }
+
   // ───────────────────────────── CONTACTS ─────────────────────────────
   async getContact(contactId, bypassCache = false) {
     const cacheKey = this.CACHE_KEYS.CONTACT(contactId, this.companyId);
@@ -96,6 +214,12 @@ class ScopedZohoClient {
         this._setToCache(cacheKey, contact, 300);
         return { success: true, contact, source: 'api' };
       }
+      // Non-success but not an exception — check cache before propagating
+      const fallback = this._getFromCache(cacheKey);
+      if (fallback && Array.isArray(fallback.contact_persons)) {
+        logger.warn(`getContact ${contactId}: Zoho returned non-success, using cache`, { kind: result.kind });
+        return { success: true, contact: fallback, source: 'cache-fallback' };
+      }
       return result;
     } catch (error) {
       const fallback = this._getFromCache(cacheKey);
@@ -103,7 +227,7 @@ class ScopedZohoClient {
         return { success: true, contact: fallback, source: 'cache-fallback' };
       }
       logger.error(`Error fetching contact ${contactId}: ${error.message}`);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, kind: 'unknown' };
     }
   }
 
@@ -127,6 +251,12 @@ class ScopedZohoClient {
         if (!bypassCache) this._setToCache(cacheKey, contacts, 600);
         return { success: true, contacts, source: 'api', totalCount: result.data.page_context?.total || contacts.length };
       }
+      // Zoho returned an error — fall back to cache if available
+      const fallback = this._getFromCache(cacheKey);
+      if (fallback) {
+        logger.warn(`getAllContacts: Zoho error (${result.kind}), serving stale cache`, { companyId: this.companyId });
+        return { success: true, contacts: fallback, source: 'cache-stale', warning: `Serving cached data: Zoho returned ${result.kind}` };
+      }
       return result;
     } catch (error) {
       const fallback = this._getFromCache(cacheKey);
@@ -136,23 +266,60 @@ class ScopedZohoClient {
     }
   }
 
+  // ─── Paginated customer fetch with per-page retry ───────────────────
   async getAllCustomersPaginated(lastSyncDate = null) {
     const uniqueCustomers = new Map();
     let page = 1;
     let hasMorePages = true;
     let totalWithDuplicates = 0;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_PAGE_FAILURES = 3;
 
     logger.info(`Starting customer fetch for company ${this.companyId}`, {
       companyId: this.companyId, mode: lastSyncDate ? 'INCREMENTAL' : 'FULL SYNC'
     });
 
+    // Check circuit breaker before starting a potentially long paginated fetch
+    if (this._service.circuitBreaker.isOpen) {
+      return {
+        success: false,
+        error: 'Zoho API circuit breaker is open — Zoho appears to be unavailable. Retry later.',
+        kind: 'circuit_open'
+      };
+    }
+
     while (hasMorePages && page <= MAX_PAGES_SAFETY) {
       let url = `/contacts?page=${page}&per_page=${PER_PAGE}&filter_by=Status.All`;
       if (lastSyncDate) url += `&last_modified_time=after.${lastSyncDate}`;
 
-      const result = await this._request('GET', url);
+      // Per-page retry with backoff
+      let result = null;
+      for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+        result = await this._request('GET', url);
+        if (result.success) break;
+
+        // Don't retry permanent client errors (bad params, not-found etc.)
+        if (result.kind === 'client_error' || result.kind === 'auth') break;
+
+        // Circuit open mid-pagination — surface immediately
+        if (result.kind === 'circuit_open') {
+          return {
+            success: false,
+            error: 'Zoho API became unavailable mid-pagination. Partial results discarded.',
+            kind: 'circuit_open',
+            partialCount: uniqueCustomers.size
+          };
+        }
+
+        if (attempt < MAX_PAGE_RETRIES) {
+          const delay = 1000 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+          logger.warn(`Page ${page} failed (${result.kind}), retry ${attempt + 1}/${MAX_PAGE_RETRIES} in ${delay}ms`, { companyId: this.companyId });
+          await sleep(delay);
+        }
+      }
 
       if (result.success && result.data?.contacts) {
+        consecutiveFailures = 0;
         const customers = result.data.contacts.filter(c => c.contact_type === 'customer');
         for (const c of customers) {
           if (!uniqueCustomers.has(c.contact_id)) uniqueCustomers.set(c.contact_id, c);
@@ -161,12 +328,33 @@ class ScopedZohoClient {
         hasMorePages = result.data.page_context?.has_more_page === true;
         if (hasMorePages) { page++; await sleep(PAGE_DELAY_MS); }
       } else {
-        // A failed page mid-pagination: surface it instead of silently truncating
+        consecutiveFailures++;
+
+        // First page failure is fatal — nothing to return
         if (page === 1) {
-          return { success: false, error: result.error || 'Failed to fetch contacts from Zoho' };
+          logger.error(`Customer fetch failed on first page: ${result.error}`, { companyId: this.companyId, kind: result.kind });
+          return { success: false, error: result.error || 'Failed to fetch contacts from Zoho', kind: result.kind };
         }
-        logger.warn(`Stopping pagination early at page ${page}: ${result.error || 'no contacts'}`, { companyId: this.companyId });
-        hasMorePages = false;
+
+        // Mid-pagination: allow a few consecutive failures before giving up
+        if (consecutiveFailures >= MAX_CONSECUTIVE_PAGE_FAILURES) {
+          logger.error(`Stopping pagination: ${consecutiveFailures} consecutive page failures at page ${page}`, {
+            companyId: this.companyId, kind: result.kind, partialCount: uniqueCustomers.size
+          });
+          // Return what we have so the sync is not entirely lost, but flag as partial
+          return {
+            success: true,
+            customers: Array.from(uniqueCustomers.values()),
+            totalUnique: uniqueCustomers.size,
+            totalWithDuplicates,
+            partial: true,
+            partialReason: `Stopped at page ${page} after ${consecutiveFailures} consecutive failures (${result.kind})`
+          };
+        }
+
+        logger.warn(`Page ${page} failed after retries (${result.kind}), skipping`, { companyId: this.companyId });
+        page++;
+        await sleep(PAGE_DELAY_MS * 2); // extra back-off before next page
       }
     }
 
@@ -214,14 +402,18 @@ class ScopedZohoClient {
       contactPayload.vat_reg_no = taxRegistrationNumber;
     }
 
-    const result = await this._request('POST', '/contacts', this._cleanPayload(contactPayload));
+    const cleanPayload = this._cleanPayload(contactPayload);
+    const result = await this._mutationWithRetry(
+      'createContact',
+      () => this._request('POST', '/contacts', cleanPayload)
+    );
     if (result.success && result.data?.contact) {
       await this.clearContactsCache();
       logger.info(`Contact created in Zoho: ${customerData.name}`, { contactId: result.data.contact.contact_id, companyId: this.companyId });
       return { success: true, zohoId: result.data.contact.contact_id, message: 'Contact created in Zoho Books', contact: result.data.contact };
     }
-    logger.error(`Failed to create contact in Zoho: ${result.error}`, { customerName: customerData.name });
-    return { success: false, message: result.error || 'Failed to create contact in Zoho', error: result.error, details: result.details };
+    logger.error(`Failed to create contact in Zoho: ${result.error}`, { customerName: customerData.name, kind: result.kind });
+    return { success: false, message: result.error || 'Failed to create contact in Zoho', error: result.error, kind: result.kind, details: result.details };
   }
 
   async updateContact(contactId, customerData) {
@@ -263,37 +455,53 @@ class ScopedZohoClient {
       if (currencyId) contactPayload.currency_id = currencyId;
     }
 
-    const result = await this._request('PUT', `/contacts/${contactId}`, this._cleanPayload(contactPayload));
+    const cleanPayload = this._cleanPayload(contactPayload);
+    const result = await this._mutationWithRetry(
+      `updateContact:${contactId}`,
+      () => this._request('PUT', `/contacts/${contactId}`, cleanPayload)
+    );
     if (result.success) {
       logger.info(`Contact updated in Zoho: ${customerData.name}`, { contactId, companyId: this.companyId });
     } else {
-      logger.error(`Failed to update contact in Zoho: ${result.error}`, { contactId, customerName: customerData.name });
+      logger.error(`Failed to update contact in Zoho: ${result.error}`, { contactId, customerName: customerData.name, kind: result.kind });
     }
-    return { success: result.success, message: result.success ? 'Contact updated successfully' : (result.error || 'Zoho update failed'), contact: result.data?.contact || result.contact, error: result.success ? undefined : result.error };
+    return {
+      success: result.success,
+      message: result.success ? 'Contact updated successfully' : (result.error || 'Zoho update failed'),
+      contact: result.data?.contact || result.contact,
+      kind: result.kind,
+      error: result.success ? undefined : result.error
+    };
   }
 
   async deleteContact(contactId) {
-    const result = await this._request('DELETE', `/contacts/${contactId}`);
+    const result = await this._mutationWithRetry(
+      `deleteContact:${contactId}`,
+      () => this._request('DELETE', `/contacts/${contactId}`)
+    );
     if (result.success) {
       await this.clearContactsCache();
       this._clearCache(this.CACHE_KEYS.CONTACT(contactId, this.companyId));
       logger.info(`Contact deleted from Zoho: ${contactId}`, { contactId, companyId: this.companyId });
       return { success: true, message: 'Contact deleted from Zoho Books' };
     }
-    logger.error(`Failed to delete contact from Zoho: ${result.error}`, { contactId });
+    logger.error(`Failed to delete contact from Zoho: ${result.error}`, { contactId, kind: result.kind });
     return result;
   }
 
   async markContactInactive(contactId) {
-    const result = await this._request('POST', `/contacts/${contactId}/inactive`);
+    const result = await this._mutationWithRetry(
+      `markContactInactive:${contactId}`,
+      () => this._request('POST', `/contacts/${contactId}/inactive`)
+    );
     if (result.success) {
       this._clearCache(this.CACHE_KEYS.CONTACT(contactId, this.companyId));
       await this.clearContactsCache();
       logger.info(`Contact marked inactive in Zoho: ${contactId}`, { contactId, companyId: this.companyId });
       return { success: true, message: 'Contact marked inactive in Zoho Books' };
     }
-    logger.error(`Failed to mark contact inactive in Zoho: ${result.error}`, { contactId });
-    return { success: false, error: result.error, details: result.details };
+    logger.error(`Failed to mark contact inactive in Zoho: ${result.error}`, { contactId, kind: result.kind });
+    return { success: false, error: result.error, kind: result.kind, details: result.details };
   }
 
   async clearContactsCache() {
@@ -313,8 +521,6 @@ class ScopedZohoClient {
     const startTime = Date.now();
     const companyIdStr = String(company._id);
 
-    // Normalize the cancellation interface — accept either the legacy
-    // companyId string OR an object exposing isCancelRequested().
     const isCancelled = () => {
       if (cancelToken && typeof cancelToken.isCancelRequested === 'function') {
         return cancelToken.isCancelRequested() === true;
@@ -323,6 +529,15 @@ class ScopedZohoClient {
     };
 
     try {
+      // ── Pre-flight: check circuit breaker before starting sync ──────────
+      if (this._service.circuitBreaker.isOpen) {
+        const cbStatus = this._service.circuitBreaker.status;
+        const msg = `Cannot start customer sync: Zoho API circuit breaker is OPEN (${cbStatus.failures} failures, opened ${Math.round((Date.now() - cbStatus.openedAt) / 1000)}s ago)`;
+        logger.warn(msg, { companyId: companyIdStr });
+        if (onProgress) onProgress({ stage: 'error', message: msg, kind: 'circuit_open' });
+        return { success: false, error: msg, kind: 'circuit_open' };
+      }
+
       logger.info(`Starting customer sync for company: ${company.name} (${company.code})`, {
         companyId: companyIdStr, companyCode: company.code, mode: incremental ? 'INCREMENTAL' : 'FULL SYNC'
       });
@@ -351,7 +566,25 @@ class ScopedZohoClient {
       if (onProgress) onProgress({ stage: 'fetching', message: 'Fetching customers from Zoho...', fetched: 0, total: 0, startTime });
 
       const fetchResult = await this.getAllCustomersPaginated(lastSyncDate);
-      if (!fetchResult.success) throw new Error(fetchResult.error || 'Failed to fetch customers from Zoho');
+
+      if (!fetchResult.success) {
+        // Distinguish circuit-open (Zoho down) from other errors
+        const msg = fetchResult.kind === 'circuit_open'
+          ? 'Zoho API is currently unavailable (circuit breaker open). Try again in a minute.'
+          : (fetchResult.error || 'Failed to fetch customers from Zoho');
+        if (onProgress) onProgress({ stage: 'error', message: msg, kind: fetchResult.kind, startTime });
+        return { success: false, error: msg, kind: fetchResult.kind };
+      }
+
+      // Warn if we only got a partial result set
+      if (fetchResult.partial) {
+        logger.warn(`Customer fetch was partial for company ${companyIdStr}: ${fetchResult.partialReason}`, { companyId: companyIdStr });
+        if (onProgress) onProgress({
+          stage: 'processing',
+          message: `⚠️ Partial fetch: ${fetchResult.partialReason}. Processing ${fetchResult.totalUnique} customers...`,
+          fetched: 0, total: fetchResult.totalUnique, startTime, partial: true
+        });
+      }
 
       const zohoCustomers = fetchResult.customers || [];
       if (zohoCustomers.length === 0) {
@@ -360,6 +593,7 @@ class ScopedZohoClient {
       }
 
       let created = 0, updated = 0, unchanged = 0, errors = 0, totalContactPersons = 0;
+      let zohoErrors = 0; // specifically Zoho-side errors (to detect mid-sync outage)
       const failedRecords = [];
       const total = zohoCustomers.length;
 
@@ -373,16 +607,34 @@ class ScopedZohoClient {
           return { success: false, message: 'Sync cancelled by user', cancelled: true, created, updated, unchanged, errors };
         }
 
+        // ── Mid-sync circuit breaker check ──────────────────────────────
+        if (this._service.circuitBreaker.isOpen) {
+          logger.error(`Customer sync aborting mid-batch: circuit breaker opened (${zohoErrors} Zoho errors so far)`, { companyId: companyIdStr });
+          if (onProgress) onProgress({
+            stage: 'error',
+            message: `Sync stopped: Zoho API became unavailable after processing ${i}/${total} customers. Saved: ${created} created, ${updated} updated.`,
+            fetched: i, total, created, updated, unchanged, errors, kind: 'circuit_open', startTime
+          });
+          return {
+            success: false, error: 'Zoho API unavailable mid-sync (circuit breaker open)',
+            kind: 'circuit_open', created, updated, unchanged, errors,
+            processedBefore: i, totalFromZoho: total
+          };
+        }
+
         const batch = zohoCustomers.slice(i, i + BATCH_SIZE);
         const results = await Promise.all(batch.map(async (zc) => {
           if (isCancelled()) return { action: 'cancelled' };
           try {
-            // Use the list payload directly; only fetch full detail when the
-            // list entry lacks contact_persons (avoids the N+1 fetch storm).
             let fullContact = zc;
             if (!Array.isArray(zc.contact_persons) || zc.contact_persons.length === 0) {
               const detail = await this.getContact(zc.contact_id, true);
               if (detail.success && detail.contact) fullContact = detail.contact;
+              // If getContact fails, proceed with the list-level data rather than
+              // hard-failing the whole record — it's better than losing the customer
+              else if (!detail.success) {
+                logger.warn(`Could not fetch contact detail for ${zc.contact_id} (${detail.kind || 'unknown'}) — using list data`, { companyId: this.companyId });
+              }
             }
             return await this.processCustomerRecord(company._id, zc, fullContact);
           } catch (err) {
@@ -401,7 +653,8 @@ class ScopedZohoClient {
           else if (r.action === 'unchanged') unchanged++;
           if (r.action === 'error') {
             errors++;
-            failedRecords.push({ zohoId: r.zohoId, name: r.name, error: r.error });
+            if (r.kind && r.kind !== 'client_error') zohoErrors++;
+            failedRecords.push({ zohoId: r.zohoId, name: r.name, error: r.error, kind: r.kind });
           }
           if (r.contactPersonsCount) totalContactPersons += r.contactPersonsCount;
         }
@@ -413,28 +666,34 @@ class ScopedZohoClient {
       }
 
       const duration = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
+      const wasPartial = fetchResult.partial === true;
 
-      if (onProgress) onProgress({ stage: 'completed', message: `Sync completed! ${created} created, ${updated} updated, ${unchanged} unchanged`, fetched: total, total, created, updated, unchanged, errors, duration, startTime });
+      if (onProgress) onProgress({
+        stage: 'completed',
+        message: `Sync completed${wasPartial ? ' (partial)' : ''}! ${created} created, ${updated} updated, ${unchanged} unchanged`,
+        fetched: total, total, created, updated, unchanged, errors, duration, startTime,
+        ...(wasPartial && { warning: fetchResult.partialReason })
+      });
 
       await this.clearContactsCache();
 
       logger.info(`Customer sync completed for ${company.code}: Created ${created}, Updated ${updated}, Unchanged ${unchanged}, Errors ${errors}, Duration ${duration}`, {
         companyId: companyIdStr, companyCode: company.code, created, updated, unchanged, errors, totalContactPersons, duration,
         syncType: incremental ? 'incremental' : 'full',
+        partial: wasPartial,
         failedRecords: failedRecords.slice(0, 20)
       });
 
       return {
         success: true, totalFromZoho: total, created, updated, unchanged, errors, totalContactPersons, duration,
-        failedRecords, lastSyncDate: new Date().toISOString(), syncType: incremental ? 'incremental' : 'full'
+        failedRecords, lastSyncDate: new Date().toISOString(), syncType: incremental ? 'incremental' : 'full',
+        ...(wasPartial && { partial: true, partialReason: fetchResult.partialReason })
       };
     } catch (error) {
       logger.error(`Customer sync error for ${company?.code}: ${error.message}`, { companyId: companyIdStr, error: error.message, stack: error.stack });
       if (onProgress) onProgress({ stage: 'error', message: `Sync failed: ${error.message}`, error: error.message, startTime });
       return { success: false, error: error.message };
     } finally {
-      // Always clear the cancellation flag for this company so a stale `true`
-      // can never auto-cancel the next sync.
       customerSyncCancelMap.delete(companyIdStr);
     }
   }
@@ -451,7 +710,7 @@ class ScopedZohoClient {
         address: contactData.billing_address?.address || '',
         city: contactData.billing_address?.city || '',
         state: contactData.billing_address?.state || '',
-        zipcode: contactData.billing_address?.zip || '', // FIX: was `zip` (schema field is zipcode)
+        zipcode: contactData.billing_address?.zip || '',
         companyName: (contactData.company_name || contactData.contact_name || '').trim(),
         website: contactData.website || '',
         notes: contactData.notes || '',
@@ -473,21 +732,43 @@ class ScopedZohoClient {
       this._ensurePrimaryContact(contactPersons);
       mapped.contactPersons = contactPersons;
 
-      const existing = await Customer.findOne({ companyId, zohoId: mapped.zohoId });
+      // Separate DB errors from Zoho errors for better observability
+      let existing;
+      try {
+        existing = await Customer.findOne({ companyId, zohoId: mapped.zohoId });
+      } catch (dbErr) {
+        logger.error(`DB error looking up customer ${mapped.zohoId}: ${dbErr.message}`);
+        return { action: 'error', error: `DB lookup failed: ${dbErr.message}`, kind: 'db_error', zohoId: zc?.contact_id, name: zc?.contact_name, contactPersonsCount: 0 };
+      }
 
       if (!existing) {
-        await new Customer(mapped).save({ validateBeforeSave: false });
-        return { action: 'created', contactPersonsCount: contactPersons.length };
+        try {
+          await new Customer(mapped).save({ validateBeforeSave: false });
+          return { action: 'created', contactPersonsCount: contactPersons.length };
+        } catch (dbErr) {
+          logger.error(`DB error creating customer ${mapped.zohoId}: ${dbErr.message}`);
+          return { action: 'error', error: `DB create failed: ${dbErr.message}`, kind: 'db_error', zohoId: zc?.contact_id, name: zc?.contact_name, contactPersonsCount: 0 };
+        }
       }
 
       const merged = this._mergeContactPersons(existing.contactPersons || [], contactPersons);
       if (!this._hasCustomerChanged(existing, mapped, merged)) {
-        await Customer.updateOne({ _id: existing._id }, { $set: { zohoSynced: true, zohoSyncDate: new Date(), zohoSyncError: null } });
+        try {
+          await Customer.updateOne({ _id: existing._id }, { $set: { zohoSynced: true, zohoSyncDate: new Date(), zohoSyncError: null } });
+        } catch (dbErr) {
+          // Stamp update failure is non-critical — log and continue
+          logger.warn(`DB error updating zohoSyncDate for ${mapped.zohoId}: ${dbErr.message}`);
+        }
         return { action: 'unchanged', contactPersonsCount: contactPersons.length };
       }
 
-      await Customer.updateOne({ _id: existing._id }, { $set: { ...mapped, contactPersons: merged, zohoData: contactData } }, { runValidators: false });
-      return { action: 'updated', contactPersonsCount: contactPersons.length };
+      try {
+        await Customer.updateOne({ _id: existing._id }, { $set: { ...mapped, contactPersons: merged, zohoData: contactData } }, { runValidators: false });
+        return { action: 'updated', contactPersonsCount: contactPersons.length };
+      } catch (dbErr) {
+        logger.error(`DB error updating customer ${mapped.zohoId}: ${dbErr.message}`);
+        return { action: 'error', error: `DB update failed: ${dbErr.message}`, kind: 'db_error', zohoId: zc?.contact_id, name: zc?.contact_name, contactPersonsCount: 0 };
+      }
     } catch (error) {
       logger.error(`Error processing customer record: ${error.message}`);
       return { action: 'error', error: error.message, zohoId: zc?.contact_id, name: zc?.contact_name, contactPersonsCount: 0 };
@@ -499,17 +780,49 @@ class ScopedZohoClient {
     const allItems = [];
     let page = 1;
     let hasMorePages = true;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_PAGE_FAILURES = 3;
+
+    if (this._service.circuitBreaker.isOpen) {
+      return { success: false, error: 'Zoho API circuit breaker is open', kind: 'circuit_open' };
+    }
+
     while (hasMorePages && page <= MAX_PAGES_SAFETY) {
       let url = `/items?page=${page}&per_page=${PER_PAGE}&filter_by=Status.All`;
       if (lastSyncDate) url += `&filter_by=Date.Modified.After.${lastSyncDate}`;
-      const result = await this._request('GET', url);
+
+      // Per-page retry
+      let result = null;
+      for (let attempt = 0; attempt <= MAX_PAGE_RETRIES; attempt++) {
+        result = await this._request('GET', url);
+        if (result.success) break;
+        if (result.kind === 'client_error' || result.kind === 'auth' || result.kind === 'circuit_open') break;
+        if (attempt < MAX_PAGE_RETRIES) {
+          const delay = 1000 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
+          logger.warn(`Items page ${page} failed (${result.kind}), retry ${attempt + 1}/${MAX_PAGE_RETRIES} in ${delay}ms`);
+          await sleep(delay);
+        }
+      }
+
+      if (result.kind === 'circuit_open') {
+        return { success: false, error: 'Zoho API became unavailable mid-pagination', kind: 'circuit_open', partialItems: allItems };
+      }
+
       if (result.success && result.data?.items) {
+        consecutiveFailures = 0;
         allItems.push(...result.data.items);
         hasMorePages = result.data.page_context?.has_more_page === true;
         if (hasMorePages) { page++; await sleep(200); }
       } else {
-        if (page === 1) return { success: false, error: result.error || 'Failed to fetch items from Zoho' };
-        hasMorePages = false;
+        consecutiveFailures++;
+        if (page === 1) return { success: false, error: result.error || 'Failed to fetch items from Zoho', kind: result.kind };
+        if (consecutiveFailures >= MAX_CONSECUTIVE_PAGE_FAILURES) {
+          logger.error(`Items pagination: stopping after ${consecutiveFailures} consecutive failures at page ${page}`);
+          return { success: true, items: allItems, partial: true, partialReason: `Stopped at page ${page} after consecutive failures` };
+        }
+        logger.warn(`Items page ${page} skipped (${result.kind})`);
+        page++;
+        await sleep(200 * 2);
       }
     }
     return { success: true, items: allItems };
@@ -517,6 +830,11 @@ class ScopedZohoClient {
 
   async syncItemsToDatabase(company, incremental = true) {
     try {
+      // Pre-flight circuit breaker check
+      if (this._service.circuitBreaker.isOpen) {
+        return { success: false, error: 'Zoho API circuit breaker is open — cannot start item sync', kind: 'circuit_open' };
+      }
+
       logger.info(`Starting item sync for company: ${company.name} (${company.code})`, { companyId: this.companyId });
       let lastSyncDate = null;
       if (incremental) {
@@ -528,28 +846,47 @@ class ScopedZohoClient {
         }
       }
       const fetchResult = await this.getAllItemsPaginated(lastSyncDate);
-      if (!fetchResult.success) throw new Error(fetchResult.error || 'Failed to fetch items from Zoho');
+      if (!fetchResult.success) {
+        const msg = fetchResult.kind === 'circuit_open'
+          ? 'Zoho API is currently unavailable. Try again later.'
+          : (fetchResult.error || 'Failed to fetch items from Zoho');
+        return { success: false, error: msg, kind: fetchResult.kind };
+      }
+
+      if (fetchResult.partial) {
+        logger.warn(`Item sync is partial for company ${this.companyId}: ${fetchResult.partialReason}`);
+      }
 
       const zohoItems = fetchResult.items || [];
-      let created = 0, updated = 0, unchanged = 0;
+      let created = 0, updated = 0, unchanged = 0, dbErrors = 0;
       for (const zi of zohoItems) {
         if (!zi.item_id) continue;
         const mapped = this._mapZohoItemToItem(zi);
         mapped.companyId = company._id;
-        const existing = await Item.findOne({ companyId: company._id, zohoId: mapped.zohoId });
-        if (existing) {
-          if (this._hasItemChanged(existing, mapped)) {
-            await Item.findOneAndUpdate({ companyId: company._id, zohoId: mapped.zohoId }, { $set: { ...mapped, lastSyncedAt: new Date() } }, { new: true });
-            updated++;
-          } else unchanged++;
-        } else {
-          await Item.create({ ...mapped, lastSyncedAt: new Date() });
-          created++;
+        try {
+          const existing = await Item.findOne({ companyId: company._id, zohoId: mapped.zohoId });
+          if (existing) {
+            if (this._hasItemChanged(existing, mapped)) {
+              await Item.findOneAndUpdate({ companyId: company._id, zohoId: mapped.zohoId }, { $set: { ...mapped, lastSyncedAt: new Date() } }, { new: true });
+              updated++;
+            } else unchanged++;
+          } else {
+            await Item.create({ ...mapped, lastSyncedAt: new Date() });
+            created++;
+          }
+        } catch (dbErr) {
+          dbErrors++;
+          logger.error(`DB error syncing item ${zi.item_id}: ${dbErr.message}`);
         }
       }
       await this.clearItemsCache();
-      logger.info(`Item sync completed for ${company.code}: Created ${created}, Updated ${updated}, Unchanged ${unchanged}`, { companyId: this.companyId, created, updated, unchanged, total: zohoItems.length });
-      return { success: true, created, updated, unchanged, total: zohoItems.length };
+      logger.info(`Item sync completed for ${company.code}: Created ${created}, Updated ${updated}, Unchanged ${unchanged}, DB errors ${dbErrors}`, {
+        companyId: this.companyId, created, updated, unchanged, dbErrors, total: zohoItems.length
+      });
+      return {
+        success: true, created, updated, unchanged, dbErrors, total: zohoItems.length,
+        ...(fetchResult.partial && { partial: true, partialReason: fetchResult.partialReason })
+      };
     } catch (error) {
       logger.error(`Item sync error for ${company.code}: ${error.message}`, { companyId: this.companyId, error: error.message });
       return { success: false, error: error.message };
@@ -598,6 +935,9 @@ class ScopedZohoClient {
         this._setToCache(cacheKey, result.data.item, 600);
         return { success: true, item: result.data.item, source: 'api' };
       }
+      // Try cache before propagating failure
+      const fallback = this._getFromCache(cacheKey);
+      if (fallback && !result.success) return { success: true, item: fallback, source: 'cache-fallback' };
       return result;
     } catch (error) {
       const fallback = this._getFromCache(cacheKey);
@@ -608,8 +948,11 @@ class ScopedZohoClient {
 
   async createItem(itemData) {
     try {
-      const payload = { name: itemData.name, rate: itemData.rate, description: itemData.description, sku: itemData.sku, unit: itemData.unit, product_type: itemData.product_type || 'goods' };
-      const result = await this._request('POST', '/items', this._cleanPayload(payload));
+      const payload = this._cleanPayload({ name: itemData.name, rate: itemData.rate, description: itemData.description, sku: itemData.sku, unit: itemData.unit, product_type: itemData.product_type || 'goods' });
+      const result = await this._mutationWithRetry(
+        'createItem',
+        () => this._request('POST', '/items', payload)
+      );
       if (result.success && result.data?.item) {
         await this.clearItemsCache();
         return { success: true, zohoId: result.data.item.item_id, item: result.data.item };
@@ -623,8 +966,11 @@ class ScopedZohoClient {
 
   async updateItem(itemId, itemData) {
     try {
-      const payload = { name: itemData.name, rate: itemData.rate, description: itemData.description, sku: itemData.sku, unit: itemData.unit, product_type: itemData.product_type };
-      const result = await this._request('PUT', `/items/${itemId}`, this._cleanPayload(payload));
+      const payload = this._cleanPayload({ name: itemData.name, rate: itemData.rate, description: itemData.description, sku: itemData.sku, unit: itemData.unit, product_type: itemData.product_type });
+      const result = await this._mutationWithRetry(
+        `updateItem:${itemId}`,
+        () => this._request('PUT', `/items/${itemId}`, payload)
+      );
       if (result.success && result.data?.item) {
         await this.clearItemsCache();
         this._clearCache(this.CACHE_KEYS.ITEM(itemId, this.companyId));
@@ -638,7 +984,10 @@ class ScopedZohoClient {
   }
 
   async deleteItem(itemId) {
-    const result = await this._request('DELETE', `/items/${itemId}`);
+    const result = await this._mutationWithRetry(
+      `deleteItem:${itemId}`,
+      () => this._request('DELETE', `/items/${itemId}`)
+    );
     if (result.success) {
       await this.clearItemsCache();
       this._clearCache(this.CACHE_KEYS.ITEM(itemId, this.companyId));
@@ -656,6 +1005,11 @@ class ScopedZohoClient {
 
   async createEstimate(estimateData) {
     return this._service._createEstimate(estimateData, this.organizationId);
+  }
+
+  // Expose circuit breaker status for health checks / admin endpoints
+  getCircuitBreakerStatus() {
+    return this._service.circuitBreaker.status;
   }
 }
 
@@ -680,7 +1034,6 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─────────────────────────────────────────────────────────────────────────
 // SHARED SERVICE — token management + low-level HTTP + pure mappers.
-// Holds NO per-request company state anymore.
 // ─────────────────────────────────────────────────────────────────────────
 class ZohoBooksService {
   constructor() {
@@ -704,28 +1057,26 @@ class ZohoBooksService {
     this.accessToken = null;
     this.tokenExpiry = null;
     this.tokenFilePath = path.join(__dirname, '../.zoho-token.json');
-    this.currencyCache = null;
-    this.currencyCacheExpiry = null;
+    this.currencyCacheByOrg = new Map();
 
-    // Single in-flight refresh promise shared by all callers (refresh mutex)
     this._refreshPromise = null;
 
     this.memoryCache = new Map();
 
+    // Circuit breaker shared across all requests through this service instance
+    this.circuitBreaker = new CircuitBreaker();
+
     this.EMIRATE_CODE_MAP = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
     this.COUNTRY_CODE_MAP = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
 
-    // Legacy single-context fields (kept ONLY for backward-compat with any
-    // caller that still does setCompany() then service.createContact()).
     this._legacyClient = null;
 
     this._loadToken();
   }
 
-  // ── Public entry point. Returns a scoped client AND sets legacy context. ──
   setCompany(companyId, organizationId) {
     const client = new ScopedZohoClient(this, companyId, organizationId);
-    this._legacyClient = client; // backward-compat for legacy call sites
+    this._legacyClient = client;
     return client;
   }
 
@@ -772,8 +1123,6 @@ class ZohoBooksService {
     return Date.now() < (this.tokenExpiry - TOKEN_EXPIRY_BUFFER_MS);
   }
 
-  // Token mutex: all concurrent callers await the SAME refresh promise instead
-  // of stampeding Zoho. No more hard "rate limited" throw.
   async getValidAccessToken() {
     if (this._isTokenValid()) return this.accessToken;
     if (this._refreshPromise) return this._refreshPromise;
@@ -784,6 +1133,14 @@ class ZohoBooksService {
   }
 
   async _doRefresh() {
+    // Race the OAuth call against a hard deadline so a hanging Zoho auth
+    // endpoint cannot suspend the entire process indefinitely.
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () => reject(Object.assign(new Error('Token refresh timed out — Zoho OAuth endpoint did not respond'), { code: 'ETIMEDOUT' })),
+        TOKEN_REFRESH_TIMEOUT_MS
+      )
+    );
     try {
       const params = new URLSearchParams({
         refresh_token: this.refreshToken,
@@ -791,39 +1148,118 @@ class ZohoBooksService {
         client_secret: this.clientSecret,
         grant_type: 'refresh_token'
       });
-      const response = await axios.post('https://accounts.zoho.com/oauth/v2/token', params, {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: TOKEN_REFRESH_TIMEOUT_MS
-      });
-      if (response.data?.access_token) {
-        this.accessToken = response.data.access_token;
-        this.tokenExpiry = Date.now() + parseInt(response.data.expires_in, 10) * 1000;
-        await this._saveToken();
-        logger.info('Zoho access token refreshed successfully');
-        return this.accessToken;
+      const response = await Promise.race([
+        axios.post('https://accounts.zoho.com/oauth/v2/token', params, {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          // axios timeout covers response-body transfer; Promise.race above
+          // covers total wall-clock time including connection establishment.
+          timeout: TOKEN_REFRESH_TIMEOUT_MS
+        }),
+        timeoutPromise
+      ]);
+
+      // Guard: Zoho occasionally returns 200 with an empty or non-JSON body
+      if (!response?.data?.access_token) {
+        const body = JSON.stringify(response?.data ?? null);
+        throw new Error(`Zoho OAuth returned no access_token (body: ${body})`);
       }
-      throw new Error('Invalid response from Zoho: missing access_token');
+
+      const expiresIn = parseInt(response.data.expires_in, 10);
+      if (isNaN(expiresIn) || expiresIn <= 0) {
+        throw new Error(`Zoho OAuth returned invalid expires_in: ${response.data.expires_in}`);
+      }
+
+      this.accessToken = response.data.access_token;
+      this.tokenExpiry = Date.now() + expiresIn * 1000;
+      await this._saveToken();
+      logger.info('Zoho access token refreshed successfully');
+      return this.accessToken;
     } catch (error) {
       const msg = error.response?.data?.error_description || error.message;
       logger.error(`Zoho token refresh failed: ${msg}`);
-      // If we still have a (possibly stale) token, let the request layer try it
-      // and handle the 401 → it will trigger exactly one more refresh.
-      if (this.accessToken) return this.accessToken;
+      // If we still have any token (possibly stale), return it so _request
+      // can attempt the call and handle a 401 with a clean retry.
+      if (this.accessToken) {
+        logger.warn('Using potentially stale access token after refresh failure — will retry on 401');
+        return this.accessToken;
+      }
       throw new Error(`Zoho token refresh failed: ${msg}`);
     }
   }
 
-  // ── LOW-LEVEL REQUEST with retry/backoff. organizationId passed explicitly. ──
+  // ── LOW-LEVEL REQUEST with circuit breaker + retry/backoff ──────────────
   async _request(method, endpoint, data = null, organizationId, retryCount = 0) {
-    if (!organizationId) return { success: false, error: 'organizationId is required for Zoho request', status: 400 };
+    if (!organizationId) return { success: false, error: 'organizationId is required for Zoho request', status: 400, kind: 'client_error' };
+
+    // ── Circuit breaker gate ──────────────────────────────────────────────
+    if (!this.circuitBreaker.allowRequest()) {
+      const cbStatus = this.circuitBreaker.status;
+      const waitSec = Math.max(0, Math.round((CIRCUIT_BREAKER_RESET_MS - (Date.now() - cbStatus.openedAt)) / 1000));
+      logger.warn(`Zoho request blocked by circuit breaker (${cbStatus.state}, retry in ~${waitSec}s)`, { method, endpoint });
+      return {
+        success: false,
+        error: `Zoho API circuit breaker is OPEN — Zoho appears to be unavailable. Retry in ~${waitSec}s.`,
+        kind: 'circuit_open',
+        status: 503
+      };
+    }
+
+    // Use a shorter timeout for circuit-breaker probe requests (HALF_OPEN)
+    const requestTimeout = this.circuitBreaker.state === 'HALF_OPEN'
+      ? CIRCUIT_BREAKER_PROBE_TIMEOUT_MS
+      : REQUEST_TIMEOUT_MS;
+
+    // ── Hard wall-clock deadline wrapping token fetch + HTTP call ─────────
+    // getValidAccessToken() can hang if Zoho's OAuth endpoint is unresponsive.
+    // The AbortController only fires after the token is obtained, leaving a
+    // window where the process can block indefinitely. This outer race closes
+    // that window: if the entire _request operation (token + HTTP) hasn't
+    // resolved within requestTimeout + TOKEN_REFRESH_TIMEOUT_MS, we abort.
+    const TOTAL_DEADLINE_MS = requestTimeout + TOKEN_REFRESH_TIMEOUT_MS + 2000;
+    let hardDeadlineId = null;
+    const hardDeadline = new Promise((_, reject) => {
+      hardDeadlineId = setTimeout(
+        () => reject(Object.assign(new Error('Zoho request hard deadline exceeded — no response received'), { code: 'ETIMEDOUT', isHardDeadline: true })),
+        TOTAL_DEADLINE_MS
+      );
+    });
 
     let timeoutId = null;
     try {
+      const result = await Promise.race([
+        this._doRequest(method, endpoint, data, organizationId, requestTimeout, retryCount),
+        hardDeadline
+      ]);
+      clearTimeout(hardDeadlineId);
+      return result;
+    } catch (error) {
+      clearTimeout(hardDeadlineId);
+      if (timeoutId) clearTimeout(timeoutId);
+
+      // Hard deadline fired — treat as timeout + inform circuit breaker
+      if (error.isHardDeadline) {
+        logger.error(`Zoho ${method} ${endpoint} hard deadline exceeded (>${TOTAL_DEADLINE_MS}ms) — Zoho returned no response`, { organizationId, retryCount });
+        this.circuitBreaker.onFailure('timeout');
+        return { success: false, error: 'Zoho returned no response within the maximum allowed time', status: 408, kind: 'timeout' };
+      }
+      // Rethrow unexpected errors (should not normally reach here)
+      logger.error(`Unexpected _request error for ${method} ${endpoint}: ${error.message}`);
+      this.circuitBreaker.onFailure('unknown');
+      return { success: false, error: error.message, kind: 'unknown' };
+    }
+  }
+
+  // Separated from _request so the hard-deadline race wrapper stays clean
+  async _doRequest(method, endpoint, data, organizationId, requestTimeout, retryCount) {
+    let timeoutId = null;
+    try {
+      // Token fetch is now inside _doRequest so it participates in the
+      // hard deadline race in _request above.
       const token = await this.getValidAccessToken();
       const separator = endpoint.includes('?') ? '&' : '?';
       const url = `${this.apiDomain}${endpoint}${separator}organization_id=${organizationId}`;
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      timeoutId = setTimeout(() => controller.abort(), requestTimeout);
 
       const config = {
         method, url,
@@ -834,6 +1270,17 @@ class ZohoBooksService {
 
       const response = await axios(config);
       clearTimeout(timeoutId);
+
+      // Guard: 200 with empty/unparseable body
+      if (response.data === undefined || response.data === null) {
+        // Treat as a server error — the circuit breaker will track it
+        logger.warn(`Zoho ${method} ${endpoint} returned 200 with empty body`, { organizationId });
+        this.circuitBreaker.onFailure('server_error');
+        return { success: false, error: 'Zoho returned an empty response body', status: response.status, kind: 'server_error' };
+      }
+
+      // Success → reset the circuit breaker
+      this.circuitBreaker.onSuccess();
       return { success: true, data: response.data };
     } catch (error) {
       if (timeoutId) clearTimeout(timeoutId);
@@ -841,57 +1288,69 @@ class ZohoBooksService {
       const status = error.response?.status;
       const isAbort = error.name === 'AbortError' || error.code === 'ERR_CANCELED';
       const zohoCode = error.response?.data?.code;
+      const kind = classifyError(status, error.code, isAbort);
 
-      // 401 → token invalid: clear and retry (one extra refresh)
-      if (status === 401 && retryCount < MAX_REQUEST_RETRIES) {
+      // 401 → token invalid: clear and retry (once)
+      if (kind === 'auth' && retryCount < MAX_REQUEST_RETRIES) {
         this.accessToken = null;
         this.tokenExpiry = null;
-        return this._request(method, endpoint, data, organizationId, retryCount + 1);
+        return this._doRequest(method, endpoint, data, organizationId, requestTimeout, retryCount + 1);
       }
 
-      // 429 (rate limit) or transient 5xx / network / timeout → backoff & retry
-      const retryable = status === 429 || (status >= 500 && status < 600) || isAbort
-        || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND';
+      // Retryable: rate limit, server errors, network, timeout
+      const retryable = kind === 'rate_limit' || kind === 'server_error' || kind === 'timeout' || kind === 'network';
       if (retryable && retryCount < MAX_REQUEST_RETRIES) {
-        const base = status === 429 ? 2000 : 1000;
-        const delay = base * Math.pow(2, retryCount) + Math.floor(Math.random() * 300); // jitter
-        logger.warn(`Zoho ${method} ${endpoint} ${status || error.code} — retry ${retryCount + 1}/${MAX_REQUEST_RETRIES} in ${delay}ms`);
+        const base = kind === 'rate_limit' ? 2000 : 1000;
+        const delay = base * Math.pow(2, retryCount) + Math.floor(Math.random() * 300);
+        logger.warn(`Zoho ${method} ${endpoint} (${kind}/${status || error.code}) — retry ${retryCount + 1}/${MAX_REQUEST_RETRIES} in ${delay}ms`);
         await sleep(delay);
-        return this._request(method, endpoint, data, organizationId, retryCount + 1);
+        return this._doRequest(method, endpoint, data, organizationId, requestTimeout, retryCount + 1);
       }
 
-      if (isAbort) return { success: false, error: 'Request timeout', status: 408 };
+      // Exhausted retries (or non-retryable) → notify circuit breaker
+      this.circuitBreaker.onFailure(kind);
+
+      if (kind === 'timeout') return { success: false, error: 'Request timeout — Zoho did not respond in time', status: 408, kind };
       return {
         success: false,
         error: error.response?.data?.message || error.message,
         code: zohoCode,
         details: error.response?.data,
-        status
+        status,
+        kind
       };
     }
   }
 
   async _getCurrencyId(currencyCode, organizationId) {
+    if (!organizationId) {
+      logger.warn(`_getCurrencyId called without organizationId for ${currencyCode}`);
+      return null;
+    }
     try {
-      if (this.currencyCache && this.currencyCacheExpiry && Date.now() < this.currencyCacheExpiry) {
-        return this.currencyCache[currencyCode];
+      const orgId = String(organizationId);
+      const cached = this.currencyCacheByOrg.get(orgId);
+      if (cached && Date.now() < cached.expiry) {
+        return cached.map[currencyCode] || null;
       }
-      const result = await this._request('GET', '/settings/currencies', null, organizationId);
+
+      const result = await this._request('GET', '/settings/currencies', null, orgId);
       if (result.success && result.data?.currencies) {
         const map = {};
         result.data.currencies.forEach(c => { map[c.currency_code] = c.currency_id; });
-        this.currencyCache = map;
-        this.currencyCacheExpiry = Date.now() + 3600000;
-        return map[currencyCode];
+        this.currencyCacheByOrg.set(orgId, { map, expiry: Date.now() + 3600000 });
+        return map[currencyCode] || null;
       }
+      // Non-fatal: log and return null so the caller omits currency_id
+      logger.warn(`Could not fetch currencies for org ${orgId} (${result.kind}): ${result.error}`);
       return null;
     } catch (e) {
-      logger.warn(`Error fetching currency ID for ${currencyCode}: ${e.message}`);
+      logger.warn(`Error fetching currency ID for ${currencyCode} (org ${organizationId}): ${e.message}`);
       return null;
     }
   }
 
-  // ───────────────────── PURE MAPPERS (no shared state) ─────────────────────
+  // ───────────────────── PURE MAPPERS ─────────────────────────────────────
   _mapTaxTreatmentToZoho(t) {
     return ({ vat_registered: 'vat_registered', non_vat_registered: 'vat_not_registered', gcc_vat_registered: 'gcc_vat_registered', gcc_non_vat_registered: 'gcc_vat_not_registered' })[t] || 'vat_not_registered';
   }
@@ -1040,7 +1499,7 @@ class ZohoBooksService {
     return {
       name: (zohoContact.contact_name || 'Unnamed Customer').trim(), email: finalEmail, phone: (phone || '').trim(),
       address: zohoContact.billing_address?.address || '', city: zohoContact.billing_address?.city || '',
-      state: zohoContact.billing_address?.state || '', zipcode: zohoContact.billing_address?.zip || '', // FIX: zipcode
+      state: zohoContact.billing_address?.state || '', zipcode: zohoContact.billing_address?.zip || '',
       companyName: (zohoContact.company_name || '').trim(), website: zohoContact.website || '', notes: zohoContact.notes || '',
       taxTreatment, taxRegistrationNumber: zohoContact.tax_reg_no || zohoContact.vat_reg_no || '',
       placeOfSupply: this._getPlaceOfSupplyFromZoho(zohoContact) || 'Dubai',
@@ -1125,13 +1584,24 @@ class ZohoBooksService {
       if (estimateData.custom_body) payload.custom_body = estimateData.custom_body;
       if (estimateData.custom_subject) payload.custom_subject = estimateData.custom_subject;
 
-      const result = await this._request('POST', '/estimates', this._cleanPayload(payload), organizationId);
-      if (result.success && result.data?.estimate) {
-        const est = result.data.estimate;
+      const cleanedPayload = this._cleanPayload(payload);
+      let estResult = null;
+      for (let attempt = 0; attempt <= MAX_MUTATION_RETRIES; attempt++) {
+        estResult = await this._request('POST', '/estimates', cleanedPayload, organizationId);
+        if (estResult.success) break;
+        if (!MUTATION_RETRY_KINDS.has(estResult.kind) || estResult.kind === 'circuit_open') break;
+        if (attempt < MAX_MUTATION_RETRIES) {
+          const delay = 1500 * Math.pow(2, attempt) + Math.floor(Math.random() * 400);
+          logger.warn(`createEstimate failed (${estResult.kind}) — retry ${attempt + 1}/${MAX_MUTATION_RETRIES} in ${delay}ms`);
+          await sleep(delay);
+        }
+      }
+      if (estResult.success && estResult.data?.estimate) {
+        const est = estResult.data.estimate;
         logger.info('Zoho estimate created successfully', { estimateId: est.estimate_id, estimateNumber: est.estimate_number, customerId: estimateData.customer_id, lineItemsCount: lineItems.length });
         return { success: true, estimateId: est.estimate_id, estimateNumber: est.estimate_number, estimateUrl: est.estimate_url, estimate: est };
       }
-      throw new Error(result.error || 'Invalid response from Zoho');
+      throw new Error(estResult.error || 'Invalid response from Zoho');
     } catch (error) {
       logger.error(`Zoho estimate creation error: ${error.message}`, { error: error.message });
       return { success: false, error: error.message, details: error.response?.data };
@@ -1139,8 +1609,6 @@ class ZohoBooksService {
   }
 
   // ── BACKWARD-COMPAT SHIMS ──
-  // Any legacy call site that did `service.setCompany(...)` then
-  // `service.createContact(...)` still works by delegating to the last scope.
   _legacy() {
     if (!this._legacyClient) throw new Error('Company context not set. Call setCompany() first.');
     return this._legacyClient;
@@ -1148,10 +1616,7 @@ class ZohoBooksService {
   getCompanyContext() { return this._legacy().getCompanyContext(); }
   getContact(id, bypass) { return this._legacy().getContact(id, bypass); }
   getAllContacts(p) { return this._legacy().getAllContacts(p); }
-  getAllCustomersPaginated(companyId, lastSyncDate) {
-    // legacy signature passed companyId explicitly; scope already has it
-    return this._legacy().getAllCustomersPaginated(lastSyncDate);
-  }
+  getAllCustomersPaginated(companyId, lastSyncDate) { return this._legacy().getAllCustomersPaginated(lastSyncDate); }
   createContact(d) { return this._legacy().createContact(d); }
   updateContact(id, d) { return this._legacy().updateContact(id, d); }
   deleteContact(id) { return this._legacy().deleteContact(id); }
@@ -1166,10 +1631,8 @@ class ZohoBooksService {
   createEstimate(d) { return this._legacy().createEstimate(d); }
   syncItemsToDatabase(c, inc) { return this._legacy().syncItemsToDatabase(c, inc); }
   processCustomerRecord(companyId, zc, full) { return this._legacy().processCustomerRecord(companyId, zc, full); }
+  getCircuitBreakerStatus() { return this.circuitBreaker.status; }
 
-  // syncContactsToDatabase: legacy callers passed (company, incremental, jobId,
-  // onProgress, companyIdForCancel-string). We build a fresh scoped client from
-  // the company so this works even without a prior setCompany().
   syncContactsToDatabase(company, incremental = true, syncJobId = null, onProgress = null, cancelArg = null) {
     const client = new ScopedZohoClient(this, company._id, company.zohoOrganizationId);
     return client.syncContactsToDatabase(company, incremental, syncJobId, onProgress, cancelArg);
@@ -1177,5 +1640,5 @@ class ZohoBooksService {
 }
 
 const service = new ZohoBooksService();
-service.customerSyncCancelMap = customerSyncCancelMap; // preserve existing export used by controller
+service.customerSyncCancelMap = customerSyncCancelMap;
 module.exports = service;
