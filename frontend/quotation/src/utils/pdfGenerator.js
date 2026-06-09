@@ -565,11 +565,13 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         <td colspan="2" style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
         <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
       </tr>
+      ${taxPercent > 0 ? `
       <tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
         <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
         <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
       </tr>
+    ` : ''}
       ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
         <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
