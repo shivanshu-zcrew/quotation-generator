@@ -441,7 +441,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const dismissToast = useCallback((id) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
 
   const handleTabChange = useCallback(
-    (key) => {
+    async (key) => {
       let newStatus = null;
       switch (key) {
         case "all": newStatus = null; break;
@@ -453,7 +453,22 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
         default: newStatus = null;
       }
       setFilters((prev) => ({ ...prev, status: newStatus, sortBy: "date", sortDir: "desc" }));
-      refreshCompanyQuotations({ status: newStatus, page: 1, sortBy: "date", sortDir: "desc", search: filters.search });
+      try {
+        const result = await  refreshCompanyQuotations({ status: newStatus, page: 1, sortBy: "date", sortDir: "desc", search: filters.search });
+        if (result?.error) {
+          const is429 = result.status === 429
+            || result.error?.includes?.('429')
+            || result.error?.toLowerCase?.().includes?.('too many');
+          addToast(
+            is429
+              ? '⚠️ Too many requests — please wait a moment before switching tabs.'
+              : result.error,
+            'error'
+          );
+        }
+      } catch (err) {
+        addToast(err?.message || 'Failed to load quotations', 'error');
+      }
     },
     [refreshCompanyQuotations, filters.search]
   );
@@ -475,9 +490,18 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       const val = e.target.value;
       setFilters((prev) => ({ ...prev, search: val }));
       clearTimeout(searchTimer.current);
-      searchTimer.current = setTimeout(() => {
-        refreshCompanyQuotations({ search: val, status: filters.status, page: 1, sortBy: filters.sortBy, sortDir: filters.sortDir });
-      }, DEBOUNCE_MS);
+ searchTimer.current = setTimeout(async () => {
+  try {
+    const result = await refreshCompanyQuotations({ search: val, status: filters.status, page: 1, sortBy: filters.sortBy, sortDir: filters.sortDir });
+    if (result?.error) {
+      const is429 = result.status === 429 || result.error?.includes?.('429')
+        || result.error?.toLowerCase?.().includes?.('too many');
+      if (is429) addToast('⚠️ Too many requests — please wait a moment.', 'error');
+    }
+  } catch (err) {
+    addToast(err?.message || 'Search failed', 'error');
+  }
+}, DEBOUNCE_MS);
     },
     [refreshCompanyQuotations, filters.status, filters.sortBy, filters.sortDir]
   );
@@ -531,7 +555,11 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       setTimeout(() => setRefreshState({ progress: 0, step: "", isRefreshing: false }), 1000);
     } catch (err) {
       setRefreshState({ progress: 0, step: "", isRefreshing: false });
-      addToast(err.message || "Refresh failed", "error");
+      if (err?.response?.status === 429 || err?.message?.includes('429') || err?.message?.includes('Too many requests')) {
+        addToast("⚠️ Too many requests! Please wait a moment before refreshing again.", "error");
+      } else {
+        addToast(err.message || "Refresh failed", "error");
+      }
     } finally {
       clearInterval(progressInterval);
     }

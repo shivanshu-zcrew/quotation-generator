@@ -262,6 +262,11 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response?.status === 429) {
+      console.error('Rate limit hit!', error.response?.data?.message);
+      return Promise.reject(new Error('Too many requests. Please wait a moment.'));
+    }
+    
     if (error.response?.status === 401 && !window.location.pathname.includes("/login")) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");

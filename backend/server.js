@@ -56,7 +56,7 @@ app.options('*', (req, res) => {
 
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 200,
+  max: 600,
   handler: (req, res) => {
     logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
     res.status(429).json({ message: 'Too many requests, please try again later.' });
