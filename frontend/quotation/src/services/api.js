@@ -266,7 +266,7 @@ api.interceptors.response.use(
       console.error('Rate limit hit!', error.response?.data?.message);
       return Promise.reject(new Error('Too many requests. Please wait a moment.'));
     }
-    
+
     if (error.response?.status === 401 && !window.location.pathname.includes("/login")) {
       localStorage.removeItem("token");
       localStorage.removeItem("user");
@@ -286,6 +286,8 @@ export const authAPI = {
   updateUser: (userId, userData) => api.put(`/auth/users/${userId}`, userData),
   updateDetails: (data) => api.put("/auth/updatedetails", data),
   updatePassword: (data) => api.put("/auth/updatepassword", data),
+  getUserById: (id) => api.get(`/auth/users/${id}`), 
+  deleteUser: (id) => api.delete(`/auth/users/${id}`),
   getAllUsers: () => api.get("/auth/users"),
   toggleUserStatus: (id) => api.put(`/auth/users/${id}/toggle-status`),
   changeUserRole: (id, data) => api.put(`/auth/users/${id}/role`, data),

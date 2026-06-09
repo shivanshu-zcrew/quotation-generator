@@ -4,8 +4,8 @@ import { useAppStore } from "../services/store";
 import { useAuth } from "../hooks/customHooks";
 import { PasswordResetModal } from "../components/PasswordResetModel";
 import {
-  Users, Search, X, RefreshCw, AlertCircle, LogOut, Eye,
-  CheckCircle, XCircle, Award, Calendar, Plus, UserPlus,
+  Users, Search, X, RefreshCw, AlertCircle, Trash2, Eye,
+  CheckCircle, XCircle, AlertTriangle, Calendar, Plus, UserPlus,
   Phone, Edit2, Save, UserCheck, UserX, Briefcase, Crown, Menu,
   ChevronLeft, Shield,
 } from "lucide-react";
@@ -237,9 +237,11 @@ const SkeletonRow = () => (
 );
 
 // ─── Mobile User Card ─────────────────────────────────────────────────────
-function UserCard({ user, onEdit, onResetPassword, actionLoading, formatDate }) {
+function UserCard({ user, onEdit, onResetPassword, onDelete, actionLoading, formatDate }) {
   const [expanded, setExpanded] = useState(false);
   const r = ROLE_MAP[user.role];
+  const currentUser = useAuth().user;
+  const isSelf = currentUser?._id === user._id;
 
   return (
     <div
@@ -252,7 +254,7 @@ function UserCard({ user, onEdit, onResetPassword, actionLoading, formatDate }) 
         transition: "box-shadow 0.2s",
       }}
     >
-      {/* Card header */}
+      {/* Card header (same as before) */}
       <div
         onClick={() => setExpanded(!expanded)}
         style={{
@@ -311,7 +313,7 @@ function UserCard({ user, onEdit, onResetPassword, actionLoading, formatDate }) 
         </span>
       </div>
 
-      {/* Expanded details */}
+      {/* Expanded details (same as before, but with Delete button) */}
       {expanded && (
         <div
           style={{
@@ -397,6 +399,30 @@ function UserCard({ user, onEdit, onResetPassword, actionLoading, formatDate }) 
             >
               🔑 Reset Pwd
             </button>
+            {!isSelf && (
+              <button
+                onClick={() => onDelete(user)}
+                disabled={actionLoading}
+                style={{
+                  flex: 0.5,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.35rem",
+                  padding: "0.5rem",
+                  backgroundColor: "#fdeceb",
+                  color: "#c1352b",
+                  border: "1px solid #f8d6d2",
+                  borderRadius: T.radiusSm,
+                  fontSize: "0.78rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: FONT_STACK,
+                }}
+              >
+                <Trash2 size={13} /> Delete
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -913,6 +939,7 @@ export default function UserManagementScreen({ onBack }) {
   const [actionLoading, setActionLoading] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [selectedUserForPassword, setSelectedUserForPassword] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   useEffect(() => { fetchUsers(); }, []);
 
@@ -958,6 +985,34 @@ export default function UserManagementScreen({ onBack }) {
     addToast(message, "success");
   }, [fetchUsers, addToast]);
 
+  const handleDeleteUser = useCallback(async (userId) => {
+    try {
+      setActionLoading(true);
+      await authAPI.deleteUser(userId);
+      await fetchUsers();
+      addToast("User deleted successfully", "success");
+    } catch (error) {
+      addToast("Error deleting user: " + (error.response?.data?.message || error.message), "error");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [fetchUsers, addToast]);
+
+  const openDeleteModal = useCallback((user) => {
+     if (currentUser?._id === user._id) {
+      addToast("You cannot delete your own account", "error");
+      return;
+    }
+    setSelectedUser(user);
+    setShowDeleteModal(true);
+  }, [currentUser, addToast]);
+
+  const handleDeleteSuccess = useCallback(async (message) => {
+    setShowDeleteModal(false);
+    setSelectedUser(null);
+    await fetchUsers();
+    addToast(message, "success");
+  }, [fetchUsers, addToast]);
   const openEditModal = useCallback((user) => { setSelectedUser(user); setShowEditForm(true); }, []);
   const openPasswordResetModal = useCallback((user) => { setSelectedUserForPassword(user); setShowPasswordModal(true); }, []);
 
@@ -1295,6 +1350,7 @@ export default function UserManagementScreen({ onBack }) {
                     key={u._id}
                     user={u}
                     onEdit={openEditModal}
+                    onDelete={openDeleteModal}  
                     onResetPassword={openPasswordResetModal}
                     actionLoading={actionLoading}
                     formatDate={formatDate}
@@ -1403,6 +1459,19 @@ export default function UserManagementScreen({ onBack }) {
                                 title="Reset password"
                                 disabled={actionLoading}
                               />
+                              {currentUser?._id !== u._id && (
+        <ActionBtn
+          bg="#fdeceb"
+          color="#c1352b"
+          border="#f8d6d2"
+          onClick={() => openDeleteModal(u)}
+          icon={Trash2}
+          label="Del"
+          title="Delete user"
+          disabled={actionLoading}
+          danger
+        />
+      )}
                             </div>
                           </td>
                         </tr>
@@ -1457,12 +1526,22 @@ export default function UserManagementScreen({ onBack }) {
           loading={actionLoading}
         />
       )}
+
+{showDeleteModal && selectedUser && (
+        <DeleteUserModal
+          user={selectedUser}
+          onClose={() => { setShowDeleteModal(false); setSelectedUser(null); }}
+          onSuccess={handleDeleteSuccess}
+          loading={actionLoading}
+        />
+      )}
+
     </div>
   );
 }
 
 // ─── Small shared action button ───────────────────────────────────────────
-function ActionBtn({ bg, color, border, onClick, icon: Icon, emoji, label, title, disabled }) {
+function ActionBtn({ bg, color, border, onClick, icon: Icon, emoji, label, title, disabled, danger }) {
   return (
     <button
       onClick={onClick}
@@ -1473,9 +1552,9 @@ function ActionBtn({ bg, color, border, onClick, icon: Icon, emoji, label, title
         alignItems: "center",
         gap: "0.25rem",
         padding: "0.32rem 0.6rem",
-        backgroundColor: bg,
-        color,
-        border: `1px solid ${border || bg}`,
+        backgroundColor: danger ? "#fdeceb" : bg,
+        color: danger ? "#c1352b" : color,
+        border: `1px solid ${danger ? "#f8d6d2" : (border || bg)}`,
         borderRadius: 8,
         fontSize: "0.72rem",
         fontWeight: 600,
@@ -1489,6 +1568,164 @@ function ActionBtn({ bg, color, border, onClick, icon: Icon, emoji, label, title
       {Icon ? <Icon size={12} /> : <span style={{ fontSize: "0.8rem" }}>{emoji}</span>}
       {label}
     </button>
+  );
+}
+
+function DeleteUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleDelete = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      await authAPI.deleteUser(user._id);
+      onSuccess(`User "${user.name}" deleted successfully`);
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to delete user");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const busy = loading || parentLoading;
+  const hasQuotationError = error && (error.includes('quotation') || error.includes('associated'));
+
+  return (
+    <Modal
+      title="Delete User"
+      subtitle="Permanently remove user account"
+      icon="🗑️"
+      onClose={onClose}
+      closeDisabled={busy}
+      footer={
+        <>
+          <CancelBtn onClick={onClose} disabled={busy} />
+          {!hasQuotationError && (
+            <SubmitBtn
+              onClick={handleDelete}
+              disabled={busy}
+              label={busy ? "Deleting User..." : "Delete Permanently"}
+              danger
+            />
+          )}
+        </>
+      }
+    >
+      <ErrorBanner message={error} />
+
+      {hasQuotationError ? (
+        // Show error when user has quotations
+        <div
+          style={{
+            background: "#fef3c7",
+            border: "1px solid #fde68a",
+            borderRadius: "16px",
+            padding: "1.5rem",
+            textAlign: "center",
+          }}
+        >
+          <AlertCircle size={48} color="#d97706" style={{ marginBottom: "1rem" }} />
+          <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#92400e" }}>
+            Cannot Delete User
+          </h3>
+          <p style={{ marginTop: "0.5rem", color: "#78350f", fontSize: "0.85rem" }}>
+            This user is associated with existing quotations.
+          </p>
+        </div>
+      ) : (
+        // Show delete confirmation
+        <div
+          style={{
+            background: "linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(248,113,113,0.12) 100%)",
+            border: "1px solid rgba(239,68,68,0.2)",
+            borderRadius: "18px",
+            padding: "1.5rem",
+            textAlign: "center",
+            marginBottom: "1.25rem",
+          }}
+        >
+          <div
+            style={{
+              width: 80,
+              height: 80,
+              margin: "0 auto 1rem",
+              borderRadius: "50%",
+              background: "#fee2e2",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Trash2 size={38} color="#dc2626" />
+          </div>
+
+          <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "#991b1b" }}>
+            Delete User Account
+          </h3>
+
+          <p style={{ marginTop: "0.5rem", color: "#7f1d1d", fontSize: "0.85rem" }}>
+            This action cannot be undone.
+          </p>
+        </div>
+      )}
+
+      {/* User Details */}
+      <div
+        style={{
+          border: `1px solid ${T.lineSoft}`,
+          borderRadius: "16px",
+          padding: "1rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "1rem",
+          background: "#fff",
+        }}
+      >
+        <div
+          style={{
+            width: 60,
+            height: 60,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "1.25rem",
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          {user?.name?.charAt(0)?.toUpperCase() || "U"}
+        </div>
+
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "1rem", fontWeight: 700, color: T.ink, marginBottom: "0.25rem" }}>
+            {user.name}
+          </div>
+          <div style={{ fontSize: "0.85rem", color: T.inkSoft, marginBottom: "0.5rem" }}>
+            {user.email}
+          </div>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "5px 12px",
+              borderRadius: "999px",
+              background: "#eef2ff",
+              color: "#4338ca",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              textTransform: "capitalize",
+            }}
+          >
+            {user.role}
+          </span>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

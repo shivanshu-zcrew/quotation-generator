@@ -213,6 +213,27 @@ export const useAppStore = create(
           }
         },
 
+        handleDeleteUser: async (userId) => {
+          set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteUser_${userId}`]: true } }));
+          try {
+            const response = await authAPI.deleteUser(userId);
+            
+            if (response.data?.success) {
+               set(s => ({ 
+                users: s.users?.filter(u => u._id !== userId) || [],
+                lastError: null 
+              }));
+              return { success: true, message: response.data.message || 'User deleted successfully' };
+            }
+            throw new Error(response.data?.message || 'Failed to delete user');
+          } catch (error) {
+            set({ lastError: AppError.from(error) });
+            return { success: false, error: getErrorMessage(error) };
+          } finally {
+            set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteUser_${userId}`]: false } }));
+          }
+        },
+
         handleLogout: () => {
           clearCompanyContext();
           clearAuthData();

@@ -1,6 +1,7 @@
 const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
+const { Quotation } = require('../models/quotation');
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -394,6 +395,50 @@ exports.deleteUser = async (req, res) => {
       return res.status(400).json({ message: 'You cannot delete your own account' });
     }
 
+ 
+    // Check as creator
+    const quotationsAsCreator = await Quotation.countDocuments({ 
+      createdBy: user._id 
+    });
+    
+    // Check as approver
+    const quotationsAsApprover = await Quotation.countDocuments({ 
+      approvedBy: user._id 
+    });
+    
+    // Check as ops approver
+    const quotationsAsOpsApprover = await Quotation.countDocuments({ 
+      opsApprovedBy: user._id 
+    });
+    
+    // Check as awarder
+    const quotationsAsAwarder = await Quotation.countDocuments({ 
+      awardedBy: user._id 
+    });
+
+    // Check in company snapshot (if user was a company contact)
+    const quotationsAsCompanyContact = await Quotation.countDocuments({
+      'companySnapshot.focalPointId': user._id
+    });
+
+    const totalQuotations = quotationsAsCreator + quotationsAsApprover + 
+                           quotationsAsOpsApprover + quotationsAsAwarder + 
+                           quotationsAsCompanyContact;
+
+    if (totalQuotations > 0) {
+      return res.status(400).json({ 
+        message: `Cannot delete user. User is associated with ${totalQuotations} quotation(s).`,
+        details: {
+          asCreator: quotationsAsCreator,
+          asApprover: quotationsAsApprover,
+          asOpsApprover: quotationsAsOpsApprover,
+          asAwarder: quotationsAsAwarder,
+          asCompanyContact: quotationsAsCompanyContact,
+          total: totalQuotations
+        }
+      });
+    }
+
     await user.deleteOne();
     
     logger.warn(`User deleted by admin: ${user.email}`, {
@@ -403,7 +448,10 @@ exports.deleteUser = async (req, res) => {
       userRole: user.role
     });
 
-    res.json({ message: 'User deleted successfully' });
+    res.json({ 
+      message: 'User deleted successfully',
+      userId: user._id
+    });
   } catch (error) {
     logger.error(`User deletion failed`, {
       error: error.message,
