@@ -518,6 +518,7 @@ export const useAppStore = create(
                 set(s => ({ quotations: [newQuotation, ...s.quotations], lastError: null }));
               }
               await get().refetchQuotations();
+              await get().refreshDashboardStats();
               return { success: true, quotation: newQuotation, message: response.data.message };
             }
             throw new Error(response?.data?.message || 'Failed to create quotation');
@@ -541,6 +542,7 @@ export const useAppStore = create(
                 quotationsVersion: state.quotationsVersion + 1,
               }));
               await get().refetchQuotations();
+              await get().refreshDashboardStats();
               return { success: true, quotation: updatedQuotation };
             }
             throw new Error(result?.data?.message || 'Failed to update quotation');
@@ -558,6 +560,7 @@ export const useAppStore = create(
             const result = await quotationAPI.delete(id);
             if (result?.status === 200 || result?.data?.success) {
               await get().refetchQuotations();
+              await get().refreshDashboardStats();
               return { success: true };
             }
             throw new Error(result?.data?.message || 'Failed to delete quotation');
@@ -600,6 +603,7 @@ export const useAppStore = create(
               const updatedQuotation = res.data.quotation;
               set(s => ({ quotations: s.quotations.map(q => q._id === id ? updatedQuotation : q), lastError: null }));
               await get().refetchQuotations({ forceRefresh: true });
+              await get().refreshDashboardStats();
               return { success: true, quotation: updatedQuotation };
             }
             throw new Error(res?.data?.message || 'Failed to approve quotation');
@@ -1869,13 +1873,11 @@ export const useCompanyQuotations = () => {
   const updateFilters = useCallback((newFilters) => {
     setLocalFilters(prev => ({ ...prev, ...newFilters }));
     setPage(1);
-    // Update store filters if needed
     if (setQuotationsFilters) {
       setQuotationsFilters(newFilters);
     }
   }, [setQuotationsFilters]);
 
-  // FIX #5: reset now actually clears filters back to defaults
   const resetPagination = useCallback(() => {
     setPage(1);
     setLocalFilters({});
@@ -1914,9 +1916,6 @@ export const useCompanyQuotations = () => {
   };
 };
 
-// FIX #6: select store actions individually (stable refs) instead of destructuring
-// the whole store object, which returned new references every render and caused the
-// hook to re-run/re-render on unrelated store changes.
 export const useDocuments = (quotationId) => {
   const currentDocuments = useAppStore(s => s.currentDocuments);
   const documentLoading = useAppStore(s => s.documentLoading);

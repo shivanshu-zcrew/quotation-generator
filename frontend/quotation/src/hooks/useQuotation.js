@@ -315,15 +315,15 @@ export function useQuotation() {
   }, [showSnack, internalDocuments.length, newDocuments.length]);
 
   const handleDocumentDelete = useCallback(async (docId) => {
-    const isTemp = newDocuments.some(d => d.id === docId);
+    const isTemp = newDocuments.some(d => d.id === docId || d._id === docId);
 
     if (isTemp) {
-      setNewDocuments(prev => prev.filter(d => d.id !== docId));
+      setNewDocuments(prev => prev.filter(d => d.id !== docId && d._id !== docId));
       showSnack('Document removed', 'success');
     } else {
       try {
         await quotationAPI.documents.delete(id, docId);
-        setInternalDocuments(prev => prev.filter(d => d._id !== docId));
+        setInternalDocuments(prev => prev.filter(d => d._id !== docId && d.id !== docId));
         showSnack('Document deleted', 'success');
       } catch (error) {
         console.error('Error deleting document:', error);

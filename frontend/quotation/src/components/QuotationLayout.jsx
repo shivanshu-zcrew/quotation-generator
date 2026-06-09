@@ -779,8 +779,10 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
         <div style={styles.loadingText}>Loading documents...</div>
       ) : documents.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          {documents.map((doc) => (
-            <div key={doc._id} style={styles.documentCard}>
+          {documents.map((doc) => {
+             const docId = doc._id || doc.id;
+            return (
+              <div key={docId} style={styles.documentCard}>
               <span style={{ fontSize: '1.2rem' }}>{getFileIcon?.(doc.fileType) || '📎'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -792,14 +794,15 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {doc.fileType?.startsWith('image/') ? (
-                  <button onClick={() => onPreview?.(doc._id)} style={styles.previewBtn}>👁️</button>
+                  <button onClick={() => onPreview?.(docId)} style={styles.previewBtn}>👁️</button>
                 ) : (
-                  <button onClick={() => onDownload?.(doc._id)} style={styles.downloadBtn}><Download size={14} /></button>
+                  <button onClick={() => onDownload?.(docId)} style={styles.downloadBtn}><Download size={14} /></button>
                 )}
-                {isEditing && <button onClick={() => onDelete?.(doc._id)} style={styles.deleteBtn}><Trash2 size={14} /></button>}
+                {isEditing && <button onClick={() => onDelete?.(docId)} style={styles.deleteBtn}><Trash2 size={14} /></button>}
               </div>
             </div>
-          ))}
+            )
+})}
         </div>
       ) : (
         <div style={styles.emptyDocuments}>
