@@ -793,13 +793,17 @@ function DocumentUploadSection({ documents = [], onUpload, onDelete, onDownload,
                 <div style={styles.documentDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {doc.fileType?.startsWith('image/') ? (
-                  <button onClick={() => onPreview?.(docId)} style={styles.previewBtn}>👁️</button>
-                ) : (
-                  <button onClick={() => onDownload?.(docId)} style={styles.downloadBtn}><Download size={14} /></button>
-                )}
-                {isEditing && <button onClick={() => onDelete?.(docId)} style={styles.deleteBtn}><Trash2 size={14} /></button>}
-              </div>
+  {!isEditing && (
+    <>
+      {doc.fileType?.startsWith('image/') ? (
+        <button onClick={() => onPreview?.(docId)} style={styles.previewBtn}>👁️</button>
+      ) : (
+        <button onClick={() => onDownload?.(docId)} style={styles.downloadBtn}><Download size={14} /></button>
+      )}
+    </>
+  )}
+  {isEditing && <button onClick={() => onDelete?.(docId)} style={styles.deleteBtn}><Trash2 size={14} /></button>}
+</div>
             </div>
             )
 })}

@@ -554,21 +554,25 @@ const MobileDocumentSection = ({ documents = [], onUpload, onDelete, onDownload,
                     <div style={styles.docDate}>Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}</div>
                   </div>
                   <div style={styles.docActions}>
-                    {isImage ? (
-                      <button onClick={() => handlePreview(docId)} style={styles.previewBtn} title="Preview">
-                        <Eye size={14} />
-                      </button>
-                    ) : (
-                      <button onClick={() => onDownload(docId)} style={styles.downloadBtn} title="Download">
-                        <Download size={14} />
-                      </button>
-                    )}
-                    {isEditing && (
-                      <button onClick={() => onDelete(docId)} style={styles.deleteBtn} title="Delete">
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
+  {!isEditing && (
+    <>
+      {isImage ? (
+        <button onClick={() => handlePreview(docId)} style={styles.previewBtn} title="Preview">
+          <Eye size={14} />
+        </button>
+      ) : (
+        <button onClick={() => onDownload(docId)} style={styles.downloadBtn} title="Download">
+          <Download size={14} />
+        </button>
+      )}
+    </>
+  )}
+  {isEditing && (
+    <button onClick={() => onDelete(docId)} style={styles.deleteBtn} title="Delete">
+      <Trash2 size={14} />
+    </button>
+  )}
+</div>
                 </div>
               );
             })
