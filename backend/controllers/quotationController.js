@@ -685,7 +685,7 @@ exports.getQuotation = async (req, res) => {
 exports.createQuotation = async (req, res) => {
   const {
     projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
-    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, trn,
+    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, customerTaxRegistrationNumber,
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions,  quotationNumber, 
@@ -896,7 +896,7 @@ exports.createQuotation = async (req, res) => {
     ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '',
     salesManagerEmail: salesManagerEmail?.trim() || '',
     paymentTerms: paymentTerms?.trim() || '', deliveryTerms: deliveryTerms?.trim() || '',
-    tl: tl?.trim() || '', trn: trn?.trim() || '',
+    tl: tl?.trim() || '',trn: customerTaxRegistrationNumber?.trim() || trn?.trim() || '',
     items: processedItems,
     taxPercent: tax, discountPercent: discount,
     ...totals,
@@ -929,7 +929,7 @@ exports.updateQuotation = async (req, res) => {
   const {
     projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, trn,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, customerTaxRegistrationNumber,
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
     existingTermsImages  
@@ -1229,7 +1229,7 @@ exports.updateQuotation = async (req, res) => {
       ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }), ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
       ...(salesManagerEmail !== undefined && { salesManagerEmail: salesManagerEmail?.trim() || '' }),
       ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }), ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
-      ...(tl !== undefined && { tl: tl?.trim() || '' }), ...(trn !== undefined && { trn: trn?.trim() || '' }),
+      ...(tl !== undefined && { tl: tl?.trim() || '' }), ...(customerTaxRegistrationNumber !== undefined && { trn: customerTaxRegistrationNumber?.trim() || '' }),
       ...(remark !== undefined && { remark: remark?.trim() || '' }),
       items: processedItems, 
       taxPercent: tax, 
