@@ -775,10 +775,7 @@ exports.createQuotation = async (req, res) => {
         }
       }
     }
-
-    // Accept S3 keys the browser already uploaded directly via presigned PUT.
-    // This is the ONLY source for browser-uploaded images — without it they're dropped.
-    // Mirrors the same block updateQuotation already has.
+ 
     if (item.imageS3Keys && Array.isArray(item.imageS3Keys)) {
       for (const key of item.imageS3Keys) {
         if (key && !imageKeys.includes(key)) imageKeys.push(key);
@@ -884,7 +881,7 @@ exports.createQuotation = async (req, res) => {
     },
     customerId,
     customerSnapshot: {
-      name: customerName?.trim() || customerDoc.name, email: customerDoc.email, phone: customerDoc.phone,
+      name: customerName?.trim() || customerDoc.name,  email: req.body.customerEmail?.trim() || customerDoc.email, phone: customerDoc.phone,
       address: customerDoc.address, country: customerCountry || 'UAE', vatNumber: customerDoc.vatNumber,
       designation: customerDesignation?.trim() || '', tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
       taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
@@ -1217,9 +1214,8 @@ exports.updateQuotation = async (req, res) => {
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
       ...(customer && { customer: customer.trim() }),
-      ...(customerName && { 
-        customerName: customerName.trim(),
-        'customerSnapshot.name': customerName.trim() 
+      ...(req.body.customerEmail !== undefined && { 
+        'customerSnapshot.email': req.body.customerEmail?.trim() || '' 
       }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),

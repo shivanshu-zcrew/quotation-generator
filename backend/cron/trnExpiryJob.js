@@ -147,7 +147,7 @@ async function runTrnExpiryDeactivation() {
 
 let scheduledTask = null;
 
-function start(cronExpression = '35 16 * * *') {
+function start(cronExpression = '0 2 * * *') {
   if (scheduledTask) {
     logger.warn('TRN expiry job: scheduler already started');
     return scheduledTask;
