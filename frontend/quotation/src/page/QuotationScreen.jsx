@@ -680,7 +680,7 @@ const SummaryCard = ({ grandTotal, exchangeRates, selectedCurrency }) => {
           fontSize: "clamp(0.563rem, 3vw, 0.65rem)", 
           opacity: 0.5 
         }}>
-          ≈ AED {(grandTotal * (exchangeRates.rates?.["AED"] || 1)).toFixed(2)}
+          {/* ≈ AED {(grandTotal * (exchangeRates.rates?.["AED"] || 1)).toFixed(2)} */}
         </p>
       )}
     </div>

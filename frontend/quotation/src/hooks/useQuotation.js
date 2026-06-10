@@ -159,7 +159,7 @@ export function useQuotation() {
       customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
       customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
-      customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || originalQuotation.trn || "",
+      customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || "",
       ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
       ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
       ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
@@ -172,13 +172,12 @@ export function useQuotation() {
       ourRef: originalQuotation.ourRef || "",
       paymentTerms: originalQuotation.paymentTerms || "",
       deliveryTerms: originalQuotation.deliveryTerms || "",
+      // ✅ COMPANY'S TL AND TRN
       tl: originalQuotation.tl || "",
-      trn: originalQuotation.trn || originalQuotation.customerSnapshot?.vatNumber || "",
+      trn: originalQuotation.trn || "",
       tax: originalQuotation.taxPercent || 0,
       discount: originalQuotation.discountPercent || 0,
       notes: originalQuotation.notes || "",
-      // Preserve the currency the quotation was saved in, so the view page
-      // formats totals in that currency (e.g. USD) instead of defaulting to AED.
       currency: originalQuotation.currency || { code: 'AED', symbol: 'د.إ' },
     });
 
@@ -721,15 +720,30 @@ export function useQuotation() {
       remark: originalQuotation.remark || "",
       customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
       customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
-      customerPhone: originalQuotation.customerPhone || originalQuotation.contact || "",
-      customerEmail: originalQuotation.customerEmail || "",
+      customerPhone: originalQuotation.customerPhone || originalQuotation.contact || originalQuotation.customerSnapshot?.phone || "",
+      customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
       customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
       customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || "",
-      ourFocalPoint: originalQuotation.ourFocalPoint || "",
-      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || "",
+      ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
+      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
+      ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
+      salesManagerEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
+      companyPhone: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
+      companyEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
       date: originalQuotation.date ? new Date(originalQuotation.date).toISOString().split('T')[0] : "",
       expiryDate: originalQuotation.expiryDate ? new Date(originalQuotation.expiryDate).toISOString().split('T')[0] : "",
+      queryDate: originalQuotation.queryDate ? new Date(originalQuotation.queryDate).toISOString().split('T')[0] : "",
+      ourRef: originalQuotation.ourRef || "",
+      paymentTerms: originalQuotation.paymentTerms || "",
+      deliveryTerms: originalQuotation.deliveryTerms || "",
+      // ✅ COMPANY'S TL AND TRN
+      tl: originalQuotation.tl || "",
+      trn: originalQuotation.trn || "",
+      tax: originalQuotation.taxPercent || 0,
+      discount: originalQuotation.discountPercent || 0,
+      notes: originalQuotation.notes || "",
+      currency: originalQuotation.currency || { code: 'AED', symbol: 'د.إ' },
     });
 
     const parsedItems = parseQuotationItems(originalQuotation.items);
@@ -830,218 +844,225 @@ export function useQuotation() {
     return true;
   }, [quotationItems, quotationData, showSnack]);
 
-  const handleSave = useCallback(async () => {
-    if (!validateBeforeSave()) return;
+// In the handleSave function, update the payload section (around lines 430-470)
 
-    // Block save while any image is still uploading.
-    if (Object.keys(uploadingImages).length > 0) {
-      showSnack("Please wait — images are still uploading.", 'error');
-      return;
+const handleSave = useCallback(async () => {
+  if (!validateBeforeSave()) return;
+
+  // Block save while any image is still uploading.
+  if (Object.keys(uploadingImages).length > 0) {
+    showSnack("Please wait — images are still uploading.", 'error');
+    return;
+  }
+
+  setIsSaving(true);
+  try {
+    const documentData = [
+      ...internalDocuments.map(doc => ({
+        fileName: doc.fileName,
+        fileType: doc.fileType,
+        fileSize: doc.fileSize,
+        fileUrl: doc.fileUrl,
+        publicId: doc.publicId,
+        s3Key: doc.s3Key,
+        description: doc.description || '',
+      })),
+      ...newDocuments.map(doc => ({
+        fileName: doc.fileName,
+        fileType: doc.fileType,
+        fileSize: doc.fileSize,
+        fileData: doc.fileData,
+        description: doc.description || '',
+      }))
+    ];
+
+    const taxValue = parseFloat(quotationData.tax) || 0;
+    const discountValue = parseFloat(quotationData.discount) || 0;
+
+    let finalTermsAndConditions = "";
+    if (tcSections && tcSections.length > 0) {
+      finalTermsAndConditions = tcSections
+        .map(sec => {
+          let text = "";
+          if (sec.heading?.trim()) text += sec.heading + "\n\n";
+          if (sec.content?.trim()) text += sec.content;
+          return text.trim();
+        })
+        .filter(Boolean)
+        .join("\n\n");
     }
 
-    setIsSaving(true);
-    try {
-      const documentData = [
-        ...internalDocuments.map(doc => ({
-          fileName: doc.fileName,
-          fileType: doc.fileType,
-          fileSize: doc.fileSize,
-          fileUrl: doc.fileUrl,
-          publicId: doc.publicId,
-          s3Key: doc.s3Key,
-          description: doc.description || '',
-        })),
-        ...newDocuments.map(doc => ({
-          fileName: doc.fileName,
-          fileType: doc.fileType,
-          fileSize: doc.fileSize,
-          fileData: doc.fileData,
-          description: doc.description || '',
-        }))
-      ];
+    // Images are uploaded directly to S3 now — send keys only. Legacy
+    // imagePaths (old Cloudinary) are preserved if present.
+    const formattedItems = quotationItems.map((qi) => ({
+      itemId: qi.itemId || null,
+      name: qi.name || "",
+      description: qi.description || "",
+      quantity: Number(qi.quantity) || 1,
+      unitPrice: Number(qi.unitPrice) || 0,
+      imageS3Keys: qi.imageS3Keys || [],
+      imagePaths: qi.imagePaths || []
+    }));
 
-      const taxValue = parseFloat(quotationData.tax) || 0;
-      const discountValue = parseFloat(quotationData.discount) || 0;
-
-      let finalTermsAndConditions = "";
-      if (tcSections && tcSections.length > 0) {
-        finalTermsAndConditions = tcSections
-          .map(sec => {
-            let text = "";
-            if (sec.heading?.trim()) text += sec.heading + "\n\n";
-            if (sec.content?.trim()) text += sec.content;
-            return text.trim();
-          })
-          .filter(Boolean)
-          .join("\n\n");
-      }
-
-      // Images are uploaded directly to S3 now — send keys only. Legacy
-      // imagePaths (old Cloudinary) are preserved if present.
-      const formattedItems = quotationItems.map((qi) => ({
-        itemId: qi.itemId || null,
-        name: qi.name || "",
-        description: qi.description || "",
-        quantity: Number(qi.quantity) || 1,
-        unitPrice: Number(qi.unitPrice) || 0,
-        imageS3Keys: qi.imageS3Keys || [],
-        imagePaths: qi.imagePaths || []
+    // Terms images: existing S3 keys vs new base64 (terms upload still base64)
+    const existingTermsImages = termsImages
+      .filter(img => img.s3Key && !img.url?.startsWith('data:'))
+      .map(img => ({
+        s3Key: img.s3Key,
+        fileName: img.fileName,
+        uploadedAt: img.uploadedAt,
+        id: img.id,
+        _id: img.id
       }));
 
-      // Terms images: existing S3 keys vs new base64 (terms upload still base64)
-      const existingTermsImages = termsImages
-        .filter(img => img.s3Key && !img.url?.startsWith('data:'))
-        .map(img => ({
-          s3Key: img.s3Key,
-          fileName: img.fileName,
-          uploadedAt: img.uploadedAt,
-          id: img.id,
-          _id: img.id
-        }));
+    const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
 
-      const newBase64Images = termsImages.filter(img => img.url && img.url.startsWith('data:'));
+     const payload = {
+      customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
 
-      const payload = {
-        customerId: originalQuotation.customerId?._id || originalQuotation.customerId,
+      projectName: quotationData.projectName?.trim(),
+      scopeOfWork: quotationData.scopeOfWork?.trim() || "",
+      remark: quotationData.remark?.trim() || "",
+      
+      // Customer fields (left side)
+      customer: quotationData.customer?.trim(),
+      customerName: quotationData.customerName?.trim() || "",
+      customerPhone: quotationData.customerPhone?.trim() || "",
+      customerEmail: quotationData.customerEmail?.trim() || "",
+      customerDesignation: quotationData.customerDesignation?.trim() || "",
+      customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber?.trim() || "",
+      customerTaxRegistrationNumber: quotationData.customerTaxRegistrationNumber?.trim() || "",
 
-        projectName: quotationData.projectName?.trim(),
-        scopeOfWork: quotationData.scopeOfWork?.trim() || "",
-        remark: quotationData.remark?.trim() || "",
-        customer: quotationData.customer?.trim(),
-        customerName: quotationData.customerName?.trim() || "",
-        customerPhone: quotationData.customerPhone?.trim() || "",
-        customerEmail: quotationData.customerEmail?.trim() || "",
-        customerDesignation: quotationData.customerDesignation?.trim() || "",
-        customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber?.trim() || "",
-        customerTaxRegistrationNumber: quotationData.customerTaxRegistrationNumber?.trim() || "",
+      contact: quotationData.customerPhone?.trim() || quotationData.contact?.trim() || "",
 
-        contact: quotationData.customerPhone?.trim() || quotationData.contact?.trim() || "",
+      // Company/Our fields (right side)
+      ourFocalPoint: quotationData.ourFocalPoint?.trim() || "",
+      ourFocalPointDesignation: quotationData.ourFocalPointDesignation?.trim() || "",
+      ourContact: quotationData.ourContact?.trim() || "",
+      salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",
 
-        ourFocalPoint: quotationData.ourFocalPoint?.trim() || "",
-        ourFocalPointDesignation: quotationData.ourFocalPointDesignation?.trim() || "",
-        ourContact: quotationData.ourContact?.trim() || "",
-        salesManagerEmail: quotationData.salesManagerEmail?.trim() || "",
+      date: quotationData.date,
+      expiryDate: quotationData.expiryDate,
+      queryDate: quotationData.queryDate || null,
 
-        date: quotationData.date,
-        expiryDate: quotationData.expiryDate,
-        queryDate: quotationData.queryDate || null,
+      ourRef: quotationData.ourRef?.trim() || "",
+      paymentTerms: quotationData.paymentTerms?.trim() || "",
+      deliveryTerms: quotationData.deliveryTerms?.trim() || "",
+      
+      // ✅ COMPANY'S TL AND TRN (from selected company)
+      tl: quotationData.tl?.trim() || "",
+      trn: quotationData.trn?.trim() || "",
+      
+      taxPercent: taxValue,
+      discountPercent: discountValue,
+      notes: quotationData.notes?.trim() || "",
 
-        ourRef: quotationData.ourRef?.trim() || "",
-        paymentTerms: quotationData.paymentTerms?.trim() || "",
-        deliveryTerms: quotationData.deliveryTerms?.trim() || "",
-        tl: quotationData.tl?.trim() || "",
-        trn: quotationData.trn?.trim() || "",
-        taxPercent: taxValue,
-        discountPercent: discountValue,
-        notes: quotationData.notes?.trim() || "",
+      termsAndConditions: finalTermsAndConditions,
+      termsImages: newBase64Images,
+      existingTermsImages: existingTermsImages,
 
-        termsAndConditions: finalTermsAndConditions,
-        termsImages: newBase64Images,
-        existingTermsImages: existingTermsImages,
+      items: formattedItems,
+      internalDocuments: documentData
+        .filter(doc => doc.fileData)
+        .map(doc => doc.fileData),
+      internalDocDescriptions: documentData
+        .filter(doc => doc.fileData)
+        .map(doc => doc.description || '')
+    };
 
-        items: formattedItems,
-        internalDocuments: documentData
-          .filter(doc => doc.fileData)
-          .map(doc => doc.fileData),
-        internalDocDescriptions: documentData
-          .filter(doc => doc.fileData)
-          .map(doc => doc.description || '')
-      };
+    const result = await updateQuotation(originalQuotation._id, payload);
 
-      const result = await updateQuotation(originalQuotation._id, payload);
+    if (result?.success) {
+      const updatedQuotation = result.quotation;
 
-      if (result?.success) {
-        const updatedQuotation = result.quotation;
+      if (updatedQuotation) {
+        setFetchedQ(updatedQuotation);
 
-        if (updatedQuotation) {
-          setFetchedQ(updatedQuotation);
+        setQuotationData({
+          projectName: updatedQuotation.projectName || "",
+          scopeOfWork: updatedQuotation.scopeOfWork || "",
+          remark: updatedQuotation.remark || "",
+          customer: updatedQuotation.companySnapshot?.name || updatedQuotation.customer || "",
+          customerName: updatedQuotation.customerName || updatedQuotation.customerId?.name || "",
+          customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
+          customerEmail: updatedQuotation.customerEmail || updatedQuotation.customerSnapshot?.email || "",
+          customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
+          customerTradeLicenseNumber: updatedQuotation.customerTradeLicenseNumber || updatedQuotation.customerSnapshot?.tradeLicenseNumber || "",
+          customerTaxRegistrationNumber: updatedQuotation.customerTaxRegistrationNumber || updatedQuotation.customerSnapshot?.vatNumber || "",
+          ourFocalPoint: updatedQuotation.ourFocalPoint || updatedQuotation.createdBySnapshot?.name || "",
+          ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBySnapshot?.role || "",
+          ourContact: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
+          salesManagerEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
+          companyPhone: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
+          companyEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
+          date: updatedQuotation.date ? new Date(updatedQuotation.date).toISOString().split('T')[0] : "",
+          expiryDate: updatedQuotation.expiryDate ? new Date(updatedQuotation.expiryDate).toISOString().split('T')[0] : "",
+          queryDate: updatedQuotation.queryDate ? new Date(updatedQuotation.queryDate).toISOString().split('T')[0] : "",
+          ourRef: updatedQuotation.ourRef || "",
+          paymentTerms: updatedQuotation.paymentTerms || "",
+          deliveryTerms: updatedQuotation.deliveryTerms || "",
+          // ✅ Update company TL and TRN from response
+          tl: updatedQuotation.tl || "",
+          trn: updatedQuotation.trn || "",
+          tax: updatedQuotation.taxPercent || 0,
+          discount: updatedQuotation.discountPercent || 0,
+          notes: updatedQuotation.notes || "",
+          currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
+        });
 
-          setQuotationData({
-            projectName: updatedQuotation.projectName || "",
-            scopeOfWork: updatedQuotation.scopeOfWork || "",
-            remark: updatedQuotation.remark || "",
-            customer: updatedQuotation.companySnapshot?.name || updatedQuotation.customer || "",
-            customerName: updatedQuotation.customerName || updatedQuotation.customerId?.name || "",
-            customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
-            customerEmail: updatedQuotation.customerEmail || updatedQuotation.customerSnapshot?.email || "",
-            customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
-            customerTradeLicenseNumber: updatedQuotation.customerTradeLicenseNumber || updatedQuotation.customerSnapshot?.tradeLicenseNumber || "",
-            customerTaxRegistrationNumber: updatedQuotation.customerTaxRegistrationNumber || updatedQuotation.customerSnapshot?.vatNumber || updatedQuotation.trn || "",
-            ourFocalPoint: updatedQuotation.ourFocalPoint || updatedQuotation.createdBySnapshot?.name || "",
-            ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBySnapshot?.role || "",
-            ourContact: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
-            salesManagerEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
-            companyPhone: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
-            companyEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
-            date: updatedQuotation.date ? new Date(updatedQuotation.date).toISOString().split('T')[0] : "",
-            expiryDate: updatedQuotation.expiryDate ? new Date(updatedQuotation.expiryDate).toISOString().split('T')[0] : "",
-            queryDate: updatedQuotation.queryDate ? new Date(updatedQuotation.queryDate).toISOString().split('T')[0] : "",
-            ourRef: updatedQuotation.ourRef || "",
-            paymentTerms: updatedQuotation.paymentTerms || "",
-            deliveryTerms: updatedQuotation.deliveryTerms || "",
-            tl: updatedQuotation.tl || "",
-            trn: updatedQuotation.trn || "",
-            tax: updatedQuotation.taxPercent || 0,
-            discount: updatedQuotation.discountPercent || 0,
-            notes: updatedQuotation.notes || "",
-            currency: updatedQuotation.currency || { code: 'AED', symbol: 'د.إ' },
-          });
-
-          // Re-resolve signed URLs for the saved items AND terms images so they
-          // display immediately (without a reload). Both contribute their S3 keys
-          // to a single batch.
-          const updatedItems = parseQuotationItems(updatedQuotation.items);
-          const serverTermsImages = updatedQuotation.termsImages || [];
-          const allKeys = [];
-          updatedItems.forEach(it => (it.imageS3Keys || []).forEach(k => { if (k) allKeys.push(k); }));
-          serverTermsImages.forEach(img => { if (img.s3Key) allKeys.push(img.s3Key); });
-          let freshUrls = signedUrls;
-          if (allKeys.length > 0) {
-            const fetched = await convertBatchS3KeysToUrls(allKeys);
-            freshUrls = { ...signedUrls, ...fetched };
-            setSignedUrls(freshUrls);
-          }
-          const itemsWithUrls = updatedItems.map(item => ({
-            ...item,
-            imageUrls: (item.imageS3Keys || []).map(k => freshUrls[k]).filter(Boolean),
-            imagePaths: item.imagePaths || [],
-          }));
-          setQuotationItems(itemsWithUrls);
-
-          setTermsImages(serverTermsImages.map(img => ({
-            id: img._id || `img-${Date.now()}`,
-            url: img.s3Key ? freshUrls[img.s3Key] : img.url,
-            s3Key: img.s3Key,
-            publicId: img.publicId,
-            fileName: img.fileName,
-            isTemp: false,
-            uploadedAt: img.uploadedAt,
-            storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
-          })));
-
-          const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
-          setTcSections(sections.length ? sections : [newSection()]);
-
-          setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
+        // Re-resolve signed URLs for the saved items AND terms images
+        const updatedItems = parseQuotationItems(updatedQuotation.items);
+        const serverTermsImages = updatedQuotation.termsImages || [];
+        const allKeys = [];
+        updatedItems.forEach(it => (it.imageS3Keys || []).forEach(k => { if (k) allKeys.push(k); }));
+        serverTermsImages.forEach(img => { if (img.s3Key) allKeys.push(img.s3Key); });
+        let freshUrls = signedUrls;
+        if (allKeys.length > 0) {
+          const fetched = await convertBatchS3KeysToUrls(allKeys);
+          freshUrls = { ...signedUrls, ...fetched };
+          setSignedUrls(freshUrls);
         }
+        const itemsWithUrls = updatedItems.map(item => ({
+          ...item,
+          imageUrls: (item.imageS3Keys || []).map(k => freshUrls[k]).filter(Boolean),
+          imagePaths: item.imagePaths || [],
+        }));
+        setQuotationItems(itemsWithUrls);
 
-        showSnack("Quotation updated successfully!", 'success');
-        setIsEditing(false);
-        setEditingImgId(null);
-        setNewImages({});
-        setNewDocuments([]);
-        setFieldErrors({});
-      } else {
-        showSnack(result?.error || "Failed to update quotation", 'error');
+        setTermsImages(serverTermsImages.map(img => ({
+          id: img._id || `img-${Date.now()}`,
+          url: img.s3Key ? freshUrls[img.s3Key] : img.url,
+          s3Key: img.s3Key,
+          publicId: img.publicId,
+          fileName: img.fileName,
+          isTemp: false,
+          uploadedAt: img.uploadedAt,
+          storageProvider: img.storageProvider || (img.s3Key ? 's3' : 'cloudinary')
+        })));
+
+        const sections = htmlToSections(updatedQuotation.termsAndConditions, serverTermsImages);
+        setTcSections(sections.length ? sections : [newSection()]);
+
+        setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
       }
-    } catch (err) {
-      console.error("Save error:", err);
-      showSnack("Error saving quotation: " + (err.message || "Unknown error"), 'error');
-    } finally {
-      setIsSaving(false);
+
+      showSnack("Quotation updated successfully!", 'success');
+      setIsEditing(false);
+      setEditingImgId(null);
+      setNewImages({});
+      setNewDocuments([]);
+      setFieldErrors({});
+    } else {
+      showSnack(result?.error || "Failed to update quotation", 'error');
     }
-  }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
-      internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages]);
+  } catch (err) {
+    console.error("Save error:", err);
+    showSnack("Error saving quotation: " + (err.message || "Unknown error"), 'error');
+  } finally {
+    setIsSaving(false);
+  }
+}, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
+    internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;

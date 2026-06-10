@@ -512,8 +512,8 @@ export default function ViewQuotationScreen() {
           companyName={originalQuotation?.companySnapshot?.name || originalQuotation?.customer || ''}
   companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
   companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
-  companyTradeLicense={originalQuotation?.companySnapshot?.crNumber || ''}
-  companyTaxRegistration={originalQuotation?.companySnapshot?.vatNumber || ''}
+  companyTradeLicense={quotationData?.tl || originalQuotation?.tl || originalQuotation?.companySnapshot?.crNumber || ''}
+  companyTaxRegistration={quotationData?.trn || originalQuotation?.trn || originalQuotation?.companySnapshot?.vatNumber || ''}
   selectedCurrency={originalQuotation?.currency?.code} 
         />
         

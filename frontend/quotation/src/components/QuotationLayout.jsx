@@ -860,6 +860,7 @@ const TABLE_HEADERS = (isEditing, currency) => [
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
+// Add these state variables with the other state declarations (around line 440-450)
 export default function QuotationLayout({
   isEditing, quotationNumber, quotationData, onDataChange,
   quotationItems = [], onUpdateItem, onAddItem, onRemoveItem,
@@ -874,6 +875,26 @@ export default function QuotationLayout({
 }) {
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
+  
+  // ✅ Store original company values in state (these never change during edit)
+  const [originalCompanyTradeLicense, setOriginalCompanyTradeLicense] = useState(companyTradeLicense);
+  const [originalCompanyTaxRegistration, setOriginalCompanyTaxRegistration] = useState(companyTaxRegistration);
+  
+  // ✅ Store original customer values in state (these never change during edit)
+  const [originalCustomerTradeLicense, setOriginalCustomerTradeLicense] = useState(quotationData.customerTradeLicenseNumber);
+  const [originalCustomerTaxRegistration, setOriginalCustomerTaxRegistration] = useState(quotationData.customerTaxRegistrationNumber);
+  
+  // ✅ Update original values only when entering edit mode or when props change significantly
+  useEffect(() => {
+    if (!isEditing) {
+      // Update company original values
+      setOriginalCompanyTradeLicense(companyTradeLicense);
+      setOriginalCompanyTaxRegistration(companyTaxRegistration);
+      // Update customer original values
+      setOriginalCustomerTradeLicense(quotationData.customerTradeLicenseNumber);
+      setOriginalCustomerTaxRegistration(quotationData.customerTaxRegistrationNumber);
+    }
+  }, [isEditing, companyTradeLicense, companyTaxRegistration, quotationData.customerTradeLicenseNumber, quotationData.customerTaxRegistrationNumber]);
   
   const displayCurrency = useMemo(() => {
     if (!isEditing || quotationData.currency?.code) return quotationData.currency?.code || 'AED';
@@ -899,34 +920,53 @@ export default function QuotationLayout({
 
   const taxPresets = getTaxPresets();
 
-  // Does this quotation already carry a tax/discount value? (saved quote being
-  // viewed or edited). Numbers can live on quotationData.tax/discount OR on the
-  // computed taxAmount/discountAmount passed in by the parent.
   const hasSavedTax = (Number(quotationData.tax) || 0) > 0 || (Number(taxAmount) || 0) > 0;
   const hasSavedDiscount = (Number(quotationData.discount) || 0) > 0 || (Number(discountAmount) || 0) > 0;
-
-  // The editable Tax & Discount controls show when presets are available OR
-  // when an existing quote already has tax/discount to edit (so the controls
-  // don't vanish just because the tax-treatment prop didn't thread through on
-  // view/edit, e.g. for ops manager).
+ 
   const showTaxSection = taxPresets.length > 0 || hasSavedTax || hasSavedDiscount;
-
-  // The read-only VAT row in the totals table shows whenever there's a tax
-  // value to display — independent of preset logic.
   const showTaxRow = showTaxSection || hasSavedTax;
 
   const defaultTaxValue = useMemo(() => {
     if (taxPresets.length === 0) {
-      // No presets resolved — fall back to whatever the quote already has.
       return (quotationData.tax != null ? String(quotationData.tax) : "0");
     }
     const fivePercent = taxPresets.find(p => p.value === "5");
     return fivePercent ? "5" : taxPresets[0].value;
   }, [taxPresets, quotationData.tax]);
 
-  const READONLY_FIELDS_IN_EDIT_MODE = ['customer', 'companyPhone', 'companyEmail', 'companyTradeLicense', 'companyTaxRegistration'];
+  // ✅ This function determines if a field should be read-only
+  const isFieldReadOnly = useCallback((field) => {
+    const isDateField = field === 'date' || field === 'expiryDate';
+    const isCustomerField = field === 'customer' || field === 'customerName';
+    const isCompanyTradeTaxField = field === 'companyTradeLicense' || field === 'companyTaxRegistration';
+    const isCustomerTradeTaxField = field === 'customerTradeLicenseNumber' || field === 'customerTaxRegistrationNumber';
+    
+    if (isDateField || isCustomerField) return true;
+    
+    // ✅ For company fields: check ORIGINAL database value
+    if (isCompanyTradeTaxField) {
+      if (field === 'companyTradeLicense' && originalCompanyTradeLicense && originalCompanyTradeLicense.trim() !== '') {
+        return true; // Company has TL in DB → read-only
+      }
+      if (field === 'companyTaxRegistration' && originalCompanyTaxRegistration && originalCompanyTaxRegistration.trim() !== '') {
+        return true; // Company has TRN in DB → read-only
+      }
+    }
+    
+    // ✅ For customer fields: check ORIGINAL database value
+    if (isCustomerTradeTaxField) {
+      if (field === 'customerTradeLicenseNumber' && originalCustomerTradeLicense && originalCustomerTradeLicense.trim() !== '') {
+        return true; // Customer has TL in DB → read-only
+      }
+      if (field === 'customerTaxRegistrationNumber' && originalCustomerTaxRegistration && originalCustomerTaxRegistration.trim() !== '') {
+        return true; // Customer has TRN in DB → read-only
+      }
+    }
+    
+    return false;
+  }, [originalCompanyTradeLicense, originalCompanyTaxRegistration, originalCustomerTradeLicense, originalCustomerTaxRegistration]);
 
-  const renderFieldGrid = (fields, isReadOnly = false) => (
+  const renderFieldGrid = (fields) => (
     <div style={styles.fieldGrid}>
       {fields.map(({ label, field, type, required }) => {
         let fieldValue = quotationData[field];
@@ -934,10 +974,10 @@ export default function QuotationLayout({
         
         // Special handling for specific fields
         if (field === 'companyTradeLicense') {
-          fieldValue = companyTradeLicense || quotationData.companyTradeLicense;
+          fieldValue = quotationData.tl !== undefined ? quotationData.tl : companyTradeLicense;
         }
         if (field === 'companyTaxRegistration') {
-          fieldValue = companyTaxRegistration || quotationData.companyTaxRegistration;
+          fieldValue = quotationData.trn !== undefined ? quotationData.trn : companyTaxRegistration;
         }
         if (field === 'ourContact') {
           fieldValue = quotationData.ourContact || companyPhone;
@@ -946,28 +986,17 @@ export default function QuotationLayout({
           fieldValue = quotationData.salesManagerEmail || companyEmail;
         }
         
-        // Make Company Name (customer) and Customer Name (customerName) read-only
-        const isReadOnlyField = field === 'date' || field === 'expiryDate' || 
-                                field === 'companyTradeLicense' || field === 'companyTaxRegistration' ||
-                                field === 'customer' || field === 'customerName';
-        
-        // Check if this is a phone field that needs validation
+        const readOnly = isFieldReadOnly(field);
         const isPhoneField = field === 'customerPhone' || field === 'ourContact' || field === 'companyPhone';
         
-        // Handle phone number validation
         const handlePhoneChange = (e) => {
           const value = e.target.value;
-          
-          // Remove any letters as user types
           let cleanedValue = value.replace(/[a-zA-Z]/g, '');
-          
-          // Validate the cleaned value
           const validation = validatePhoneNumber(cleanedValue);
           if (!validation.isValid && cleanedValue) {
             setSnackbar({ show: true, message: validation.error, type: 'error' });
             setTimeout(() => setSnackbar(prev => ({ ...prev, show: false })), 3000);
           }
-          
           handleFieldChange(field, cleanedValue);
         };
         
@@ -977,20 +1006,9 @@ export default function QuotationLayout({
               {label}{required && ' *'}
             </span>
             <span style={styles.fieldColon}>:</span>
-            {isEditing && !isReadOnly ? (
+            {isEditing && !readOnly ? (
               <div style={{ width: '100%' }}>
-                {isReadOnlyField ? (
-                  <span style={{
-                    ...styles.fieldValue,
-                    padding: '0.5rem 0.75rem',
-                    backgroundColor: '#f3f4f6',
-                    borderRadius: '0.5rem',
-                    display: 'block',
-                    cursor: 'not-allowed'
-                  }}>
-                    {fieldValue || 'N/A'}
-                  </span>
-                ) : type === 'textarea' ? (
+                {type === 'textarea' ? (
                   <textarea
                     value={fieldValue || ''}
                     onChange={(e) => handleFieldChange(field, e.target.value)}
@@ -1009,7 +1027,6 @@ export default function QuotationLayout({
                     value={fieldValue || ''}
                     onChange={handlePhoneChange}
                     onKeyDown={(e) => {
-                      // Prevent letters from being typed
                       if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
                         e.preventDefault();
                         setSnackbar({ show: true, message: 'Phone number cannot contain letters', type: 'error' });
@@ -1028,7 +1045,17 @@ export default function QuotationLayout({
                     type={type}
                     className="edit-input"
                     value={fieldValue || ''}
-                    onChange={(e) => handleFieldChange(field, e.target.value)}
+                    onChange={(e) => {
+                      const newValue = e.target.value;
+                      // ✅ Map company fields to the correct state fields (tl and trn)
+                      if (field === 'companyTradeLicense') {
+                        onDataChange('tl', newValue);
+                      } else if (field === 'companyTaxRegistration') {
+                        onDataChange('trn', newValue);
+                      } else {
+                        handleFieldChange(field, newValue);
+                      }
+                    }}
                     style={{
                       ...inputStyle,
                       borderColor: errorMessage ? '#dc2626' : undefined,
@@ -1052,29 +1079,17 @@ export default function QuotationLayout({
       })}
     </div>
   );
-
+ 
   const renderItemImages = (qi) => {
-    // Use imageUrls for S3 images (not the keys)
     const allImages = [...(qi.imagePaths || []), ...(qi.imageUrls || [])];
-    
     if (!allImages.length) return null;
-  
     return (
       <div style={styles.imageGrid}>
         {allImages.map((path, idx) => (
           <div key={`${qi.id}-${idx}`} style={styles.imageContainer}>
-            <img 
-              src={path} 
-              alt={`item-img-${idx}`} 
-              style={styles.itemImage}
-            />
+            <img src={path} alt={`item-img-${idx}`} style={styles.itemImage} />
             {isEditing && onRemoveExistingImage && (
-              <button 
-                onClick={() => onRemoveExistingImage(qi.id, idx)} 
-                style={styles.removeImgBtnStyle}
-              >
-                ×
-              </button>
+              <button onClick={() => onRemoveExistingImage(qi.id, idx)} style={styles.removeImgBtnStyle}>×</button>
             )}
           </div>
         ))}
@@ -1084,31 +1099,13 @@ export default function QuotationLayout({
 
   const renderNewImages = (qi) => {
     if (!newImages[qi.id]?.length) return null;
-  
     return (
       <div style={styles.imageGrid}>
         {newImages[qi.id].map((src, idx) => (
-          <div 
-            key={`new-${idx}`} 
-            style={{ 
-              ...styles.imageContainer, 
-              borderColor: '#86efac',
-              borderWidth: '2px'
-            }}
-          >
-            <img 
-              src={src} 
-              alt={`new-img-${idx}`} 
-              style={styles.itemImage} 
-            />
+          <div key={`new-${idx}`} style={{ ...styles.imageContainer, borderColor: '#86efac', borderWidth: '2px' }}>
+            <img src={src} alt={`new-img-${idx}`} style={styles.itemImage} />
             {isEditing && onRemoveNewImage && (
-              <button 
-                onClick={() => onRemoveNewImage(qi.id, idx)} 
-                style={styles.removeImgBtnStyle}
-                title="Remove image"
-              >
-                ×
-              </button>
+              <button onClick={() => onRemoveNewImage(qi.id, idx)} style={styles.removeImgBtnStyle}>×</button>
             )}
           </div>
         ))}
@@ -1120,55 +1117,36 @@ export default function QuotationLayout({
     <div style={{ marginTop: '0.75rem' }}>
       <button
         onClick={() => onToggleImgEdit(qi.id)}
-        style={{
-          ...styles.addImageBtn,
-          backgroundColor: editingImgId === qi.id ? '#dc2626' : '#10b981'
-        }}
+        style={{ ...styles.addImageBtn, backgroundColor: editingImgId === qi.id ? '#dc2626' : '#10b981' }}
       >
         <Upload size={13} /> {editingImgId === qi.id ? 'Cancel' : 'Add Images'}
       </button>
       {editingImgId === qi.id && (
         <div style={{ marginTop: '0.5rem' }}>
-          <input
-            type="file" accept="image/*" multiple
-            id={`img-upload-${qi.id}`}
-            style={{ display: 'none' }}
-            onChange={(e) => onAddImages(e, qi.id)}
-          />
-          <label htmlFor={`img-upload-${qi.id}`} style={styles.imageUploadLabel}>
-            Click to choose images
-          </label>
+          <input type="file" accept="image/*" multiple id={`img-upload-${qi.id}`} style={{ display: 'none' }} onChange={(e) => onAddImages(e, qi.id)} />
+          <label htmlFor={`img-upload-${qi.id}`} style={styles.imageUploadLabel}>Click to choose images</label>
         </div>
       )}
     </div>
   );
 
-  const hideSnack = useCallback(() => {
-    setSnackbar({ show: false, message: '', type: 'error' });
-  }, []);
+  const hideSnack = useCallback(() => setSnackbar({ show: false, message: '', type: 'error' }), []);
 
-  // UPDATED: Manual item row without SearchableSelect
   const renderItemRow = (qi, index) => (
     <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
       <td style={styles.tableCellCenter}>{index + 1}</td>
       <td style={styles.tableCellDescription}>
         {isEditing ? (
-          <>
-         
-            <textarea
-              className="edit-input"
-              value={qi.description || ''}
-              onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
-              placeholder="Item description (optional)…"
-              rows={2}
-              style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
-            />
-          </>
+          <textarea
+            className="edit-input"
+            value={qi.description || ''}
+            onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
+            placeholder="Item description (optional)…"
+            rows={2}
+            style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
+          />
         ) : (
-          <>
-            
-            {qi.description && <div style={styles.itemDescription}>{qi.description}</div>}
-          </>
+          qi.description && <div style={styles.itemDescription}>{qi.description}</div>
         )}
         {renderItemImages(qi)}
         {renderNewImages(qi)}
@@ -1183,17 +1161,10 @@ export default function QuotationLayout({
               onChange={(val) => handleValidatedUpdate(qi.id, 'quantity', val, validateQuantity)}
               validator={validateQuantity}
               placeholder="Qty"
-              style={{
-                ...inputStyle,
-                textAlign: 'center',
-                borderColor: fieldErrors[qi.id]?.quantity ? '#dc2626' : undefined,
-                backgroundColor: fieldErrors[qi.id]?.quantity ? '#fef2f2' : undefined
-              }}
+              style={{ ...inputStyle, textAlign: 'center', borderColor: fieldErrors[qi.id]?.quantity ? '#dc2626' : undefined, backgroundColor: fieldErrors[qi.id]?.quantity ? '#fef2f2' : undefined }}
               min="1"
             />
-            {fieldErrors[qi.id]?.quantity && (
-              <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].quantity}</div>
-            )}
+            {fieldErrors[qi.id]?.quantity && <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].quantity}</div>}
           </div>
         ) : qi.quantity}
       </td>
@@ -1206,29 +1177,18 @@ export default function QuotationLayout({
               onChange={(val) => handleValidatedUpdate(qi.id, 'unitPrice', val, validatePrice)}
               validator={validatePrice}
               placeholder="0.00"
-              style={{
-                ...inputStyle,
-                textAlign: 'right',
-                borderColor: fieldErrors[qi.id]?.unitPrice ? '#dc2626' : undefined,
-                backgroundColor: fieldErrors[qi.id]?.unitPrice ? '#fef2f2' : undefined
-              }}
+              style={{ ...inputStyle, textAlign: 'right', borderColor: fieldErrors[qi.id]?.unitPrice ? '#dc2626' : undefined, backgroundColor: fieldErrors[qi.id]?.unitPrice ? '#fef2f2' : undefined }}
               step="0.01"
               min="0"
             />
-            {fieldErrors[qi.id]?.unitPrice && (
-              <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].unitPrice}</div>
-            )}
+            {fieldErrors[qi.id]?.unitPrice && <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].unitPrice}</div>}
           </div>
         ) : Number(qi.unitPrice || 0).toFixed(2)}
       </td>
-      <td style={styles.tableCellRightBold}>
-        {(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
-      </td>
+      <td style={styles.tableCellRightBold}>{(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}</td>
       {isEditing && (
         <td style={styles.tableCellCenter}>
-          <button onClick={() => onRemoveItem(qi.id)} style={styles.deleteItemBtn}>
-            <Trash2 size={15} />
-          </button>
+          <button onClick={() => onRemoveItem(qi.id)} style={styles.deleteItemBtn}><Trash2 size={15} /></button>
         </td>
       )}
     </tr>
@@ -1246,12 +1206,8 @@ export default function QuotationLayout({
         return;
       }
     }
-    if (field === 'quantity') {
-      value = parseInt(value, 10);
-    }
-    if (field === 'unitPrice') {
-      value = parseFloat(value) || 0;
-    }
+    if (field === 'quantity') value = parseInt(value, 10);
+    if (field === 'unitPrice') value = parseFloat(value) || 0;
     onUpdateItem(itemId, field, value);
   };
 
@@ -1271,7 +1227,8 @@ export default function QuotationLayout({
   }, [onDataChange, setHeaderErrors, headerErrors]);
 
   const isMobile = useMediaQuery('(max-width: 768px)');
-  if (!quotationData) return null; 
+  if (!quotationData) return null;
+  
   if (isMobile) {
     return <MobileQuotationLayout 
       isEditing={isEditing}
@@ -1312,13 +1269,13 @@ export default function QuotationLayout({
       defaultTaxValue={defaultTaxValue}
       handleTaxChange={handleTaxChange}
       termsImages={termsImages}
-    onTermsImagesUpload={onTermsImagesUpload}
-    onRemoveTermsImage={onRemoveTermsImage}
-    companyPhone={companyPhone}
-    companyEmail={companyEmail}
-    companyTradeLicense={companyTradeLicense}
-    companyTaxRegistration={companyTaxRegistration}
-    selectedCurrency={displayCurrency}
+      onTermsImagesUpload={onTermsImagesUpload}
+      onRemoveTermsImage={onRemoveTermsImage}
+      companyPhone={companyPhone}
+      companyEmail={companyEmail}
+      companyTradeLicense={companyTradeLicense}
+      companyTaxRegistration={companyTaxRegistration}
+      selectedCurrency={displayCurrency}
     />;
   }
 

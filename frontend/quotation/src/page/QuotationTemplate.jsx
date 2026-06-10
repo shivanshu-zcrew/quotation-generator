@@ -173,6 +173,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     customerTradeLicenseNumber: initialQuotationData?.customerTradeLicenseNumber || customer?.tradeLicenseNumber || "",
     customerTaxRegistrationNumber: initialQuotationData?.customerTaxRegistrationNumber || customer?.vatNumber || "",
     remark: initialQuotationData?.remark || "",
+    
     // Company/Right side fields - Use user data directly
     ourFocalPoint: user?.name || "",
     ourFocalPointDesignation: user?.role || "",
@@ -182,8 +183,9 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     ourRef: initialQuotationData?.ourRef || "",
     paymentTerms: initialQuotationData?.paymentTerms || "",
     deliveryTerms: initialQuotationData?.deliveryTerms || "",
-    tl: initialQuotationData?.tl || "",
-    trn: initialQuotationData?.trn || customer?.trn || customer?.taxRegistrationNumber || "",
+    
+    tl: companyDetails.tradeLicense || initialQuotationData?.tl || "",
+  trn: companyDetails.taxRegistration || initialQuotationData?.trn || "", 
     tax: initialQuotationData?.tax || 0,
     discount: initialQuotationData?.discount || 0,
     notes: initialQuotationData?.notes || "",
@@ -338,8 +340,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     if (customer) {
       setQuotationData(prev => ({
         ...prev,
-        trn: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
-        customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
+         customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
         
         customerName: customer.contactPerson || customer.name || "",
         customerPhone: customer.phone || "",
@@ -727,8 +728,12 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         ourRef: quotationData.ourRef?.trim() || "",
         paymentTerms: quotationData.paymentTerms?.trim() || "",
         deliveryTerms: quotationData.deliveryTerms?.trim() || "",
-        tl: quotationData.tl?.trim() || "",
-        trn: quotationData.trn?.trim() || "",
+        
+        // ✅ COMPANY'S TL AND TRN - Use companyDetails (from selected company) as primary source
+        // Fall back to quotationData.tl/trn if user has edited them
+        tl: (companyDetails.tradeLicense?.trim()) || quotationData.tl?.trim() || "",
+        trn: (companyDetails.taxRegistration?.trim()) || quotationData.trn?.trim() || "",
+        
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes?.trim() || "",
@@ -1093,48 +1098,52 @@ const handleDocumentDownload = useCallback((docId) => {
         </div>
         
         <QuotationLayout
-          isEditing={isEditing}
-          quotationNumber={quotationNumber}
-          quotationData={quotationData}
-          onDataChange={handleDataChange}
-          headerErrors={headerErrors}
-          quotationItems={quotationItems}
-          availableItems={[]}
-          onUpdateItem={updateItem}
-          onAddItem={addMoreItem}
-          onRemoveItem={removeItem}
-          onAddImages={handleImageUpload}
-          onRemoveExistingImage={handleRemoveImage}
-          onRemoveNewImage={handleRemoveImage}
-          editingImgId={editingImageId}
-          onToggleImgEdit={(id) => setEditingImageId(editingImageId === id ? null : id)}
-          newImages={displayImages}
-          subtotal={subtotal}
-          taxAmount={taxAmount}
-          discountAmount={discountAmount}
-          grandTotal={grandTotal}
-          amountInWords={amountInWords}
-          tcSections={tcSections}
-          onTcChange={setTcSections}
-          fieldErrors={fieldErrors}
-          documents={uploadedDocuments}
-          onDocumentUpload={handleDocumentUpload}
-          onDocumentDelete={handleDocumentDelete}
-          onDocumentDownload={handleDocumentDownload}
-          formatFileSize={formatFileSize}
-          getFileIcon={getFileIcon}
-          setHeaderErrors={setHeaderErrors}
-          companyName={companyName}
-          companyPhone={user?.phone || companyDetails.phone}
-          companyEmail={user?.email || companyDetails.email}
-          companyTradeLicense={companyDetails.tradeLicense}
-          companyTaxRegistration={companyDetails.taxRegistration}
-          customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
-          customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
-          termsImages={termsImages}
-          onTermsImagesUpload={handleTermsImagesUpload}
-          onRemoveTermsImage={handleRemoveTermsImage}
-        />
+  isEditing={isEditing}
+  quotationNumber={quotationNumber}
+  quotationData={quotationData}
+  onDataChange={handleDataChange}
+  headerErrors={headerErrors}
+  quotationItems={quotationItems}
+  availableItems={[]}
+  onUpdateItem={updateItem}
+  onAddItem={addMoreItem}
+  onRemoveItem={removeItem}
+  onAddImages={handleImageUpload}
+  onRemoveExistingImage={handleRemoveImage}
+  onRemoveNewImage={handleRemoveImage}
+  editingImgId={editingImageId}
+  onToggleImgEdit={(id) => setEditingImageId(editingImageId === id ? null : id)}
+  newImages={displayImages}
+  subtotal={subtotal}
+  taxAmount={taxAmount}
+  discountAmount={discountAmount}
+  grandTotal={grandTotal}
+  amountInWords={amountInWords}
+  tcSections={tcSections}
+  onTcChange={setTcSections}
+  fieldErrors={fieldErrors}
+  documents={uploadedDocuments}
+  onDocumentUpload={handleDocumentUpload}
+  onDocumentDelete={handleDocumentDelete}
+  onDocumentDownload={handleDocumentDownload}
+  formatFileSize={formatFileSize}
+  getFileIcon={getFileIcon}
+  setHeaderErrors={setHeaderErrors}
+  companyName={companyName}
+  companyPhone={user?.phone || companyDetails.phone}
+  companyEmail={user?.email || companyDetails.email}
+  
+  // ✅ FIX: Use quotationData.tl and quotationData.trn as the source of truth
+  // These come from the form state and include user edits
+  companyTradeLicense={quotationData.tl || companyDetails.tradeLicense || ''}
+  companyTaxRegistration={quotationData.trn || companyDetails.taxRegistration || ''}
+  
+  customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
+  customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
+  termsImages={termsImages}
+  onTermsImagesUpload={handleTermsImagesUpload}
+  onRemoveTermsImage={handleRemoveTermsImage}
+/>
         
         {!isEditing && (
           <SaveButton 

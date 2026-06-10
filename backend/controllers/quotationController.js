@@ -685,10 +685,12 @@ exports.getQuotation = async (req, res) => {
 exports.createQuotation = async (req, res) => {
   const {
     projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
-    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, tl, customerTaxRegistrationNumber,
+    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, 
+    tl, trn,  // ← Company's TL and TRN from payload
+    customerTaxRegistrationNumber,  // ← Customer's TRN (different from company's trn)
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
-    quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions,  quotationNumber, 
+    quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber, 
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
@@ -737,7 +739,7 @@ exports.createQuotation = async (req, res) => {
   const baseCurrency = company.baseCurrency || 'AED';
   const targetCurrency = currencyCode || baseCurrency;
 
-  let exchangeRate = 1; // 1 targetCurrency = exchangeRate * AED
+  let exchangeRate = 1;
   if (targetCurrency !== baseCurrency) {
     try {
       const rates = await ExchangeRateService.getRates(targetCurrency);
@@ -833,10 +835,6 @@ exports.createQuotation = async (req, res) => {
     }
   }
 
-  // Merge in terms images that were ALREADY uploaded to S3 on the client.
-  // These arrive as `existingTermsImages` (each with an s3Key) and must be
-  // persisted alongside any newly-uploaded base64 images — otherwise an
-  // already-uploaded terms image is silently dropped and never shows on view.
   if (Array.isArray(existingTermsImages) && existingTermsImages.length > 0) {
     for (const img of existingTermsImages) {
       if (img && img.s3Key) {
@@ -849,8 +847,6 @@ exports.createQuotation = async (req, res) => {
       }
     }
   }
-
-  // const quotationNumber = generateQuotationNumber(company.code);
 
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
@@ -868,7 +864,9 @@ exports.createQuotation = async (req, res) => {
     companySnapshot: {
       code: company.code, name: company.name,
       address: typeof company.address === 'string' ? company.address : `${company.address?.street || ''}, ${company.address?.city || ''}, ${company.address?.country || 'UAE'}`,
-      phone: company.phone, email: company.email, vatNumber: company.vatNumber, crNumber: company.crNumber,
+      phone: company.phone, email: company.email,
+      vatNumber: company.vatNumber,  
+      crNumber: company.crNumber,
       logo: company.logo, zohoOrganizationId: company.zohoOrganizationId,
       focalPointDesignation: focalPointDesignation || company.focalPointDesignation || '',
       bankDetails: company.bankDetails
@@ -881,10 +879,16 @@ exports.createQuotation = async (req, res) => {
     },
     customerId,
     customerSnapshot: {
-      name: customerName?.trim() || customerDoc.name,  email: req.body.customerEmail?.trim() || customerDoc.email, phone: customerDoc.phone,
-      address: customerDoc.address, country: customerCountry || 'UAE', vatNumber: customerDoc.vatNumber,
-      designation: customerDesignation?.trim() || '', tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
-      taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
+      name: customerName?.trim() || customerDoc.name,  
+      email: req.body.customerEmail?.trim() || customerDoc.email, 
+      phone: customerDoc.phone,
+      address: customerDoc.address, 
+      country: customerCountry || 'UAE', 
+      vatNumber: customerTaxRegistrationNumber?.trim() || customerDoc.vatNumber,  // ✅ Customer's TRN from payload
+      designation: customerDesignation?.trim() || '', 
+      tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
+      taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', 
+      placeOfSupply: customerDoc.placeOfSupply || 'Dubai'
     },
     customerTaxTreatment: customerDoc.taxTreatment || 'non_vat_registered',
     customerPlaceOfSupply: customerDoc.placeOfSupply || 'Dubai',
@@ -892,15 +896,23 @@ exports.createQuotation = async (req, res) => {
     date: date ? new Date(date) : new Date(),
     expiryDate: new Date(expiryDate),
     queryDate: queryDate ? new Date(queryDate) : null,
-    ourRef: ourRef?.trim() || '', ourContact: ourContact?.trim() || '',
+    ourRef: ourRef?.trim() || '', 
+    ourContact: ourContact?.trim() || '',
     ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '',
     salesManagerEmail: salesManagerEmail?.trim() || '',
-    paymentTerms: paymentTerms?.trim() || '', deliveryTerms: deliveryTerms?.trim() || '',
-    tl: tl?.trim() || '',trn: customerTaxRegistrationNumber?.trim() || trn?.trim() || '',
+    paymentTerms: paymentTerms?.trim() || '', 
+    deliveryTerms: deliveryTerms?.trim() || '',
+    
+    // ✅ COMPANY'S TL AND TRN
+    tl: tl?.trim() || company.crNumber?.trim() || '',
+    trn: trn?.trim() || company.vatNumber?.trim() || '',
+    
     items: processedItems,
-    taxPercent: tax, discountPercent: discount,
+    taxPercent: tax, 
+    discountPercent: discount,
     ...totals,
-    notes: notes?.trim() || '', remark: remark?.trim() || '',
+    notes: notes?.trim() || '', 
+    remark: remark?.trim() || '',
     termsAndConditions: termsAndConditions || '',
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
@@ -929,7 +941,9 @@ exports.updateQuotation = async (req, res) => {
   const {
     projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, tl, customerTaxRegistrationNumber,
+    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, 
+    tl, trn,  // ← Company's TL and TRN from payload
+    customerTaxRegistrationNumber,  // ← Customer's TRN (keep for customer)
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
     existingTermsImages  
@@ -1077,13 +1091,7 @@ exports.updateQuotation = async (req, res) => {
       });
     }
 
-    // ==================== ✅ ITEM IMAGE S3 CLEANUP ====================
-    // Diff the item-image keys saved on the quotation against the keys that
-    // survived this update. Anything dropped was removed by the user and is now
-    // orphaned in S3, so delete it. This mirrors the terms-image cleanup below.
-    // Done at save time (not on click) so a cancelled/failed edit never destroys
-    // a still-referenced image. Keys are unique per upload, so there's no risk of
-    // deleting a key still used by another item.
+    // ==================== ITEM IMAGE S3 CLEANUP ====================
     try {
       const oldItemKeys = new Set();
       (existing.items || []).forEach(it => {
@@ -1104,7 +1112,6 @@ exports.updateQuotation = async (req, res) => {
         logger.info(`Item image cleanup: removed ${removedItemKeys.length} orphaned S3 object(s)`);
       }
     } catch (cleanupErr) {
-      // A cleanup failure must not block the save — just log it.
       logger.error(`Item image S3 cleanup error: ${cleanupErr.message}`);
     }
     // ==================== END ITEM IMAGE S3 CLEANUP ====================
@@ -1118,22 +1125,16 @@ exports.updateQuotation = async (req, res) => {
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
     const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
 
-    // ==================== ✅ FIXED: TERMS IMAGES HANDLING ====================
-    
-    // Get existing terms images from database
+    // ==================== TERMS IMAGES HANDLING ====================
     const dbTermsImages = existing.termsImages || [];
-    
-    // Get kept existing images from frontend (the ones that were NOT removed)
     const keptExistingImages = existingTermsImages || [];
     
-    // 🔍 Find which images were removed (in DB but not in kept list)
     const removedImages = dbTermsImages.filter(dbImg => 
       !keptExistingImages.some(keptImg => 
         keptImg.s3Key === dbImg.s3Key || keptImg.id === dbImg._id?.toString()
       )
     );
     
-    // 🗑️ Delete removed images from S3
     for (const removedImg of removedImages) {
       if (removedImg.s3Key) {
         await deleteFromS3(removedImg.s3Key);
@@ -1141,7 +1142,6 @@ exports.updateQuotation = async (req, res) => {
       }
     }
     
-    // 📤 Process new base64 images
     let newUploadedImages = [];
     if (compressedTermsImages && compressedTermsImages.length > 0) {
       for (let i = 0; i < compressedTermsImages.length; i++) {
@@ -1184,7 +1184,6 @@ exports.updateQuotation = async (req, res) => {
       }
     }
     
-    // ✅ Combine kept existing images + new uploaded images
     const finalTermsImages = [
       ...keptExistingImages.map(img => ({
         s3Key: img.s3Key,
@@ -1196,8 +1195,7 @@ exports.updateQuotation = async (req, res) => {
     ];
     
     console.log(`📸 Terms images summary: ${dbTermsImages.length} existing, ${removedImages.length} removed, ${keptExistingImages.length} kept, ${newUploadedImages.length} new, ${finalTermsImages.length} total`);
-
-    // ==================== END OF TERMS IMAGES FIX ====================
+    // ==================== END OF TERMS IMAGES HANDLING ====================
 
     let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
@@ -1224,12 +1222,22 @@ exports.updateQuotation = async (req, res) => {
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
       ...(customerCountry && { 'customerSnapshot.country': customerCountry }),
       ...(customerId && { 'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment, 'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply, customerTaxTreatment, customerPlaceOfSupply }),
-      ...(date && { date: new Date(date) }), ...(expiryDate && { expiryDate: new Date(expiryDate) }),
+      ...(date && { date: new Date(date) }), 
+      ...(expiryDate && { expiryDate: new Date(expiryDate) }),
       ...(queryDate !== undefined && { queryDate: queryDate ? new Date(queryDate) : null }),
-      ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }), ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
+      ...(ourRef !== undefined && { ourRef: ourRef?.trim() || '' }), 
+      ...(ourContact !== undefined && { ourContact: ourContact?.trim() || '' }),
       ...(salesManagerEmail !== undefined && { salesManagerEmail: salesManagerEmail?.trim() || '' }),
-      ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }), ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
-      ...(tl !== undefined && { tl: tl?.trim() || '' }), ...(customerTaxRegistrationNumber !== undefined && { trn: customerTaxRegistrationNumber?.trim() || '' }),
+      ...(paymentTerms !== undefined && { paymentTerms: paymentTerms?.trim() || '' }), 
+      ...(deliveryTerms !== undefined && { deliveryTerms: deliveryTerms?.trim() || '' }),
+      
+       ...(tl !== undefined && { tl: tl?.trim() || '' }),   
+      ...(trn !== undefined && { trn: trn?.trim() || '' }),  
+      
+      ...(customerTaxRegistrationNumber !== undefined && { 
+        'customerSnapshot.vatNumber': customerTaxRegistrationNumber?.trim() || '' 
+      }),
+      
       ...(remark !== undefined && { remark: remark?.trim() || '' }),
       items: processedItems, 
       taxPercent: tax, 
@@ -1250,9 +1258,8 @@ exports.updateQuotation = async (req, res) => {
       storageProvider: 's3'
     };
     
-    // ✅ Handle approval data clearing based on new status
+    // Handle approval data clearing based on new status
     if (newStatus === 'pending' || newStatus === 'ops_rejected') {
-      // Reset all approvals when moving back to pending
       updateData.opsRejectionReason = '';
       updateData.rejectionReason = '';
       updateData.opsApprovedBy = null;
@@ -1260,17 +1267,13 @@ exports.updateQuotation = async (req, res) => {
       updateData.approvedBy = null;
       updateData.approvedAt = null;
     } else if (newStatus === 'pending_admin') {
-      // Admin edit - only clear admin approval, preserve ops approval
       updateData.approvedBy = null;
       updateData.approvedAt = null;
       updateData.rejectionReason = '';
-      // ✅ DO NOT clear opsApprovedBy and opsApprovedAt
     } else if (newStatus === 'rejected') {
-      // Keep rejection reasons when rejected
       updateData.opsRejectionReason = existing.opsRejectionReason || '';
       updateData.rejectionReason = existing.rejectionReason || '';
     } else if (newStatus === 'ops_approved') {
-      // Ops Manager approval
       updateData.opsApprovedBy = req.user.id;
       updateData.opsApprovedAt = new Date();
       updateData.opsApprovedBySnapshot = {
@@ -1280,7 +1283,6 @@ exports.updateQuotation = async (req, res) => {
         approvedAt: new Date()
       };
     } else if (newStatus === 'approved' || newStatus === 'awarded') {
-      // Admin approval
       updateData.approvedBy = req.user.id;
       updateData.approvedAt = new Date();
       updateData.approvedBySnapshot = {
