@@ -1,4 +1,4 @@
-// store.js - Optimized & Fixed Version
+// store.js - Optimized & Fixed Version (Items commented out)
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
@@ -79,7 +79,7 @@ const initialState = {
   initialized: false,
   customerSyncStatus: null,
   pendingSyncCustomers: [],
-  items: [],
+  items: [], // Kept but will not be populated
   quotations: [],
   quotationsInitialized: false,
   quotationsLoading: false,
@@ -921,8 +921,9 @@ export const useAppStore = create(
           get().fetchFilteredCustomers({});
         },
 
-        // ==================== ITEM ACTIONS ====================
+        // ==================== ITEM ACTIONS (COMMENTED OUT) ====================
 
+        /*
         refreshItems: async (forceRefresh = false) => {
           set({ loading: true });
           try {
@@ -1040,6 +1041,7 @@ export const useAppStore = create(
             return { success: false, error: getErrorMessage(error) };
           }
         },
+        */
 
         // ==================== COMPANY & CURRENCY ACTIONS ====================
 
@@ -1464,10 +1466,12 @@ export const useAppStore = create(
         // Used by fetchAllData and _loadCompanyData to avoid duplication.
         _fetchCompanyBaseData: async (companyId) => {
           const [
-            customersRes, itemsRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes
+            customersRes,
+            // itemsRes, // COMMENTED OUT: item fetch removed
+            ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes
           ] = await Promise.all([
             customerAPI.getAll({ companyId }).catch(() => ({ data: [] })),
-            itemAPI.getAll({ companyId }).catch(() => ({ data: [] })),
+            // itemAPI.getAll({ companyId }).catch(() => ({ data: [] })), // COMMENTED OUT
             exchangeRateAPI.getRates().catch(() => ({ data: null })),
             exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
             customerAPI.getGccCountries().catch(() => ({ data: [] })),
@@ -1477,7 +1481,7 @@ export const useAppStore = create(
 
           batchUpdate(set, [
             ['customers', parseData(customersRes.data)],
-            ['items', parseData(itemsRes.data)],
+            // ['items', parseData(itemsRes.data)], // COMMENTED OUT - items left as empty array
             ['exchangeRates', ratesRes.data],
             ['supportedCurrencies', currenciesRes.data?.currencies || null],
             ['gccCountries', gccRes.data || []],
@@ -1507,9 +1511,18 @@ export const useAppStore = create(
           set({ loading: true, loadError: null });
 
           try {
-            const [customersRes, itemsRes, companiesRes, ratesRes, currenciesRes, gccRes, taxRes, currencyOptsRes] = await Promise.all([
+            const [
+              customersRes,
+              // itemsRes, // COMMENTED OUT
+              companiesRes,
+              ratesRes,
+              currenciesRes,
+              gccRes,
+              taxRes,
+              currencyOptsRes
+            ] = await Promise.all([
               customerAPI.getAll({ companyId: selectedCompany }, { skipCache }).catch(() => ({ data: [] })),
-              itemAPI.getAll({ companyId: selectedCompany }).catch(() => ({ data: [] })),
+              // itemAPI.getAll({ companyId: selectedCompany }).catch(() => ({ data: [] })), // COMMENTED OUT
               companyAPI.getAll().catch(() => ({ data: { companies: [] } })),
               exchangeRateAPI.getRates().catch(() => ({ data: null })),
               exchangeRateAPI.getSupported().catch(() => ({ data: { currencies: null } })),
@@ -1530,7 +1543,7 @@ export const useAppStore = create(
 
             batchUpdate(set, [
               ['customers', parseData(customersRes.data)],
-              ['items', parseData(itemsRes.data)],
+              // ['items', parseData(itemsRes.data)], // COMMENTED OUT - items left unchanged
               ['companies', companies],
               ['exchangeRates', ratesRes.data],
               ['supportedCurrencies', currenciesRes.data?.currencies || null],
