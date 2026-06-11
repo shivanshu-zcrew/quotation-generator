@@ -1991,9 +1991,79 @@ exports.exportQuotationsToExcel = async (req, res) => {
       .populate("companyId", "name code baseCurrency")
       .lean();
 
+    // Handle empty results - Create Excel file with "No Data" message
     if (!quotations.length) {
       logger.warn(`No quotations found for export`);
-      return res.status(404).json({ success: false, message: "No quotations found" });
+      
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("No Data Found");
+      
+      // Title
+      worksheet.mergeCells('A1:C1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = "QUOTATIONS REPORT";
+      titleCell.font = { name: "Arial", size: 18, bold: true, color: { argb: "FFFFFFFF" } };
+      titleCell.alignment = { horizontal: "center", vertical: "middle" };
+      titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+      worksheet.getRow(1).height = 35;
+      
+      worksheet.addRow([]);
+      
+      // Message
+      worksheet.mergeCells('A2:C2');
+      const messageCell = worksheet.getCell('A2');
+      messageCell.value = "⚠️ NO QUOTATIONS FOUND";
+      messageCell.font = { name: "Arial", size: 14, bold: true, color: { argb: "FF991B1B" } };
+      messageCell.alignment = { horizontal: "center", vertical: "middle" };
+      
+      worksheet.addRow([]);
+      worksheet.mergeCells('A3:C3');
+      const subMessageCell = worksheet.getCell('A3');
+      subMessageCell.value = "No quotations match the selected filters.";
+      subMessageCell.font = { name: "Arial", size: 11 };
+      subMessageCell.alignment = { horizontal: "center" };
+      
+      worksheet.addRow([]);
+      worksheet.addRow([]);
+      
+      // Applied Filters
+      worksheet.getCell('A5').value = "APPLIED FILTERS:";
+      worksheet.getCell('A5').font = { name: "Arial", size: 12, bold: true };
+      worksheet.getCell('A5').fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      
+      let filterRow = 6;
+      worksheet.getCell(`A${filterRow}`).value = "Company:";
+      worksheet.getCell(`B${filterRow}`).value = isAllCompanies ? "All Companies" : companyId;
+      filterRow++;
+      
+      if (from || to) {
+        worksheet.getCell(`A${filterRow}`).value = "Date Range:";
+        worksheet.getCell(`B${filterRow}`).value = `${from || 'Start'} to ${to || 'End'}`;
+        filterRow++;
+      }
+      
+      if (status && status !== 'all') {
+        worksheet.getCell(`A${filterRow}`).value = "Status:";
+        worksheet.getCell(`B${filterRow}`).value = status;
+        filterRow++;
+      }
+      
+      if (search?.trim()) {
+        worksheet.getCell(`A${filterRow}`).value = "Search:";
+        worksheet.getCell(`B${filterRow}`).value = search;
+        filterRow++;
+      }
+      
+      worksheet.getColumn('A').width = 20;
+      worksheet.getColumn('B').width = 40;
+      worksheet.getColumn('C').width = 10;
+      
+      const fileName = `quotations_export_empty_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const buffer = await workbook.xlsx.writeBuffer();
+      
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename=${fileName}`);
+      return res.send(buffer);
     }
 
     // Currency conversion for the REPORT-LEVEL display currency

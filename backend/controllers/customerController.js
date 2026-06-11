@@ -1455,6 +1455,7 @@ exports.exportCustomers = async (req, res) => {
     const query = buildCustomerQuery(effectiveCompanyId, { status, taxStatus, placeOfSupply, search });
 
     const customers = await Customer.find(query)
+      .populate('companyId', 'name code')
       .sort({ name: 1 })
       .lean();
 
@@ -1471,7 +1472,7 @@ exports.exportCustomers = async (req, res) => {
       'Name': customer.name,
       'Email': customer.email || '',
       'Phone': customer.phone || '',
-      'Company Name': customer.companyName || '',
+      'Company Name': customer.companyId?.name || '',
       'Address': customer.address || '',
       'City': customer.city || '',
       'State': customer.state || '',
@@ -1489,6 +1490,20 @@ exports.exportCustomers = async (req, res) => {
       'Last Modified': customer.lastModifiedTime ? new Date(customer.lastModifiedTime).toLocaleDateString() : ''
     }));
 
+    // Group customers by company using companyId name
+    const customersByCompany = {};
+    customers.forEach(customer => {
+      const companyName = customer.companyId?.name || 'Unknown Company';
+      if (!customersByCompany[companyName]) {
+        customersByCompany[companyName] = [];
+      }
+      // Find the matching export data for this customer
+      const exportCustomer = exportData.find(c => c['Name'] === customer.name);
+      if (exportCustomer) {
+        customersByCompany[companyName].push(exportCustomer);
+      }
+    });
+
     const responseData = {
       summary: {
         totalCustomers: customers.length,
@@ -1501,7 +1516,9 @@ exports.exportCustomers = async (req, res) => {
         isAllCompanies
       },
       placeStats,
-      customers: exportData
+      customers: exportData,
+      customersByCompany,
+      isAllCompanies
     };
 
     logger.info(`Customers exported: ${customers.length} records`, {
@@ -1525,7 +1542,7 @@ exports.exportCustomers = async (req, res) => {
 
 const exportToExcelJS = async (data, res) => {
   try {
-    const { summary, placeStats, customers } = data;
+    const { summary, placeStats, customers, customersByCompany, isAllCompanies } = data;
     
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Customer Management System';
@@ -1537,7 +1554,9 @@ const exportToExcelJS = async (data, res) => {
     });
     
     const headers = Object.keys(customers[0] || {});
-    const lastColLetter = String.fromCharCode(64 + headers.length);
+    // Remove 'Company Name' from headers if it exists (since we'll use company as separator)
+    const displayHeaders = headers.filter(h => h !== 'Company Name');
+    const lastColLetter = String.fromCharCode(64 + displayHeaders.length);
     
     // Title row
     customerSheet.mergeCells(`A1:${lastColLetter}1`);
@@ -1569,7 +1588,7 @@ const exportToExcelJS = async (data, res) => {
     customerSheet.addRow([]);
     
     // Header row
-    const headerRow = customerSheet.addRow(headers);
+    const headerRow = customerSheet.addRow(displayHeaders);
     headerRow.height = 32;
     headerRow.eachCell((cell) => {
       cell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
@@ -1580,48 +1599,124 @@ const exportToExcelJS = async (data, res) => {
     
     const headerRowNumber = headerRow.number;
     
-    // Data rows
-    customers.forEach((customer, index) => {
-      const values = headers.map(header => customer[header] || '');
-      const row = customerSheet.addRow(values);
-      row.height = 22;
-      row.eachCell((cell) => {
-        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
-        cell.alignment = { vertical: "middle", horizontal: "left" };
-        cell.font = { name: "Arial", size: 10 };
-      });
+    // Data rows with company separators
+    let globalIndex = 1;
+    
+    if (isAllCompanies && customersByCompany && Object.keys(customersByCompany).length > 0) {
+      // Sort company names alphabetically
+      const sortedCompanyNames = Object.keys(customersByCompany).sort();
       
-      // Alternate row coloring
-      if ((index + 1) % 2 === 0) {
-        row.eachCell((cell) => { 
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; 
-        });
-      }
-      
-      // Status coloring
-      const statusIndex = headers.indexOf('Status');
-      if (statusIndex !== -1) {
-        const statusCell = row.getCell(statusIndex + 1);
-        if (customer['Status'] === 'Active') {
-          statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
-          statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF065F46" } };
-        } else {
-          statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
-          statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF991B1B" } };
+      for (const companyName of sortedCompanyNames) {
+        const companyCustomers = customersByCompany[companyName];
+        
+        if (companyCustomers && companyCustomers.length > 0) {
+          // Add company separator row
+          const separatorRow = customerSheet.addRow({});
+          separatorRow.height = 24;
+          
+          // Merge cells across all columns for the company name
+          const separatorCells = [];
+          for (let i = 0; i < displayHeaders.length; i++) {
+            separatorCells.push(String.fromCharCode(65 + i));
+          }
+          const separatorRange = `${separatorCells[0]}${separatorRow.number}:${separatorCells[separatorCells.length - 1]}${separatorRow.number}`;
+          customerSheet.mergeCells(separatorRange);
+          
+          const companyCell = customerSheet.getCell(`${separatorCells[0]}${separatorRow.number}`);
+          companyCell.value = `=== ${companyName.toUpperCase()} ===`;
+          companyCell.font = { name: "Arial", bold: true, size: 12, color: { argb: "FF1E40AF" } };
+          companyCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } };
+          companyCell.alignment = { horizontal: "left", vertical: "middle" }; // Changed from "center" to "left"
+          
+          // Add border to separator row
+          for (let i = 0; i < displayHeaders.length; i++) {
+            const cell = customerSheet.getCell(`${separatorCells[i]}${separatorRow.number}`);
+            cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+          }
+          
+          // Add customers for this company
+          companyCustomers.forEach((customer, idx) => {
+            const values = displayHeaders.map(header => {
+              // Skip Company Name as we're using company separators
+              if (header === 'Company Name') return '';
+              return customer[header] || '';
+            });
+            const row = customerSheet.addRow(values);
+            row.height = 22;
+            row.eachCell((cell, colIndex) => {
+              cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+              cell.alignment = { vertical: "middle", horizontal: "left" };
+              cell.font = { name: "Arial", size: 10 };
+            });
+            
+            // Alternate row coloring
+            if (globalIndex % 2 === 0) {
+              row.eachCell((cell) => { 
+                cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; 
+              });
+            }
+            
+            // Status coloring
+            const statusIndex = displayHeaders.indexOf('Status');
+            if (statusIndex !== -1) {
+              const statusCell = row.getCell(statusIndex + 1);
+              if (customer['Status'] === 'Active') {
+                statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+                statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF065F46" } };
+              } else {
+                statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+                statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF991B1B" } };
+              }
+            }
+            
+            globalIndex++;
+          });
         }
       }
-    });
+    } else {
+      // Single company - just show customers without company separators
+      customers.forEach((customer, index) => {
+        const values = displayHeaders.map(header => customer[header] || '');
+        const row = customerSheet.addRow(values);
+        row.height = 22;
+        row.eachCell((cell) => {
+          cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+          cell.alignment = { vertical: "middle", horizontal: "left" };
+          cell.font = { name: "Arial", size: 10 };
+        });
+        
+        // Alternate row coloring
+        if ((index + 1) % 2 === 0) {
+          row.eachCell((cell) => { 
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; 
+          });
+        }
+        
+        // Status coloring
+        const statusIndex = displayHeaders.indexOf('Status');
+        if (statusIndex !== -1) {
+          const statusCell = row.getCell(statusIndex + 1);
+          if (customer['Status'] === 'Active') {
+            statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+            statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF065F46" } };
+          } else {
+            statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+            statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF991B1B" } };
+          }
+        }
+      });
+    }
     
     // Auto-filter and freeze
     customerSheet.autoFilter = {
       from: { row: headerRowNumber, column: 1 },
-      to: { row: headerRowNumber, column: headers.length },
+      to: { row: headerRowNumber, column: displayHeaders.length },
     };
     customerSheet.views = [{ state: "frozen", ySplit: headerRowNumber }];
     
     // Auto-size columns
     customerSheet.columns.forEach((column, idx) => {
-      let maxLength = headers[idx]?.length || 10;
+      let maxLength = displayHeaders[idx]?.length || 10;
       column.eachCell?.({ includeEmpty: true }, (cell) => {
         const cellValue = cell.value ? cell.value.toString().length : 0;
         maxLength = Math.max(maxLength, cellValue);
@@ -1643,7 +1738,7 @@ const exportToExcelJS = async (data, res) => {
     
     summarySheet.addRow([]);
     
-    // Key Metrics (removed Synced to Zoho and Unsynced to Zoho)
+    // Key Metrics
     summarySheet.getCell('A3').value = "KEY METRICS";
     summarySheet.getCell('A3').font = { name: "Arial", size: 12, bold: true };
     summarySheet.getCell('A3').fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
