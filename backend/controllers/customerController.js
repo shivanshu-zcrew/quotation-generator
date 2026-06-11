@@ -1381,6 +1381,7 @@ exports.forceSyncCustomer = async (req, res) => {
   }
 };
 
+ 
 const calculatePlaceStats = (customers) => {
   const stats = {
     uae: {},
@@ -1431,6 +1432,7 @@ const getTaxTreatmentLabel = (taxTreatment) => {
   const treatment = TAX_TREATMENTS.find(t => t.value === taxTreatment);
   return treatment ? treatment.label : taxTreatment;
 };
+
 
 exports.exportCustomers = async (req, res) => {
   try {
@@ -1522,176 +1524,349 @@ exports.exportCustomers = async (req, res) => {
 };
 
 const exportToExcelJS = async (data, res) => {
-  const { summary, placeStats, customers } = data;
-  
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Customer Management System';
-  workbook.created = new Date();
-  
-  const summarySheet = workbook.addWorksheet('Summary', {
-    properties: { tabColor: { argb: 'FF4CAF50' } }
-  });
-  
-  summarySheet.getColumn('A').width = 30;
-  summarySheet.getColumn('B').width = 20;
-  
-  summarySheet.mergeCells('A1:B1');
-  const titleCell = summarySheet.getCell('A1');
-  titleCell.value = 'CUSTOMER EXPORT REPORT';
-  titleCell.font = { size: 16, bold: true, color: { argb: 'FF1F2937' } };
-  titleCell.alignment = { horizontal: 'center' };
-  
-  summarySheet.addRow([]);
-  summarySheet.addRow(['Generated on:', new Date().toLocaleString()]);
-  summarySheet.addRow([]);
-  
-  summarySheet.addRow(['=== SUMMARY ===']).font = { bold: true, size: 12 };
-  summarySheet.addRow(['Total Customers', summary.totalCustomers]);
-  summarySheet.addRow(['Active Customers', summary.activeCustomers]);
-  summarySheet.addRow(['Inactive Customers', summary.inactiveCustomers]);
-  summarySheet.addRow(['VAT Registered', summary.vatRegistered]);
-  summarySheet.addRow(['Non-VAT Registered', summary.nonVatRegistered]);
-  summarySheet.addRow(['Synced to Zoho', summary.syncedToZoho]);
-  summarySheet.addRow(['Unsynced to Zoho', summary.unsyncedToZoho]);
-  summarySheet.addRow([]);
-  
-  for (let i = 8; i <= 14; i++) {
-    const row = summarySheet.getRow(i);
-    row.getCell(2).alignment = { horizontal: 'right' };
-    row.getCell(2).font = { bold: true };
-  }
-  
-  summarySheet.addRow(['=== PLACE STATISTICS ===']).font = { bold: true, size: 12 };
-  summarySheet.addRow(['UAE EMIRATES']).font = { italic: true };
-  
-  for (const [emirate, count] of Object.entries(placeStats.uae)) {
-    if (emirate !== 'total') {
-      summarySheet.addRow([emirate, count]);
-    }
-  }
-  summarySheet.addRow(['Total UAE Customers', placeStats.uae.total]).font = { bold: true };
-  summarySheet.addRow([]);
-  
-  summarySheet.addRow(['GCC COUNTRIES']).font = { italic: true };
-  for (const [country, count] of Object.entries(placeStats.gcc)) {
-    if (country !== 'total') {
-      summarySheet.addRow([country, count]);
-    }
-  }
-  summarySheet.addRow(['Total GCC Customers', placeStats.gcc.total]).font = { bold: true };
-  summarySheet.addRow([]);
-  
-  if (placeStats.other.length > 0) {
-    summarySheet.addRow(['OTHER PLACES']).font = { italic: true };
-    summarySheet.addRow(['Customer Name', 'Place of Supply', 'Email', 'Phone']);
-    placeStats.other.forEach(customer => {
-      summarySheet.addRow([customer.name, customer.placeOfSupply, customer.email, customer.phone]);
-    });
-    summarySheet.addRow([]);
-  }
-  
-  summarySheet.eachRow((row, rowNumber) => {
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
-      };
-    });
-  });
-  
-  const customerSheet = workbook.addWorksheet('Customer Details', {
-    properties: { tabColor: { argb: 'FF2196F3' } }
-  });
-  
-  const headers = Object.keys(customers[0] || {});
-  const headerRow = customerSheet.addRow(headers);
-  
-  headerRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF1F2937' }
-    };
-    cell.alignment = { horizontal: 'center', vertical: 'middle' };
-    cell.border = {
-      top: { style: 'thin' },
-      left: { style: 'thin' },
-      bottom: { style: 'thin' },
-      right: { style: 'thin' }
-    };
-  });
-  
-  customers.forEach(customer => {
-    const row = customerSheet.addRow(Object.values(customer));
+  try {
+    const { summary, placeStats, customers } = data;
     
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
-      };
-      cell.alignment = { vertical: 'middle' };
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Customer Management System';
+    workbook.created = new Date();
+    
+    // ==================== 1. CUSTOMER DETAILS SHEET (FIRST) ====================
+    const customerSheet = workbook.addWorksheet("📋 Customer Details", {
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     });
-  });
-  
-  customerSheet.columns.forEach(column => {
-    let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, (cell) => {
-      const columnLength = cell.value ? cell.value.toString().length : 10;
-      if (columnLength > maxLength) {
-        maxLength = columnLength;
+    
+    const headers = Object.keys(customers[0] || {});
+    const lastColLetter = String.fromCharCode(64 + headers.length);
+    
+    // Title row
+    customerSheet.mergeCells(`A1:${lastColLetter}1`);
+    const titleCell = customerSheet.getCell('A1');
+    titleCell.value = "CUSTOMER DETAILS REPORT";
+    titleCell.font = { name: "Arial", size: 20, bold: true, color: { argb: "FFFFFFFF" } };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+    titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+    customerSheet.getRow(1).height = 35;
+    
+    // Summary row
+    customerSheet.mergeCells("A2:D2");
+    customerSheet.getCell("A2").value = `Generated: ${new Date().toLocaleString()}`;
+    customerSheet.mergeCells("E2:H2");
+    customerSheet.getCell("E2").value = `Total Customers: ${summary.totalCustomers}`;
+    customerSheet.mergeCells("I2:L2");
+    customerSheet.getCell("I2").value = `Active: ${summary.activeCustomers}`;
+    customerSheet.mergeCells("M2:P2");
+    customerSheet.getCell("M2").value = `Inactive: ${summary.inactiveCustomers}`;
+    customerSheet.mergeCells("Q2:T2");
+    customerSheet.getCell("Q2").value = `VAT Registered: ${summary.vatRegistered}`;
+    
+    ["A2", "E2", "I2", "M2", "Q2"].forEach((cell) => {
+      customerSheet.getCell(cell).font = { name: "Arial", bold: true, size: 10 };
+      customerSheet.getCell(cell).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+      customerSheet.getCell(cell).border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    customerSheet.addRow([]);
+    
+    // Header row
+    const headerRow = customerSheet.addRow(headers);
+    headerRow.height = 32;
+    headerRow.eachCell((cell) => {
+      cell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+      cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    const headerRowNumber = headerRow.number;
+    
+    // Data rows
+    customers.forEach((customer, index) => {
+      const values = headers.map(header => customer[header] || '');
+      const row = customerSheet.addRow(values);
+      row.height = 22;
+      row.eachCell((cell) => {
+        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+        cell.alignment = { vertical: "middle", horizontal: "left" };
+        cell.font = { name: "Arial", size: 10 };
+      });
+      
+      // Alternate row coloring
+      if ((index + 1) % 2 === 0) {
+        row.eachCell((cell) => { 
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; 
+        });
+      }
+      
+      // Status coloring
+      const statusIndex = headers.indexOf('Status');
+      if (statusIndex !== -1) {
+        const statusCell = row.getCell(statusIndex + 1);
+        if (customer['Status'] === 'Active') {
+          statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD1FAE5" } };
+          statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF065F46" } };
+        } else {
+          statusCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+          statusCell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FF991B1B" } };
+        }
       }
     });
-    column.width = Math.min(maxLength + 2, 50);
-  });
-  
-  customerSheet.views = [
-    { state: 'frozen', ySplit: 1 }
-  ];
-  
-  const chartSheet = workbook.addWorksheet('Visual Statistics', {
-    properties: { tabColor: { argb: 'FFFF9800' } }
-  });
-  
-  chartSheet.addRow(['UAE Emirates Distribution']).font = { bold: true, size: 14 };
-  chartSheet.addRow([]);
-  
-  const uaeData = Object.entries(placeStats.uae)
-    .filter(([key]) => key !== 'total')
-    .map(([emirate, count]) => [emirate, count]);
-  
-  chartSheet.addRows([['Emirate', 'Number of Customers'], ...uaeData]);
-  
-  chartSheet.addRow([]);
-  chartSheet.addRow(['GCC Countries Distribution']).font = { bold: true, size: 14 };
-  chartSheet.addRow([]);
-  
-  const gccData = Object.entries(placeStats.gcc)
-    .filter(([key]) => key !== 'total')
-    .map(([country, count]) => [country, count]);
-  
-  chartSheet.addRows([['Country', 'Number of Customers'], ...gccData]);
-  
-  chartSheet.columns.forEach(column => {
-    column.width = 25;
-  });
-  
-  const filename = `customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
-  
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-  res.setHeader('X-Summary', JSON.stringify({ 
-    total: summary.totalCustomers, 
-    uaeTotal: placeStats.uae.total, 
-    gccTotal: placeStats.gcc.total 
-  }));
-  
-  await workbook.xlsx.write(res);
-  res.end();
+    
+    // Auto-filter and freeze
+    customerSheet.autoFilter = {
+      from: { row: headerRowNumber, column: 1 },
+      to: { row: headerRowNumber, column: headers.length },
+    };
+    customerSheet.views = [{ state: "frozen", ySplit: headerRowNumber }];
+    
+    // Auto-size columns
+    customerSheet.columns.forEach((column, idx) => {
+      let maxLength = headers[idx]?.length || 10;
+      column.eachCell?.({ includeEmpty: true }, (cell) => {
+        const cellValue = cell.value ? cell.value.toString().length : 0;
+        maxLength = Math.max(maxLength, cellValue);
+      });
+      column.width = Math.min(maxLength + 2, 50);
+    });
+    
+    // ==================== 2. SUMMARY & ANALYTICS SHEET (SECOND) ====================
+    const summarySheet = workbook.addWorksheet("📊 Summary & Analytics");
+    
+    // Header
+    summarySheet.mergeCells('A1:B1');
+    const summaryTitle = summarySheet.getCell('A1');
+    summaryTitle.value = "CUSTOMER ANALYTICS SUMMARY";
+    summaryTitle.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
+    summaryTitle.alignment = { horizontal: "center", vertical: "middle" };
+    summaryTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+    summarySheet.getRow(1).height = 35;
+    
+    summarySheet.addRow([]);
+    
+    // Key Metrics (removed Synced to Zoho and Unsynced to Zoho)
+    summarySheet.getCell('A3').value = "KEY METRICS";
+    summarySheet.getCell('A3').font = { name: "Arial", size: 12, bold: true };
+    summarySheet.getCell('A3').fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+    
+    summarySheet.getCell('A4').value = "Total Customers";
+    summarySheet.getCell('B4').value = summary.totalCustomers;
+    summarySheet.getCell('A5').value = "Active Customers";
+    summarySheet.getCell('B5').value = summary.activeCustomers;
+    summarySheet.getCell('A6').value = "Inactive Customers";
+    summarySheet.getCell('B6').value = summary.inactiveCustomers;
+    summarySheet.getCell('A7').value = "VAT Registered";
+    summarySheet.getCell('B7').value = summary.vatRegistered;
+    summarySheet.getCell('A8').value = "Non-VAT Registered";
+    summarySheet.getCell('B8').value = summary.nonVatRegistered;
+    
+    summarySheet.addRow([]);
+    
+    // UAE Emirates Distribution
+    summarySheet.getCell('A10').value = "UAE EMIRATES DISTRIBUTION";
+    summarySheet.getCell('A10').font = { name: "Arial", size: 12, bold: true };
+    summarySheet.getCell('A10').fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+    
+    summarySheet.getCell('A11').value = "Emirate";
+    summarySheet.getCell('B11').value = "Count";
+    
+    ['A11', 'B11'].forEach(cell => {
+      const headerCell = summarySheet.getCell(cell);
+      headerCell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+      headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+      headerCell.alignment = { horizontal: "center", vertical: "middle" };
+      headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    let uaeRow = 12;
+    const uaeEntries = Object.entries(placeStats.uae || {}).filter(([key]) => key !== 'total');
+    
+    uaeEntries.forEach(([emirate, count], idx) => {
+      summarySheet.getCell(`A${uaeRow}`).value = emirate;
+      summarySheet.getCell(`B${uaeRow}`).value = count;
+      
+      if (idx % 2 === 0) {
+        summarySheet.getRow(uaeRow).eachCell(cell => {
+          if (!cell.fill) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+          }
+        });
+      }
+      uaeRow++;
+    });
+    
+    if (uaeEntries.length > 0) {
+      summarySheet.getCell(`A${uaeRow}`).value = "TOTAL UAE";
+      summarySheet.getCell(`B${uaeRow}`).value = placeStats.uae.total;
+      summarySheet.getRow(uaeRow).font = { bold: true };
+      summarySheet.getRow(uaeRow).eachCell(cell => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      });
+      uaeRow++;
+    }
+    
+    summarySheet.addRow([]);
+    
+    // GCC Countries Distribution
+    const gccStartRow = uaeRow + 1;
+    summarySheet.getCell(`A${gccStartRow}`).value = "GCC COUNTRIES DISTRIBUTION";
+    summarySheet.getCell(`A${gccStartRow}`).font = { name: "Arial", size: 12, bold: true };
+    summarySheet.getCell(`A${gccStartRow}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+    
+    summarySheet.getCell(`A${gccStartRow + 1}`).value = "Country";
+    summarySheet.getCell(`B${gccStartRow + 1}`).value = "Count";
+    
+    [`A${gccStartRow + 1}`, `B${gccStartRow + 1}`].forEach(cell => {
+      const headerCell = summarySheet.getCell(cell);
+      headerCell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+      headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+      headerCell.alignment = { horizontal: "center", vertical: "middle" };
+      headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    let gccRow = gccStartRow + 2;
+    const gccEntries = Object.entries(placeStats.gcc || {}).filter(([key]) => key !== 'total');
+    
+    gccEntries.forEach(([country, count], idx) => {
+      summarySheet.getCell(`A${gccRow}`).value = country;
+      summarySheet.getCell(`B${gccRow}`).value = count;
+      
+      if (idx % 2 === 0) {
+        summarySheet.getRow(gccRow).eachCell(cell => {
+          if (!cell.fill) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+          }
+        });
+      }
+      gccRow++;
+    });
+    
+    if (gccEntries.length > 0) {
+      summarySheet.getCell(`A${gccRow}`).value = "TOTAL GCC";
+      summarySheet.getCell(`B${gccRow}`).value = placeStats.gcc.total;
+      summarySheet.getRow(gccRow).font = { bold: true };
+      summarySheet.getRow(gccRow).eachCell(cell => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      });
+      gccRow++;
+    }
+    
+    // Other Places section
+    if (placeStats.other && placeStats.other.length > 0) {
+      const otherStartRow = gccRow + 1;
+      summarySheet.getCell(`A${otherStartRow}`).value = "OTHER PLACES";
+      summarySheet.getCell(`A${otherStartRow}`).font = { name: "Arial", size: 12, bold: true };
+      summarySheet.getCell(`A${otherStartRow}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      
+      summarySheet.getCell(`A${otherStartRow + 1}`).value = "Customer Name";
+      summarySheet.getCell(`B${otherStartRow + 1}`).value = "Place of Supply";
+      summarySheet.getCell(`C${otherStartRow + 1}`).value = "Email";
+      summarySheet.getCell(`D${otherStartRow + 1}`).value = "Phone";
+      
+      [`A${otherStartRow + 1}`, `B${otherStartRow + 1}`, `C${otherStartRow + 1}`, `D${otherStartRow + 1}`].forEach(cell => {
+        const headerCell = summarySheet.getCell(cell);
+        headerCell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+        headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+        headerCell.alignment = { horizontal: "center", vertical: "middle" };
+        headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+      });
+      
+      let otherRow = otherStartRow + 2;
+      placeStats.other.forEach((customer, idx) => {
+        summarySheet.getCell(`A${otherRow}`).value = customer.name || '';
+        summarySheet.getCell(`B${otherRow}`).value = customer.placeOfSupply || '';
+        summarySheet.getCell(`C${otherRow}`).value = customer.email || '';
+        summarySheet.getCell(`D${otherRow}`).value = customer.phone || '';
+        
+        if (idx % 2 === 0) {
+          summarySheet.getRow(otherRow).eachCell(cell => {
+            if (!cell.fill) {
+              cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+            }
+          });
+        }
+        otherRow++;
+      });
+      
+      summarySheet.getColumn('C').width = 30;
+      summarySheet.getColumn('D').width = 20;
+    }
+    
+    summarySheet.getColumn('A').width = 30;
+    summarySheet.getColumn('B').width = 15;
+    
+    // Footer
+    const lastRow = summarySheet.rowCount + 1;
+    summarySheet.mergeCells(`A${lastRow}:B${lastRow}`);
+    summarySheet.getCell(`A${lastRow}`).value = `Report generated on ${new Date().toLocaleString()} | Total Customers: ${summary.totalCustomers}`;
+    summarySheet.getCell(`A${lastRow}`).font = { name: "Arial", size: 9, italic: true };
+    summarySheet.getCell(`A${lastRow}`).alignment = { horizontal: "center" };
+    
+    summarySheet.views = [{ state: "frozen", ySplit: 3 }];
+    
+    // ==================== 3. VISUAL STATISTICS SHEET ====================
+    const chartSheet = workbook.addWorksheet("📈 Visual Statistics");
+    
+    chartSheet.mergeCells('A1:B1');
+    const chartTitle = chartSheet.getCell('A1');
+    chartTitle.value = "CUSTOMER DISTRIBUTION DATA";
+    chartTitle.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
+    chartTitle.alignment = { horizontal: "center", vertical: "middle" };
+    chartTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+    chartSheet.getRow(1).height = 35;
+    
+    chartSheet.addRow([]);
+    
+    // UAE Distribution
+    chartSheet.getCell('A3').value = "UAE Emirates Distribution";
+    chartSheet.getCell('A3').font = { name: "Arial", size: 12, bold: true };
+    chartSheet.getCell('A4').value = "Emirate";
+    chartSheet.getCell('B4').value = "Count";
+    
+    let chartRow = 5;
+    uaeEntries.forEach(([emirate, count]) => {
+      chartSheet.getCell(`A${chartRow}`).value = emirate;
+      chartSheet.getCell(`B${chartRow}`).value = count;
+      chartRow++;
+    });
+    
+    chartSheet.addRow([]);
+    chartSheet.addRow([]);
+    
+    // GCC Distribution
+    chartSheet.getCell(`A${chartRow + 1}`).value = "GCC Countries Distribution";
+    chartSheet.getCell(`A${chartRow + 1}`).font = { name: "Arial", size: 12, bold: true };
+    chartSheet.getCell(`A${chartRow + 2}`).value = "Country";
+    chartSheet.getCell(`B${chartRow + 2}`).value = "Count";
+    
+    let gccChartRow = chartRow + 3;
+    gccEntries.forEach(([country, count]) => {
+      chartSheet.getCell(`A${gccChartRow}`).value = country;
+      chartSheet.getCell(`B${gccChartRow}`).value = count;
+      gccChartRow++;
+    });
+    
+    chartSheet.getColumn('A').width = 30;
+    chartSheet.getColumn('B').width = 15;
+    
+    const filename = `customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+    
+    // Set headers BEFORE writing
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+    res.setHeader('X-Summary', JSON.stringify({ 
+      total: summary.totalCustomers, 
+      uaeTotal: placeStats.uae?.total || 0, 
+      gccTotal: placeStats.gcc?.total || 0 
+    }));
+    
+    // Write to buffer first, then send
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.send(buffer);
+    
+  } catch (error) {
+    console.error('Excel export error:', error);
+    throw error;
+  }
 };
 
 const exportToCSV = (data, res) => {
@@ -1765,6 +1940,10 @@ const exportToCSV = (data, res) => {
   
   res.status(200).send(csvContent);
 };
+
+// ==================== MAIN EXPORT FUNCTION ====================
+ 
+ 
 
 exports.getCustomerPlaceStats = async (req, res) => {
   try {

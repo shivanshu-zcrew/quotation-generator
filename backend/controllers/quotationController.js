@@ -1996,23 +1996,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
       return res.status(404).json({ success: false, message: "No quotations found" });
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Currency conversion for the REPORT-LEVEL display currency.
-    //
-    // Every stored *InBaseCurrency field is already in AED. When the user
-    // asks for a different display currency we convert FROM AED INTO it.
-    //
-    // We fetch rates with the display currency as base: getRates(currency)
-    // returns "1 <currency> = X <other>", so rates.AED is the
-    // <currency> -> AED multiplier. To go the other way (AED -> currency)
-    // we DIVIDE by rates.AED.
-    //
-    // NOTE: this conversion is ONLY for the aggregated/AED-derived columns
-    // shown in the chosen display currency. Each quotation's own stored
-    // amounts (q.total, q.subtotal, q.taxAmount, q.discountAmount and their
-    // *InBaseCurrency counterparts) are written straight from the DB with NO
-    // recalculation.
-    // ──────────────────────────────────────────────────────────────
+    // Currency conversion for the REPORT-LEVEL display currency
     let exchangeRates = null;
     if (currency !== 'AED') {
       try {
@@ -2022,26 +2006,54 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }
     }
 
-    // Convert an AED amount into the selected display currency.
     const convertFromAED = (amountInAED) => {
       if (currency === 'AED' || !exchangeRates) return amountInAED;
-      const rate = exchangeRates['AED'] || 1; // 1 <currency> = rate AED
+      const rate = exchangeRates['AED'] || 1;
       if (!rate || rate <= 0) return amountInAED;
       return amountInAED / rate;
     };
 
-    // Awarded revenue (sum of stored AED totals), shown in display currency.
-    const awardedRevenueInAED = quotations.reduce((sum, q) => {
-      return q.status === "awarded" ? sum + (q.totalInBaseCurrency || 0) : sum;
-    }, 0);
+    // Calculate metrics for analytics
+    const totalQuotations = quotations.length;
+    const awardedQuotations = quotations.filter(q => q.status === "awarded");
+    const conversionRate = totalQuotations > 0 ? (awardedQuotations.length / totalQuotations) * 100 : 0;
+
+    // Status breakdown
+    const statusOrder = ['draft', 'pending', 'pending_admin', 'approved', 'ops_approved', 'awarded', 'rejected', 'not_awarded', 'expired'];
+    const statusDisplayNames = {
+      'draft': 'Draft',
+      'pending': 'Pending',
+      'pending_admin': 'Pending Admin',
+      'approved': 'Approved',
+      'ops_approved': 'Ops Approved',
+      'awarded': 'Awarded',
+      'rejected': 'Rejected',
+      'not_awarded': 'Not Awarded',
+      'expired': 'Expired'
+    };
+    
+    const statusBreakdown = {};
+    quotations.forEach(q => {
+      const statusKey = q.status;
+      if (!statusBreakdown[statusKey]) {
+        statusBreakdown[statusKey] = { count: 0, percentage: 0 };
+      }
+      statusBreakdown[statusKey].count++;
+    });
+    
+    Object.keys(statusBreakdown).forEach(status => {
+      statusBreakdown[status].percentage = (statusBreakdown[status].count / totalQuotations) * 100;
+    });
+
+    const approvedCount = quotations.filter(q => ["approved", "ops_approved"].includes(q.status)).length;
+    const awardedCount = awardedQuotations.length;
+    const pendingCount = quotations.filter(q => ["pending", "pending_admin"].includes(q.status)).length;
+    const rejectedCount = quotations.filter(q => ["rejected", "not_awarded"].includes(q.status)).length;
+    
+    const awardedRevenueInAED = awardedQuotations.reduce((sum, q) => sum + (q.totalInBaseCurrency || 0), 0);
     const awardedRevenue = convertFromAED(awardedRevenueInAED);
 
-    const approvedCount = quotations.filter((q) => ["approved", "ops_approved"].includes(q.status)).length;
-    const awardedCount  = quotations.filter((q) => q.status === "awarded").length;
-    const pendingCount  = quotations.filter((q) => ["pending", "pending_admin"].includes(q.status)).length;
-    const rejectedCount = quotations.filter((q) => ["rejected", "not_awarded"].includes(q.status)).length;
-
-    // Group quotations by company for subtotals
+    // Group quotations by company
     const quotationsByCompany = {};
     quotations.forEach((q) => {
       const companyName = q.companySnapshot?.name || q.companyId?.name || "Unknown";
@@ -2049,7 +2061,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
       quotationsByCompany[companyName].push(q);
     });
 
-    // Company-wise statistics (only if all companies are selected)
+    // Company-wise statistics (no filters)
     let companyStats = null;
     if (isAllCompanies) {
       companyStats = {};
@@ -2057,15 +2069,14 @@ exports.exportQuotationsToExcel = async (req, res) => {
         const companyName = q.companySnapshot?.name || q.companyId?.name || "Unknown";
         if (!companyStats[companyName]) {
           companyStats[companyName] = {
+            companyName: companyName,
             totalQuotations: 0,
-            totalValueAED: 0,
-            totalValueConverted: 0,
-            awardedValueAED: 0,
-            awardedValueConverted: 0,
+            awardedRevenue: 0,
             approvedCount: 0,
             awardedCount: 0,
             pendingCount: 0,
-            rejectedCount: 0
+            rejectedCount: 0,
+            conversionRate: 0
           };
         }
 
@@ -2073,12 +2084,9 @@ exports.exportQuotationsToExcel = async (req, res) => {
         const valueConverted = convertFromAED(valueInAED);
 
         companyStats[companyName].totalQuotations++;
-        companyStats[companyName].totalValueAED += valueInAED;
-        companyStats[companyName].totalValueConverted += valueConverted;
-
+        
         if (q.status === "awarded") {
-          companyStats[companyName].awardedValueAED += valueInAED;
-          companyStats[companyName].awardedValueConverted += valueConverted;
+          companyStats[companyName].awardedRevenue += valueConverted;
           companyStats[companyName].awardedCount++;
         } else if (["approved", "ops_approved"].includes(q.status)) {
           companyStats[companyName].approvedCount++;
@@ -2088,28 +2096,27 @@ exports.exportQuotationsToExcel = async (req, res) => {
           companyStats[companyName].rejectedCount++;
         }
       });
+      
+      // Calculate conversion rates
+      Object.keys(companyStats).forEach(company => {
+        const stats = companyStats[company];
+        stats.conversionRate = stats.totalQuotations > 0 ? (stats.awardedCount / stats.totalQuotations) * 100 : 0;
+      });
     }
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "Quotation Management System";
     workbook.created = new Date();
 
-    const worksheet = workbook.addWorksheet("Quotations", {
+    // ==================== 1. QUOTATIONS SHEET (FIRST) ====================
+    const worksheet = workbook.addWorksheet("📋 Quotations", {
       pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
     });
 
     const hasConversion = currency !== 'AED';
+    const currentDate = new Date();
 
-    // ── Column definitions ──────────────────────────────────────────
-    // Money columns sourced directly from the DB per row:
-    //   subtotalOriginal      <- q.subtotal              (quote currency)
-    //   taxAmount             <- q.taxAmount             (quote currency)
-    //   discountAmount        <- q.discountAmount        (quote currency)
-    //   totalOriginal         <- q.total                 (quote currency)
-    //   subtotalInAED         <- q.subtotalInBaseCurrency (AED)
-    //   totalInAED            <- q.totalInBaseCurrency    (AED)
-    // Plus a SEPARATE, clearly-labelled cumulative column:
-    //   runningTotal          <- running sum of totalInAED within company
+    // Column definitions with Age and Days To Expiry
     const columns = [
       { key: "slNo", width: 8 },
       { key: "quotationNumber", width: 25 },
@@ -2137,13 +2144,9 @@ exports.exportQuotationsToExcel = async (req, res) => {
       columns.push({ key: "totalConverted", width: 20 });
     }
 
-    // Separate, clearly-labelled cumulative column (not the per-row subtotal).
-    columns.push({ key: "runningTotalAED", width: 22 });
-    if (hasConversion) {
-      columns.push({ key: "runningTotalConverted", width: 24 });
-    }
-
     columns.push(
+      { key: "ageDays", width: 12 },
+      { key: "daysToExpiry", width: 14 },
       { key: "status", width: 18 },
       { key: "createdBy", width: 25 },
       { key: "createdAt", width: 22 },
@@ -2158,16 +2161,16 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     const lastColLetter = worksheet.getColumn(columns.length).letter;
 
-    // ── Title row ───────────────────────────────────────────────────
+    // Title row
     worksheet.mergeCells(`A1:${lastColLetter}1`);
-    const titleCell = worksheet.getCell("A1");
-    titleCell.value = "QUOTATIONS REPORT";
-    titleCell.font = { name: "Arial", size: 20, bold: true, color: { argb: "FFFFFFFF" } };
-    titleCell.alignment = { horizontal: "center", vertical: "middle" };
-    titleCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
-    worksheet.getRow(1).height = 30;
+    const titleCellQuot = worksheet.getCell("A1");
+    titleCellQuot.value = "QUOTATIONS DETAIL REPORT";
+    titleCellQuot.font = { name: "Arial", size: 20, bold: true, color: { argb: "FFFFFFFF" } };
+    titleCellQuot.alignment = { horizontal: "center", vertical: "middle" };
+    titleCellQuot.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+    worksheet.getRow(1).height = 35;
 
-    // ── Summary row ─────────────────────────────────────────────────
+    // Summary row
     worksheet.mergeCells("A2:D2");
     worksheet.getCell("A2").value = `Generated: ${new Date().toLocaleString()}`;
     worksheet.mergeCells("E2:H2");
@@ -2189,7 +2192,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     worksheet.addRow([]);
 
-    // ── Header row ──────────────────────────────────────────────────
+    // Header row
     const headerCells = [
       "SL No", "Quotation Number", "Company", "Customer Name", "Customer Email", "Customer Phone",
       "Contact Person", "Project Name", "Date", "Expiry Date", "Query Date",
@@ -2201,11 +2204,8 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
     if (hasConversion) headerCells.push(`Total in ${currency}`);
 
-    headerCells.push("Running Total in AED");
-    if (hasConversion) headerCells.push(`Running Total in ${currency}`);
-
     headerCells.push(
-      "Status", "Created By", "Created At", "Items Count",
+      "Age (Days)", "Days To Expiry", "Status", "Created By", "Created At", "Items Count",
       "Payment Terms", "Delivery Terms", "TL", "TRN"
     );
 
@@ -2221,19 +2221,14 @@ exports.exportQuotationsToExcel = async (req, res) => {
     const headerRowNumber = headerRow.number;
 
     let globalIndex = 1;
-    const sortedCompanies = Object.keys(quotationsByCompany).sort();
+    const sortedCompaniesQuot = Object.keys(quotationsByCompany).sort();
 
-    sortedCompanies.forEach((companyName) => {
+    sortedCompaniesQuot.forEach((companyName) => {
       const companyQuotations = quotationsByCompany[companyName];
 
-      // Running cumulative totals (the clearly-labelled separate column),
-      // reset per company.
-      let runningTotalAED = 0;
-      let runningTotalConverted = 0;
-
-      if (sortedCompanies.length > 1) {
+      if (sortedCompaniesQuot.length > 1) {
         const companyHeaderRow = worksheet.addRow({ company: `=== ${companyName.toUpperCase()} ===` });
-        companyHeaderRow.height = 22;
+        companyHeaderRow.height = 24;
         companyHeaderRow.font = { name: "Arial", bold: true, size: 12, color: { argb: "FF1E40AF" } };
         companyHeaderRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFF6FF" } };
         companyHeaderRow.eachCell((cell) => {
@@ -2242,17 +2237,18 @@ exports.exportQuotationsToExcel = async (req, res) => {
       }
 
       companyQuotations.forEach((q) => {
-        // All amounts pulled straight from the stored DB fields. No recompute.
         const subtotalOriginal = Number(q.subtotal) || 0;
-        const taxAmount        = Number(q.taxAmount) || 0;
-        const discountAmount   = Number(q.discountAmount) || 0;
-        const totalOriginal    = Number(q.total) || 0;
-        const subtotalInAED    = Number(q.subtotalInBaseCurrency) || 0;
-        const totalInAED       = Number(q.totalInBaseCurrency) || 0;
+        const taxAmount = Number(q.taxAmount) || 0;
+        const discountAmount = Number(q.discountAmount) || 0;
+        const totalOriginal = Number(q.total) || 0;
+        const subtotalInAED = Number(q.subtotalInBaseCurrency) || 0;
+        const totalInAED = Number(q.totalInBaseCurrency) || 0;
 
-        // Cumulative running total uses the stored AED total per quotation.
-        runningTotalAED += totalInAED;
-        runningTotalConverted += convertFromAED(totalInAED);
+        const createdDate = new Date(q.createdAt);
+        const ageDays = Math.floor((currentDate - createdDate) / (1000 * 60 * 60 * 24));
+        
+        const expiryDate = q.expiryDate ? new Date(q.expiryDate) : null;
+        const daysToExpiry = expiryDate ? Math.floor((expiryDate - currentDate) / (1000 * 60 * 60 * 24)) : null;
 
         const rowData = {
           slNo: globalIndex++,
@@ -2275,7 +2271,8 @@ exports.exportQuotationsToExcel = async (req, res) => {
           totalOriginal,
           subtotalInAED,
           totalInAED,
-          runningTotalAED,
+          ageDays: ageDays >= 0 ? ageDays : 0,
+          daysToExpiry: daysToExpiry !== null && daysToExpiry >= 0 ? daysToExpiry : "Expired",
           status: q.status || "",
           createdBy: q.createdBy?.name || q.createdBySnapshot?.name || "",
           createdAt: q.createdAt ? new Date(q.createdAt).toLocaleString() : "",
@@ -2288,7 +2285,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
 
         if (hasConversion) {
           rowData.totalConverted = convertFromAED(totalInAED);
-          rowData.runningTotalConverted = runningTotalConverted;
         }
 
         const row = worksheet.addRow(rowData);
@@ -2303,8 +2299,6 @@ exports.exportQuotationsToExcel = async (req, res) => {
           row.eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } }; });
         }
 
-        // Number formats. Quote-currency columns use the row's own currency
-        // code as a prefix so a mixed-currency report stays unambiguous.
         const quoteCcy = q.currency?.code || "AED";
         const quoteFmt = `"${quoteCcy}" #,##0.00`;
         row.getCell("subtotalOriginal").numFmt = quoteFmt;
@@ -2315,10 +2309,30 @@ exports.exportQuotationsToExcel = async (req, res) => {
         row.getCell("discountPercent").numFmt = '0.00"%"';
         row.getCell("subtotalInAED").numFmt = '"AED" #,##0.00';
         row.getCell("totalInAED").numFmt = '"AED" #,##0.00';
-        row.getCell("runningTotalAED").numFmt = '"AED" #,##0.00';
+        
         if (hasConversion) {
           row.getCell("totalConverted").numFmt = `"${currency}" #,##0.00`;
-          row.getCell("runningTotalConverted").numFmt = `"${currency}" #,##0.00`;
+        }
+
+        const ageCell = row.getCell("ageDays");
+        if (ageDays > 90) {
+          ageCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+          ageCell.font = { color: { argb: "FF991B1B" }, bold: true };
+        } else if (ageDays > 60) {
+          ageCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+        }
+
+        const expiryCell = row.getCell("daysToExpiry");
+        if (daysToExpiry !== null && daysToExpiry >= 0) {
+          if (daysToExpiry <= 7) {
+            expiryCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+            expiryCell.font = { color: { argb: "FF991B1B" }, bold: true };
+          } else if (daysToExpiry <= 30) {
+            expiryCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF3C7" } };
+          }
+        } else if (daysToExpiry === null || daysToExpiry < 0) {
+          expiryCell.value = "Expired";
+          expiryCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
         }
 
         const statusCell = row.getCell("status");
@@ -2338,99 +2352,206 @@ exports.exportQuotationsToExcel = async (req, res) => {
       });
     });
 
-    // Auto-filter + freeze the header row (dynamic last column).
     worksheet.autoFilter = {
       from: { row: headerRowNumber, column: 1 },
       to: { row: headerRowNumber, column: columns.length },
     };
     worksheet.views = [{ state: "frozen", ySplit: headerRowNumber }];
 
-    // ── Analytics sheet ─────────────────────────────────────────────
-    const analyticsSheet = workbook.addWorksheet("Analytics");
-    analyticsSheet.columns = [{ header: "Metric", key: "metric", width: 35 }, { header: "Value", key: "value", width: 25 }];
-    analyticsSheet.getRow(1).font = { name: "Arial", bold: true, color: { argb: "FFFFFFFF" } };
-    analyticsSheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
-    analyticsSheet.addRows([
-      { metric: "Total Quotations", value: quotations.length },
-      { metric: "Approved Quotations", value: approvedCount },
-      { metric: "Awarded Quotations", value: awardedCount },
-      { metric: "Pending Quotations", value: pendingCount },
-      { metric: "Rejected Quotations", value: rejectedCount },
-      { metric: `Total Awarded Revenue (${currency})`, value: awardedRevenue },
-    ]);
-    analyticsSheet.getColumn("value").numFmt = hasConversion ? `#,##0.00 "${currency}"` : '#,##0.00 "AED"';
-    analyticsSheet.getRow(7).font = { name: "Arial", bold: true };
-
-    // ── Company-wise stats sheet ────────────────────────────────────
-    if (isAllCompanies && companyStats && Object.keys(companyStats).length > 0) {
-      const companySheet = workbook.addWorksheet("Company-wise Stats");
-      companySheet.columns = [
-        { header: "Company Name", key: "companyName", width: 35 },
-        { header: "Total Quotations", key: "totalQuotations", width: 18 },
-        { header: `Total Value (${currency})`, key: "totalValue", width: 20 },
-        { header: `Awarded Value (${currency})`, key: "awardedValue", width: 20 },
-        { header: "Approved Count", key: "approvedCount", width: 16 },
-        { header: "Awarded Count", key: "awardedCount", width: 16 },
-        { header: "Pending Count", key: "pendingCount", width: 16 },
-        { header: "Rejected Count", key: "rejectedCount", width: 16 }
-      ];
-
-      const companyHeaderRow = companySheet.getRow(1);
-      companyHeaderRow.height = 25;
-      companyHeaderRow.eachCell((cell) => {
-        cell.font = { name: "Arial", bold: true, size: 11, color: { argb: "FFFFFFFF" } };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
-        cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    worksheet.columns.forEach(column => {
+      let maxLength = column.header?.length || 0;
+      column.eachCell?.({ includeEmpty: true }, (cell) => {
+        const cellValue = cell.value ? cell.value.toString().length : 0;
+        maxLength = Math.max(maxLength, cellValue);
       });
+      column.width = Math.min(maxLength + 2, 50);
+    });
 
-      let companyRowIndex = 2;
-      Object.entries(companyStats).forEach(([cName, stats]) => {
-        const row = companySheet.addRow({
-          companyName: cName,
-          totalQuotations: stats.totalQuotations,
-          totalValue: hasConversion ? stats.totalValueConverted : stats.totalValueAED,
-          awardedValue: hasConversion ? stats.awardedValueConverted : stats.awardedValueAED,
-          approvedCount: stats.approvedCount,
-          awardedCount: stats.awardedCount,
-          pendingCount: stats.pendingCount,
-          rejectedCount: stats.rejectedCount
-        });
-
-        row.height = 22;
-        row.eachCell((cell, colNumber) => {
-          cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
-          cell.alignment = { vertical: "middle", horizontal: colNumber === 1 ? "left" : "center" };
-          cell.font = { name: "Arial", size: 10 };
-          if (companyRowIndex % 2 === 0) {
+    // ==================== 2. COMPANY-WISE STATS SHEET (SECOND - NO FILTERS) ====================
+    if (isAllCompanies && companyStats && Object.keys(companyStats).length > 0) {
+      const companySheet = workbook.addWorksheet("🏢 Company-wise Stats");
+      
+      companySheet.mergeCells('A1:H1');
+      const companyTitle = companySheet.getCell('A1');
+      companyTitle.value = "COMPANY-WISE PERFORMANCE REPORT";
+      companyTitle.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
+      companyTitle.alignment = { horizontal: "center", vertical: "middle" };
+      companyTitle.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF111827" } };
+      companySheet.getRow(1).height = 30;
+      
+      companySheet.addRow([]);
+      
+      const companyColumns = [
+        { key: "A", header: "Company Name", width: 35 },
+        { key: "B", header: "Total Quotations", width: 18 },
+        { key: "C", header: `Awarded Revenue (${currency})`, width: 22 },
+        { key: "D", header: "Approved Count", width: 16 },
+        { key: "E", header: "Awarded Count", width: 16 },
+        { key: "F", header: "Pending Count", width: 16 },
+        { key: "G", header: "Rejected Count", width: 16 },
+        { key: "H", header: "Conversion Rate (%)", width: 18 }
+      ];
+      
+      companyColumns.forEach(col => {
+        const headerCell = companySheet.getCell(`${col.key}3`);
+        headerCell.value = col.header;
+        headerCell.font = { name: "Arial", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+        headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2563EB" } };
+        headerCell.alignment = { horizontal: "center", vertical: "middle" };
+        headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+        companySheet.getColumn(col.key).width = col.width;
+      });
+      
+      let companyRowIndex = 4;
+      const sortedCompanies = Object.values(companyStats).sort((a, b) => b.awardedRevenue - a.awardedRevenue);
+      
+      sortedCompanies.forEach((stats, idx) => {
+        const row = companySheet.getRow(companyRowIndex);
+        companySheet.getCell(`A${companyRowIndex}`).value = stats.companyName;
+        companySheet.getCell(`B${companyRowIndex}`).value = stats.totalQuotations;
+        companySheet.getCell(`C${companyRowIndex}`).value = stats.awardedRevenue;
+        companySheet.getCell(`C${companyRowIndex}`).numFmt = `"${currency}" #,##0.00`;
+        companySheet.getCell(`D${companyRowIndex}`).value = stats.approvedCount;
+        companySheet.getCell(`E${companyRowIndex}`).value = stats.awardedCount;
+        companySheet.getCell(`F${companyRowIndex}`).value = stats.pendingCount;
+        companySheet.getCell(`G${companyRowIndex}`).value = stats.rejectedCount;
+        companySheet.getCell(`H${companyRowIndex}`).value = stats.conversionRate;
+        companySheet.getCell(`H${companyRowIndex}`).numFmt = '0.00"%"';
+        
+        if (idx % 2 === 0) {
+          row.eachCell(cell => {
             cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
-          }
-        });
-
-        row.getCell("totalValue").numFmt = hasConversion ? `"${currency}" #,##0.00` : '"AED" #,##0.00';
-        row.getCell("awardedValue").numFmt = hasConversion ? `"${currency}" #,##0.00` : '"AED" #,##0.00';
+          });
+        }
         companyRowIndex++;
       });
-
-      const totalCompanyRow = companySheet.addRow({
-        companyName: "TOTAL",
-        totalQuotations: Object.values(companyStats).reduce((sum, s) => sum + s.totalQuotations, 0),
-        totalValue: Object.values(companyStats).reduce((sum, s) => hasConversion ? sum + s.totalValueConverted : sum + s.totalValueAED, 0),
-        awardedValue: Object.values(companyStats).reduce((sum, s) => hasConversion ? sum + s.awardedValueConverted : sum + s.awardedValueAED, 0),
-        approvedCount: Object.values(companyStats).reduce((sum, s) => sum + s.approvedCount, 0),
-        awardedCount: Object.values(companyStats).reduce((sum, s) => sum + s.awardedCount, 0),
-        pendingCount: Object.values(companyStats).reduce((sum, s) => sum + s.pendingCount, 0),
-        rejectedCount: Object.values(companyStats).reduce((sum, s) => sum + s.rejectedCount, 0)
-      });
-      totalCompanyRow.height = 26;
-      totalCompanyRow.font = { name: "Arial", bold: true };
-      totalCompanyRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
-      totalCompanyRow.getCell("totalValue").numFmt = hasConversion ? `"${currency}" #,##0.00` : '"AED" #,##0.00';
-      totalCompanyRow.getCell("awardedValue").numFmt = hasConversion ? `"${currency}" #,##0.00` : '"AED" #,##0.00';
-      totalCompanyRow.eachCell((cell) => {
+      
+      const totalRow = companySheet.getRow(companyRowIndex);
+      companySheet.getCell(`A${companyRowIndex}`).value = "TOTAL / AVERAGE";
+      companySheet.getCell(`B${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.totalQuotations, 0);
+      companySheet.getCell(`C${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.awardedRevenue, 0);
+      companySheet.getCell(`C${companyRowIndex}`).numFmt = `"${currency}" #,##0.00`;
+      companySheet.getCell(`D${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.approvedCount, 0);
+      companySheet.getCell(`E${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.awardedCount, 0);
+      companySheet.getCell(`F${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.pendingCount, 0);
+      companySheet.getCell(`G${companyRowIndex}`).value = sortedCompanies.reduce((sum, s) => sum + s.rejectedCount, 0);
+      
+      const avgConversion = sortedCompanies.reduce((sum, s) => sum + s.conversionRate, 0) / sortedCompanies.length;
+      companySheet.getCell(`H${companyRowIndex}`).value = avgConversion;
+      companySheet.getCell(`H${companyRowIndex}`).numFmt = '0.00"%"';
+      
+      totalRow.font = { bold: true };
+      totalRow.eachCell(cell => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
         cell.border = { top: { style: "medium" }, left: { style: "thin" }, bottom: { style: "medium" }, right: { style: "thin" } };
       });
+      
+      // No auto-filter on company sheet
+      companySheet.views = [{ state: "frozen", ySplit: 3 }];
     }
+
+    // ==================== 3. ANALYTICS SHEET (THIRD - SIMPLE MINIMALIST) ====================
+    const analyticsSheet = workbook.addWorksheet("📊 Analytics");
+    
+    // Simple title
+    analyticsSheet.mergeCells('A1:C1');
+    const analyticsTitle = analyticsSheet.getCell('A1');
+    analyticsTitle.value = "QUOTATION ANALYTICS";
+    analyticsTitle.font = { name: "Arial", size: 16, bold: true };
+    analyticsTitle.alignment = { horizontal: "center", vertical: "middle" };
+    analyticsSheet.getRow(1).height = 30;
+    
+    analyticsSheet.addRow([]);
+    
+    // Key metrics - simple table
+    analyticsSheet.getCell('A3').value = "Metric";
+    analyticsSheet.getCell('B3').value = "Value";
+    analyticsSheet.getCell('C3').value = "";
+    
+    ['A3', 'B3'].forEach(cell => {
+      const headerCell = analyticsSheet.getCell(cell);
+      headerCell.font = { name: "Arial", bold: true, size: 11 };
+      headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    analyticsSheet.getCell('A4').value = "Total Quotations";
+    analyticsSheet.getCell('B4').value = totalQuotations;
+    
+    analyticsSheet.getCell('A5').value = "Total Awarded Revenue";
+    analyticsSheet.getCell('B5').value = awardedRevenue;
+    analyticsSheet.getCell('B5').numFmt = `"${currency}" #,##0.00`;
+    
+    analyticsSheet.getCell('A6').value = "Conversion Rate";
+    analyticsSheet.getCell('B6').value = conversionRate;
+    analyticsSheet.getCell('B6').numFmt = '0.00"%"';
+    
+    analyticsSheet.addRow([]);
+    
+    // Status breakdown - simple table
+    analyticsSheet.getCell('A8').value = "Status Breakdown";
+    analyticsSheet.getCell('A8').font = { name: "Arial", bold: true, size: 12 };
+    
+    analyticsSheet.getCell('A9').value = "Status";
+    analyticsSheet.getCell('B9').value = "Count";
+    analyticsSheet.getCell('C9').value = "Percentage";
+    
+    ['A9', 'B9', 'C9'].forEach(cell => {
+      const headerCell = analyticsSheet.getCell(cell);
+      headerCell.font = { name: "Arial", bold: true, size: 11 };
+      headerCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      headerCell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    let statusRow = 10;
+    const sortedStatusesSimple = Object.keys(statusBreakdown).sort((a, b) => {
+      return statusOrder.indexOf(a) - statusOrder.indexOf(b);
+    });
+    
+    sortedStatusesSimple.forEach((status, index) => {
+      const data = statusBreakdown[status];
+      const displayName = statusDisplayNames[status] || status.toUpperCase();
+      
+      analyticsSheet.getCell(`A${statusRow}`).value = displayName;
+      analyticsSheet.getCell(`B${statusRow}`).value = data.count;
+      analyticsSheet.getCell(`C${statusRow}`).value = data.percentage;
+      analyticsSheet.getCell(`C${statusRow}`).numFmt = '0.00"%"';
+      
+      // Simple alternating row colors
+      if (index % 2 === 0) {
+        analyticsSheet.getRow(statusRow).eachCell(cell => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+        });
+      }
+      
+      statusRow++;
+    });
+    
+    // Total row
+    analyticsSheet.getCell(`A${statusRow}`).value = "TOTAL";
+    analyticsSheet.getCell(`B${statusRow}`).value = totalQuotations;
+    analyticsSheet.getCell(`C${statusRow}`).value = 100;
+    analyticsSheet.getCell(`C${statusRow}`).numFmt = '0.00"%"';
+    analyticsSheet.getRow(statusRow).font = { bold: true };
+    analyticsSheet.getRow(statusRow).eachCell(cell => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    });
+    
+    // Simple note
+    const noteRow = statusRow + 2;
+    analyticsSheet.mergeCells(`A${noteRow}:C${noteRow}`);
+    analyticsSheet.getCell(`A${noteRow}`).value = `Report generated on ${new Date().toLocaleString()} | Currency: ${currency}`;
+    analyticsSheet.getCell(`A${noteRow}`).font = { name: "Arial", size: 9, italic: true };
+    analyticsSheet.getCell(`A${noteRow}`).alignment = { horizontal: "center" };
+    
+    // Set column widths
+    analyticsSheet.getColumn('A').width = 30;
+    analyticsSheet.getColumn('B').width = 20;
+    analyticsSheet.getColumn('C').width = 20;
+    
+    // Freeze header row
+    analyticsSheet.views = [{ state: "frozen", ySplit: 3 }];
 
     const buffer = await workbook.xlsx.writeBuffer();
     const fileName = `quotations_export_${new Date().toISOString().split("T")[0]}.xlsx`;
