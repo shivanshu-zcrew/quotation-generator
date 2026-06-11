@@ -85,7 +85,7 @@ if (process.env.NODE_ENV === 'production') {
       datePattern: 'YYYY-MM-DD',
       level: 'http',
       maxSize: '20m',
-      maxFiles: '14d',
+      maxFiles: '3d',
       format: logFormat
     })
   );
