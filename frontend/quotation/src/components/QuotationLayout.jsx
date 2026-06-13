@@ -852,6 +852,7 @@ const TABLE_HEADERS = (isEditing, currency) => [
   { label: 'SR#', w: '50px', align: 'center' },
   { label: 'Item Description', w: 'auto', align: 'left' },
   { label: 'Qty', w: '80px', align: 'center' },
+  { label: 'Unit', w: '80px', align: 'center' },
   { label: 'Unit Price', w: '110px', align: 'right' },
   { label: `Amount (${currency})`, w: '120px', align: 'right' },
   ...(isEditing ? [{ label: '', w: '50px', align: 'center' }] : []),
@@ -1168,6 +1169,18 @@ export default function QuotationLayout({
           </div>
         ) : qi.quantity}
       </td>
+      <td style={styles.tableCellCenter}>
+        {isEditing ? (
+          <input
+            type="text"
+            className="edit-input"
+            value={qi.unit || ''}
+            onChange={(e) => onUpdateItem(qi.id, 'unit', e.target.value)}
+            placeholder="pcs, box..."
+            style={{ ...inputStyle, textAlign: 'center' }}
+          />
+        ) : (qi.unit || '—')}
+      </td>
       <td style={styles.tableCellRight}>
         {isEditing ? (
           <div>
@@ -1339,14 +1352,14 @@ export default function QuotationLayout({
             <tbody>
               {quotationItems.map(renderItemRow)}
               <tr style={styles.totalRow}>
-                <td colSpan={isEditing ? 4 : 3} style={{ border: '1px solid #e5e7eb' }} />
+                <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                 <td style={styles.totalLabelCell}>Subtotal ({displayCurrency})</td>
                 <td style={styles.totalValueCell}>{subtotal.toFixed(2)}</td>
                 {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
               </tr>
               {showTaxRow && (
                 <tr style={styles.totalRow}>
-                  <td colSpan={isEditing ? 4 : 3} style={{ border: '1px solid #e5e7eb' }} />
+                  <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                   <td style={styles.totalLabelCell}>VAT ({quotationData.tax || 0}%)</td>
                   <td style={styles.totalValueCell}>{taxAmount.toFixed(2)}</td>
                   {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
@@ -1354,14 +1367,14 @@ export default function QuotationLayout({
               )}
               {discountAmount > 0 && (
                 <tr style={styles.totalRow}>
-                  <td colSpan={isEditing ? 4 : 3} style={{ border: '1px solid #e5e7eb' }} />
+                  <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                   <td style={{ ...styles.totalLabelCell, color: '#059669' }}>Discount ({quotationData.discount}%)</td>
                   <td style={{ ...styles.totalValueCell, color: '#059669' }}>−{discountAmount.toFixed(2)}</td>
                   {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
                 </tr>
               )}
               <tr style={styles.grandTotalRow}>
-                <td colSpan={isEditing ? 4 : 3} style={{ border: 'none' }} />
+                <td colSpan={isEditing ? 5 : 4} style={{ border: 'none' }} />
                 <td style={styles.grandTotalLabel}>Grand Total ({displayCurrency})</td>
                 <td style={styles.grandTotalValue}>{grandTotal.toFixed(2)}</td>
                 {isEditing && <td style={{ border: 'none' }} />}

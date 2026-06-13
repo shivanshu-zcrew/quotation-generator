@@ -7,6 +7,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
   const [itemData, setItemData] = useState({
     description: '',
     quantity: 1,
+    unit: '',
     unitPrice: ''
   });
   const [errors, setErrors] = useState({});
@@ -22,6 +23,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
         setItemData({
           description: editingItem.description || '',
           quantity: editingItem.quantity || 1,
+          unit: editingItem.unit || '',
           unitPrice: editingItem.unitPrice || ''
         });
       } else {
@@ -29,6 +31,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
         setItemData({
           description: '',
           quantity: 1,
+          unit: '',
           unitPrice: ''
         });
       }
@@ -91,6 +94,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
         ...editingItem,
         description: itemData.description.trim(),
         quantity: Number(itemData.quantity),
+        unit: itemData.unit.trim(),
         unitPrice: Number(itemData.unitPrice),
       };
       onEditItem(updatedItem);
@@ -102,6 +106,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
         name: itemData.description.trim(),
         description: itemData.description.trim(),
         quantity: Number(itemData.quantity),
+        unit: itemData.unit.trim(),
         unitPrice: Number(itemData.unitPrice),
         imagePaths: [],
         newImages: [],
@@ -259,10 +264,10 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
                   )}
                 </div>
 
-                {/* Quantity and Price Row */}
+                {/* Quantity, Unit and Price Row */}
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
+                  gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr',
                   gap: isMobile ? '0.75rem' : '1rem',
                   marginBottom: '1rem',
                 }}>
@@ -303,6 +308,35 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
                     {errors.quantity && (
                       <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem' }}>{errors.quantity}</p>
                     )}
+                  </div>
+
+                  {/* Unit */}
+                  <div>
+                    <label style={{
+                      display: 'block',
+                      fontWeight: 600,
+                      color: '#1e293b',
+                      marginBottom: '0.35rem',
+                      fontSize: isMobile ? '0.75rem' : '0.85rem',
+                    }}>
+                      Unit
+                    </label>
+                    <input
+                      type="text"
+                      value={itemData.unit}
+                      onChange={(e) => setItemData(prev => ({ ...prev, unit: e.target.value }))}
+                      placeholder="pcs, box, kg..."
+                      style={{
+                        width: '100%',
+                        padding: isMobile ? '0.6rem 0.75rem' : '0.75rem 1rem',
+                        border: '1.5px solid #e2e8f0',
+                        borderRadius: '12px',
+                        fontSize: isMobile ? '0.75rem' : '0.875rem',
+                        outline: 'none',
+                      }}
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#0f172a'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = '#e2e8f0'}
+                    />
                   </div>
 
                   {/* Unit Price */}

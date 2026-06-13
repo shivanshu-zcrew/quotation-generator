@@ -252,6 +252,20 @@ const MobileItemCard = ({
               )}
             </div>
             <div style={{ flex: 1 }}>
+              <label style={styles.itemLabel}>Unit</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={item.unit || ''}
+                  onChange={(e) => onUpdate(item.id, 'unit', e.target.value)}
+                  placeholder="pcs, box..."
+                  style={{ ...inputStyle, textAlign: 'center' }}
+                />
+              ) : (
+                <div style={styles.itemValue}>{item.unit || '—'}</div>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
               <label style={styles.itemLabel}>Unit Price ({currency})</label>
               {isEditing ? (
                 <ValidatedInput

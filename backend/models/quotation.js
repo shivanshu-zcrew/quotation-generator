@@ -131,6 +131,7 @@ const quotationItemSchema = new mongoose.Schema(
       index: true,
     },
     description: { type: String, default: "" },
+    unit: { type: String, default: "", trim: true },
     quantity: {
       type: Number,
       required: true,

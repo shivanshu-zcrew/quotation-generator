@@ -551,6 +551,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         `).join('')}
       </td>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.quantity}</td>
+      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unit || '-'}</td>
       <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unitPrice.toFixed(2)}</td>
       <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${(item.quantity * item.unitPrice).toFixed(2)}</td>
     </tr>`;
@@ -562,24 +563,24 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     totalsRows = `
       <tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td colspan="2" style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
+        <td colspan="3" style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
         <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
       </tr>
       ${taxPercent > 0 ? `
       <tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
+        <td colspan="3" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
         <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
       </tr>
     ` : ''}
       ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
-        <td colspan="2" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
+        <td colspan="3" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
         <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discAmt.toFixed(2)}</td>
       </tr>` : ''}
       <tr style="background:#0C405A;color:white;font-weight:700;">
         <td colspan="2" style="border:none;padding:8px;"></td>
-        <td colspan="2" style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
+        <td colspan="3" style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
         <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
       </tr>`;
   }
@@ -589,6 +590,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;">SR#</th>
     <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Qty</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Unit</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit Price</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:80px;">Amount</th>
   </tr></thead>`;

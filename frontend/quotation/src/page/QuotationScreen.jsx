@@ -612,6 +612,12 @@ const ManualItemRow = ({ item, index, onRemove, onEdit, selectedCurrency }) => {
           </div>
         </div>
         <div>
+          <label style={{ display: "block", color: "#64748b", fontSize: "0.7rem", fontWeight: 600, marginBottom: "0.25rem" }}>Unit</label>
+          <div style={{ padding: "0.5rem", background: "#f8fafc", borderRadius: 10, fontSize: "0.875rem", fontWeight: 600, textAlign: "center" }}>
+            {item.unit || "—"}
+          </div>
+        </div>
+        <div>
           <label style={{ display: "block", color: "#64748b", fontSize: "0.7rem", fontWeight: 600, marginBottom: "0.25rem" }}>Unit Price</label>
           <div style={{ padding: "0.5rem", background: "#f8fafc", borderRadius: 10, fontSize: "0.875rem", fontWeight: 600, textAlign: "right" }}>
             {fmtCurrency(item.unitPrice, selectedCurrency)}

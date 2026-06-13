@@ -386,6 +386,7 @@ export function useQuotation() {
       name: "",
       description: "",
       quantity: 1,
+      unit: "",
       unitPrice: 0,
       imagePaths: [],
       imageS3Keys: [],
@@ -899,6 +900,7 @@ const handleSave = useCallback(async () => {
       name: qi.name || "",
       description: qi.description || "",
       quantity: Number(qi.quantity) || 1,
+      unit: qi.unit || "",
       unitPrice: Number(qi.unitPrice) || 0,
       imageS3Keys: qi.imageS3Keys || [],
       imagePaths: qi.imagePaths || []

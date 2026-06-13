@@ -307,6 +307,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         name: item.name,
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
+        unit: item.unit || '',
         unitPrice: Number(item.unitPrice) || 0,
         // S3 keys for images
         imageS3Keys: item.imageS3Keys || []
@@ -693,6 +694,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       const formattedItems = quotationItems.map(item => ({
         description: item.description || '',
         quantity: Number(item.quantity) || 1,
+        unit: item.unit || '',
         unitPrice: Number(item.unitPrice) || 0,
         imageS3Keys: item.imageS3Keys || [],   // keys only — no base64
       }));

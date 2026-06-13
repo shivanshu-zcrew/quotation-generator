@@ -77,10 +77,11 @@ export const parseQuotationItems = (items) => (items || []).map((item) => ({
   name: item.itemId?.name || item.name || "",
   description: item.description || item.itemId?.description || "",
   quantity: Number(item.quantity) || 1,
+  unit: item.unit || "",
   unitPrice: Number(item.unitPrice) || 0,
   imagePaths: item.imagePaths || [],
-  imageS3Keys: item.imageS3Keys || [],  
-  storageProvider: item.storageProvider || 'cloudinary',  
+  imageS3Keys: item.imageS3Keys || [],
+  storageProvider: item.storageProvider || 'cloudinary',
 }));
 
 export const parseInternalDocuments = (docs) => (docs || []).map((doc) => ({ ...doc, id: doc._id }));

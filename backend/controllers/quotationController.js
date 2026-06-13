@@ -151,28 +151,28 @@ const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   try {
-    _browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process',
-      ],
-    });
+    // _browser = await puppeteer.launch({
+    //   headless: true,
+    //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    //   args: [
+    //     '--no-sandbox',
+    //     '--disable-setuid-sandbox',
+    //     '--disable-dev-shm-usage',
+    //     '--disable-gpu',
+    //     '--no-zygote',
+    //     '--single-process',
+    //   ],
+    // });
 
-  //    _browser = await puppeteer.launch({
-  //   headless: true,
-  //   args: [
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //   ],
-  // });
+     _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
   
     _browser.on('disconnected', () => { 
       _browser = null;
@@ -793,6 +793,7 @@ exports.createQuotation = async (req, res) => {
     processedItems.push({
       name: item.name || item.description?.substring(0, 50) || `Item ${i + 1}`,
       description: item.description || '',
+      unit: item.unit || '',
       quantity: item.quantity,
       unitPrice: item.unitPrice,
       unitPriceInBaseCurrency,
@@ -1084,6 +1085,7 @@ exports.updateQuotation = async (req, res) => {
       processedItems.push({
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
+        unit: item.unit || '',
         quantity: quantity, unitPrice: unitPrice, unitPriceInBaseCurrency: unitPriceInBaseCurrency,
         totalPrice: totalPrice, totalPriceInBaseCurrency: totalPriceInBaseCurrency,
         imageS3Keys: imageKeys,
