@@ -9,7 +9,7 @@ const { Quotation } = require('../models/quotation');
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET || 'your-secret-key', {
-    expiresIn: '30d'
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   });
 };
 
@@ -34,7 +34,20 @@ const checkPhoneExists = async (phone, excludeUserId = null) => {
 // @route   POST /api/auth/register
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone, password, role } = req.body;
+    const { name, email, phone, password, role: requestedRole } = req.body;
+
+    // Only allow role assignment if the caller is an authenticated admin
+    let assignedRole = 'user';
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || 'your-secret-key');
+        const caller = await User.findById(decoded.id).select('role isActive').lean();
+        if (caller && caller.isActive && caller.role === 'admin' && requestedRole) {
+          assignedRole = requestedRole;
+        }
+      } catch (_) { /* unauthenticated — use default role */ }
+    }
 
     if (await checkEmailExists(email)) {
       return res.status(400).json({ message: 'User already exists' });
@@ -49,10 +62,10 @@ exports.register = async (req, res) => {
       email,
       phone: phone || '',
       password,
-      role
+      role: assignedRole
     });
 
-    logger.info(`New user registered: ${email} (${role})`, {
+    logger.info(`New user registered: ${email} (${user.role})`, {
       userId: user._id,
       email: user.email,
       role: user.role,

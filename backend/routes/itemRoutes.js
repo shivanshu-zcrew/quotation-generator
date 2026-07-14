@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const upload = require('../middleware/multer');
 const itemController = require('../controllers/itemController');
+const { protect } = require('../middleware/auth');
 const { companyContext } = require('../middleware/companyContext');
 
-// Apply company context to all routes
+// All routes require authentication
+router.use(protect);
 router.use(companyContext);
 
 // GET all items

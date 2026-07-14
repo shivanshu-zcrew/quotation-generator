@@ -6,7 +6,7 @@ const httpLogger = morgan(
   ':method :url :status :res[content-length] - :response-time ms',
   {
     stream: logger.stream,
-    skip: (req) => req.url === '/health' || req.url === '/'
+    skip: (req) => req.originalUrl === '/health' || req.originalUrl === '/'
   }
 );
 
@@ -15,9 +15,9 @@ const requestLogger = (req, res, next) => {
   const start = Date.now();
   
   // Log request
-  logger.debug(`${req.method} ${req.url}`, {
+  logger.debug(`${req.method} ${req.originalUrl}`, {
     method: req.method,
-    url: req.url,
+    url: req.originalUrl,
     query: req.query,
     body: req.method === 'POST' || req.method === 'PUT' ? req.body : undefined,
     ip: req.ip,
@@ -32,9 +32,9 @@ const requestLogger = (req, res, next) => {
     
     // Log response
     const logLevel = res.statusCode >= 400 ? 'error' : 'info';
-    logger[logLevel](`${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`, {
+    logger[logLevel](`${req.method} ${req.originalUrl} - ${res.statusCode} (${duration}ms)`, {
       method: req.method,
-      url: req.url,
+      url: req.originalUrl,
       statusCode: res.statusCode,
       duration: `${duration}ms`,
       companyId: req.headers['x-company-id']

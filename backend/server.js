@@ -66,8 +66,8 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // ── Body parsing middleware ──────────────────────────────────────────────
-app.use(express.json({ limit: '200mb' }));
-app.use(express.urlencoded({ limit: '200mb', extended: true }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 // ── Cloudinary config ─────────────────────────────────────────────────────
 cloudinary.config({

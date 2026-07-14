@@ -289,8 +289,10 @@ class ScopedZohoClient {
     }
 
     while (hasMorePages && page <= MAX_PAGES_SAFETY) {
+      // Zoho Books v3 does not support last_modified_time or Date.Modified.After
+      // filtering on the /contacts endpoint for all plans. Always fetch all contacts
+      // and let processCustomerRecord skip unchanged records via _hasCustomerChanged.
       let url = `/contacts?page=${page}&per_page=${PER_PAGE}&filter_by=Status.All`;
-      if (lastSyncDate) url += `&last_modified_time=after.${lastSyncDate}`;
 
       // Per-page retry with backoff
       let result = null;
@@ -555,11 +557,11 @@ class ScopedZohoClient {
         if (lastSynced?.zohoSyncDate) {
           const d = new Date(lastSynced.zohoSyncDate);
           d.setHours(d.getHours() - 1);
-          lastSyncDate = d.toISOString().split('T')[0];
+          lastSyncDate = d.toISOString().replace('T', ' ').split('.')[0]; // "yyyy-MM-dd HH:mm:ss"
         } else {
           const d = new Date();
           d.setDate(d.getDate() - 90);
-          lastSyncDate = d.toISOString().split('T')[0];
+          lastSyncDate = d.toISOString().replace('T', ' ').split('.')[0];
         }
       }
 
@@ -1601,10 +1603,17 @@ class ZohoBooksService {
         logger.info('Zoho estimate created successfully', { estimateId: est.estimate_id, estimateNumber: est.estimate_number, customerId: estimateData.customer_id, lineItemsCount: lineItems.length });
         return { success: true, estimateId: est.estimate_id, estimateNumber: est.estimate_number, estimateUrl: est.estimate_url, estimate: est };
       }
-      throw new Error(estResult.error || 'Invalid response from Zoho');
+      // Return the structured failure (preserves kind/code from _request) instead
+      // of throwing, which would strip kind and make the controller log 'unknown'.
+      if (!estResult.success) {
+        logger.error(`Zoho estimate creation failed`, { error: estResult.error, kind: estResult.kind, customerId: estimateData.customer_id });
+        return { success: false, error: estResult.error || 'Zoho request failed', kind: estResult.kind, code: estResult.code, details: estResult.details };
+      }
+      // Zoho said success but returned no estimate object — unexpected
+      return { success: false, error: 'Zoho returned success but no estimate object', kind: 'unknown' };
     } catch (error) {
-      logger.error(`Zoho estimate creation error: ${error.message}`, { error: error.message });
-      return { success: false, error: error.message, details: error.response?.data };
+      logger.error(`Zoho estimate creation threw unexpectedly: ${error.message}`, { error: error.message });
+      return { success: false, error: error.message, kind: 'unknown', details: error.response?.data };
     }
   }
 

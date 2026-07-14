@@ -794,13 +794,13 @@ function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
     >
       <ErrorBanner message={errors.submit} />
       <FieldGroup label="Full Name" error={errors.name}>
-        <input type="text" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Smith" style={inputStyle(errors.name)} disabled={busy} />
+        <input type="text" name="edit-user-name" autoComplete="off" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Smith" style={inputStyle(errors.name)} disabled={busy} />
       </FieldGroup>
       <FieldGroup label="Email Address" error={errors.email}>
-        <input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="e.g. john@company.com" style={inputStyle(errors.email)} disabled={busy} />
+        <input type="email" name="edit-user-email" autoComplete="off" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="e.g. john@company.com" style={inputStyle(errors.email)} disabled={busy} />
       </FieldGroup>
       <FieldGroup label="Phone (Optional)" error={errors.phone}>
-        <input type="tel" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={busy} />
+        <input type="tel" name="edit-user-phone" autoComplete="off" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={busy} />
       </FieldGroup>
       <FieldGroup label="Role">
         <RolePicker value={form.role} onChange={(v) => set("role", v)} disabled={busy} />
@@ -877,25 +877,25 @@ function AddUserForm({ onSuccess, onCancel }) {
     >
       <ErrorBanner message={errors.submit} />
       <FieldGroup label="Full Name" error={errors.name}>
-        <input type="text" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Smith" style={inputStyle(errors.name)} disabled={loading} />
+        <input type="text" name="new-user-name" autoComplete="off" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. John Smith" style={inputStyle(errors.name)} disabled={loading} />
       </FieldGroup>
       <FieldGroup label="Email Address" error={errors.email}>
-        <input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="e.g. john@company.com" style={inputStyle(errors.email)} disabled={loading} />
+        <input type="email" name="new-user-email" autoComplete="off" value={form.email} onChange={(e) => set("email", e.target.value)} placeholder="e.g. john@company.com" style={inputStyle(errors.email)} disabled={loading} />
       </FieldGroup>
       <FieldGroup label="Phone (Optional)" error={errors.phone}>
-        <input type="tel" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={loading} />
+        <input type="tel" name="new-user-phone" autoComplete="off" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={loading} />
       </FieldGroup>
       <div style={{ display: "flex", gap: "0.75rem" }}>
         <FieldGroup label="Password" error={errors.password}>
           <div style={{ position: "relative" }}>
-            <input type={showPwd ? "text" : "password"} value={form.password} onChange={(e) => set("password", e.target.value)} placeholder="Min. 6 characters" style={{ ...inputStyle(errors.password), paddingRight: "2.5rem" }} disabled={loading} />
+            <input type={showPwd ? "text" : "password"} name="new-user-password" autoComplete="new-password" value={form.password} onChange={(e) => set("password", e.target.value)} placeholder="Min. 6 characters" style={{ ...inputStyle(errors.password), paddingRight: "2.5rem" }} disabled={loading} />
             <button onClick={() => setShowPwd((v) => !v)} type="button" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: "0.9rem" }}>
               {showPwd ? "👁️" : "👁️‍🗨️"}
             </button>
           </div>
         </FieldGroup>
         <FieldGroup label="Confirm Password" error={errors.confirmPassword}>
-          <input type={showPwd ? "text" : "password"} value={form.confirmPassword} onChange={(e) => set("confirmPassword", e.target.value)} placeholder="Repeat password" style={inputStyle(errors.confirmPassword)} disabled={loading} />
+          <input type={showPwd ? "text" : "password"} name="new-user-confirm-password" autoComplete="new-password" value={form.confirmPassword} onChange={(e) => set("confirmPassword", e.target.value)} placeholder="Repeat password" style={inputStyle(errors.confirmPassword)} disabled={loading} />
         </FieldGroup>
       </div>
       <FieldGroup label="Role">
@@ -1298,6 +1298,9 @@ export default function UserManagementScreen({ onBack }) {
               >
                 <Search size={14} color={T.inkFaint} />
                 <input
+                  type="search"
+                  name="user-search"
+                  autoComplete="off"
                   style={{
                     border: "none",
                     background: "transparent",

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const logger = require('../config/logger');
 const LoggerHelper = require('../utils/loggerHelper');
 const { Customer } = require('../models/customer');
+const User = require('../models/user');
+const emailService = require('../utils/emailService');
 
 // ─────────────────────────────────────────────────────────────
 // Shared populate helper
@@ -316,9 +318,17 @@ exports.opsApproveQuotation = async (req, res) => {
 
     await quotation.save();
 
+    // Email all admins (exclude the approver themselves) — non-blocking
+    User.find({ role: 'admin', isActive: true })
+      .select('email').lean()
+      .then(admins => {
+        const emails = admins.map(a => a.email).filter(e => e && e !== req.user.email);
+        if (emails.length) emailService.opsApprovedNotifyAdmins(emails, quotation, req.user.name);
+      }).catch(err => logger.warn('Failed to query admin emails for notification', { error: err.message }));
+
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const duration = Date.now() - startTime;
-    
+
     LoggerHelper.logOperation('Ops Approve Quotation', {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -371,6 +381,15 @@ exports.opsRejectQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
+    if (quotation.status !== 'pending') {
+      logger.warn(`Cannot ops-reject quotation with status ${quotation.status}`, {
+        quotationId: quotation._id,
+        currentStatus: quotation.status,
+        userId: req.user?.id
+      });
+      return res.status(400).json({ message: `Cannot return for revision. Current status: ${quotation.status}` });
+    }
+
     const oldStatus = quotation.status;
     quotation.status = 'ops_rejected';
     quotation.opsApprovedBy = req.user.id;
@@ -386,9 +405,15 @@ exports.opsRejectQuotation = async (req, res) => {
 
     await quotation.save();
 
+    // Email creator — non-blocking
+    const creatorEmail = quotation.createdBySnapshot?.email;
+    if (creatorEmail) {
+      emailService.opsRejectedNotifyCreator(creatorEmail, quotation, req.user.name, reason.trim());
+    }
+
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const duration = Date.now() - startTime;
-    
+
     LoggerHelper.logOperation('Ops Reject Quotation', {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -510,10 +535,18 @@ exports.approveQuotation = async (req, res) => {
 
     await quotation.save();
 
+    // Email creator — skip if admin is approving their own quotation
+    const approveCreatorEmail = quotation.createdBySnapshot?.email;
+    const approveIsSelf = quotation.createdBy?.toString() === req.user.id;
+    logger.info(`[Email] approve check — createdBy: ${quotation.createdBy}, approver: ${req.user.id}, isSelf: ${approveIsSelf}`);
+    if (approveCreatorEmail && !approveIsSelf) {
+      emailService.adminApprovedNotifyCreator(approveCreatorEmail, quotation, req.user.name);
+    }
+
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const sanitized = sanitizeQuotation(updated);
     const duration = Date.now() - startTime;
-    
+
     LoggerHelper.logOperation('Admin Approve Quotation', {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -590,10 +623,18 @@ exports.rejectQuotation = async (req, res) => {
 
     await quotation.save();
 
+    // Email creator — skip if admin is rejecting their own quotation
+    const rejectCreatorEmail = quotation.createdBySnapshot?.email;
+    const rejectIsSelf = quotation.createdBy?.toString() === req.user.id;
+    logger.info(`[Email] reject check — createdBy: ${quotation.createdBy}, approver: ${req.user.id}, isSelf: ${rejectIsSelf}`);
+    if (rejectCreatorEmail && !rejectIsSelf) {
+      emailService.adminRejectedNotifyCreator(rejectCreatorEmail, quotation, req.user.name, reason.trim());
+    }
+
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const sanitized = sanitizeQuotation(updated);
     const duration = Date.now() - startTime;
-    
+
     LoggerHelper.logOperation('Admin Reject Quotation', {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -727,7 +768,7 @@ exports.getAllQuotationsAdmin = async (req, res) => {
         break;
     }
     
-    console.log('📊 Admin sort query:', { sortBy, sortDir, sortObject }); // Debug log
+    logger.debug('Admin sort query', { sortBy, sortDir, sortObject });
     
     // Get paginated results with sorting
     const quotations = await fullPopulate(
@@ -799,18 +840,15 @@ exports.getAdminDashboardStats = async (req, res) => {
     let companyId = req.query.companyId || req.headers['x-company-id'];
     let matchStage = {};
     
-    console.log('🔍 getAdminDashboardStats - companyId:', companyId);
-    
+    logger.debug('getAdminDashboardStats', { companyId: companyId || 'all' });
+
     // Handle "All Companies" - don't filter by companyId
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
         matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
-        console.log('🔍 matchStage with companyId:', JSON.stringify(matchStage, null, 2));
       } else {
-        console.log('⚠️ Invalid companyId format:', companyId);
+        logger.warn('Invalid companyId format in getAdminDashboardStats', { companyId });
       }
-    } else {
-      console.log('🔍 No company filter (all companies)');
     }
     
     logger.debug('Fetching admin dashboard stats', {
@@ -838,8 +876,8 @@ exports.getAdminDashboardStats = async (req, res) => {
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
     
-    console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
-    
+    logger.debug('Admin dashboard allStatusCounts', { counts: allStatusCounts });
+
     // Build counts map
     const countsMap = {};
     allStatusCounts.forEach(item => {
@@ -917,15 +955,7 @@ exports.getAdminDashboardStats = async (req, res) => {
     const totalRevenueValue = totalRevenueResult[0]?.total || 0;
     const awardedValueTotal = awardedValueResult[0]?.total || 0;
     
-    console.log('📊 Admin counts:');
-    console.log('   - totalQuotations:', totalQuotations);
-    console.log('   - pending (including pending_admin):', pendingCount);
-    console.log('   - ops_approved:', opsApprovedCount);
-    console.log('   - ops_rejected:', opsRejectedCount);
-    console.log('   - rejected:', rejectedCount);
-    console.log('   - approved:', approvedCount);
-    console.log('   - awarded:', awardedCount);
-    console.log('   - not_awarded:', notAwardedCount);
+    logger.debug('Admin dashboard counts', { totalQuotations, pendingCount, opsApprovedCount, opsRejectedCount, rejectedCount, approvedCount, awardedCount, notAwardedCount });
     
     const duration = Date.now() - startTime;
     
@@ -1007,19 +1037,16 @@ exports.getOpsDashboardStats = async (req, res) => {
     let matchStage = {};
     let customerMatchStage = {};
     
-    console.log('🔍 getOpsDashboardStats - companyId:', companyId);
-    
+    logger.debug('getOpsDashboardStats', { companyId: companyId || 'all' });
+
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
         const companyObjectId = new mongoose.Types.ObjectId(companyId);
         matchStage = { companyId: companyObjectId };
         customerMatchStage = { companyId: companyObjectId };
-        console.log('🔍 matchStage with companyId:', JSON.stringify(matchStage, null, 2));
       } else {
-        console.log('⚠️ Invalid companyId format:', companyId);
+        logger.warn('Invalid companyId format in getOpsDashboardStats', { companyId });
       }
-    } else {
-      console.log('🔍 No company filter (all companies)');
     }
 
     // ✅ Include ALL statuses that Ops can see
@@ -1125,8 +1152,7 @@ exports.getOpsDashboardStats = async (req, res) => {
       ])
     ]);
 
-    console.log('📊 allStatusCounts:', JSON.stringify(allStatusCounts, null, 2));
-    console.log('📊 customerStats:', JSON.stringify(customerStats, null, 2));
+    logger.debug('Ops dashboard allStatusCounts', { counts: allStatusCounts });
 
     const countsMap = {};
     allStatusCounts.forEach(item => {
@@ -1152,24 +1178,14 @@ exports.getOpsDashboardStats = async (req, res) => {
     const nonVatRegistered = customerStatsData.nonVatRegistered?.[0]?.count || 0;
     const customersWithTrn = customerStatsData.customersWithTrn?.[0]?.count || 0;
 
-    console.log('📊 Individual counts:');
-    console.log('   - totalQuotations:', totalQuotations);
-    console.log('   - pending (including pending_admin):', pendingCount);
-    console.log('   - ops_approved:', opsApprovedCount);
-    console.log('   - ops_rejected:', opsRejectedCount);
-    console.log('   - rejected:', rejectedCount);
-    console.log('   - approved:', approvedCount);
-    console.log('   - awarded:', awardedCount);
-    console.log('   - not_awarded:', notAwardedCount);
-    console.log('   - awardedValue (AED):', awardedValueResult[0]?.total || 0);
-    console.log('   - totalValue (AED):', totalValueResult[0]?.total || 0);
-    console.log('📊 Customer counts:');
-    console.log('   - totalCustomers:', totalCustomers);
-    console.log('   - activeCustomers:', activeCustomers);
-    console.log('   - inactiveCustomers:', inactiveCustomers);
-    console.log('   - vatRegistered:', vatRegistered);
-    console.log('   - nonVatRegistered:', nonVatRegistered);
-    console.log('   - customersWithTrn:', customersWithTrn);
+    logger.debug('Ops dashboard counts', {
+      totalQuotations, pendingCount, opsApprovedCount, opsRejectedCount,
+      rejectedCount, approvedCount, awardedCount, notAwardedCount,
+      awardedValue: awardedValueResult[0]?.total || 0,
+      totalValue: totalValueResult[0]?.total || 0,
+      totalCustomers, activeCustomers, inactiveCustomers,
+      vatRegistered, nonVatRegistered, customersWithTrn
+    });
 
     const stats = {
       // Quotation stats
@@ -1223,7 +1239,6 @@ exports.getOpsDashboardStats = async (req, res) => {
     });
   } catch (err) {
     const duration = Date.now() - startTime;
-    console.error('Error fetching ops dashboard stats:', err);
     logger.error('Error fetching ops dashboard stats', {
       error: err.message,
       stack: err.stack,
@@ -1407,7 +1422,6 @@ exports.getUserQuotationStats = async (req, res) => {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error('Error getting user quotation stats:', error);
     logger.error('Error getting user quotation stats', {
       error: error.message,
       stack: error.stack,
@@ -1518,7 +1532,6 @@ exports.getQuotationsByUser = async (req, res) => {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error('Error fetching user quotations:', error);
     logger.error('Error fetching user quotations', {
       error: error.message,
       stack: error.stack,

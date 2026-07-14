@@ -523,7 +523,6 @@ exports.updateCustomer = async (req, res) => {
           contactPersons: updatedCustomer.contactPersons || []
         });
 
-        console.log(">>>>>>>>>>",zohoResult);
         if (!zohoResult.success) {
           await Customer.findByIdAndUpdate(id, customer.toObject(), { runValidators: false });
           await clearCustomerCache(customer.companyId);
@@ -907,7 +906,9 @@ exports.searchCustomers = async (req, res) => {
     const parsedLimit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, parseInt(limit, 10) || 20));
     const parsedOffset = Math.max(0, parseInt(offset, 10) || 0);
 
-    const customers = await Customer.find({
+    const companyId = req.companyId || req.headers['x-company-id'];
+    const isAllCompanies = !companyId || companyId === 'all' || companyId === 'ALL';
+    const searchFilter = {
       isActive: true,
       $or: [
         { name: { $regex: searchTerm, $options: 'i' } },
@@ -915,7 +916,10 @@ exports.searchCustomers = async (req, res) => {
         { phone: { $regex: searchTerm, $options: 'i' } },
         { companyName: { $regex: searchTerm, $options: 'i' } }
       ]
-    })
+    };
+    if (!isAllCompanies) searchFilter.companyId = companyId;
+
+    const customers = await Customer.find(searchFilter)
       .limit(parsedLimit + 1)
       .skip(parsedOffset)
       .lean();
@@ -1077,12 +1081,13 @@ exports.syncCustomerWithZoho = async (req, res) => {
       contactData.taxRegistrationNumber = customer.taxRegistrationNumber;
     }
 
+    const wasNew = !customer.zohoId;
     const result = customer.zohoId
       ? await zohoBooksService.updateContact(customer.zohoId, contactData)
       : await zohoBooksService.createContact(contactData);
 
     if (result?.success) {
-      if (!customer.zohoId && result.zohoId) customer.zohoId = result.zohoId;
+      if (wasNew && result.zohoId) customer.zohoId = result.zohoId;
       customer.zohoSynced = true;
       customer.zohoSyncDate = new Date();
       customer.zohoSyncError = undefined;
@@ -1092,7 +1097,7 @@ exports.syncCustomerWithZoho = async (req, res) => {
         customerId: customer._id,
         customerName: customer.name,
         companyId: company._id,
-        action: customer.zohoId ? 'update' : 'create'
+        action: wasNew ? 'create' : 'update'
       });
 
       return res.status(200).json({

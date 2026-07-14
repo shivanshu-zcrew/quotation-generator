@@ -14,6 +14,7 @@ import AdminDashboard from './page/AdminDashboard';
 import OpsDashboard from './page/OperManagerDashboard';
 import UserManagementScreen from './page/UserManagementScreen';
 import UserQuotationStatsPage from './page/UserQuotationStatsPage';
+import CompanyManagementScreen from './page/CompanyManagementScreen';
 
 const getUser = () => useAppStore.getState().user;
 
@@ -84,11 +85,12 @@ const CustomersScreenWithBack = withBack(CustomersScreen);
 const ItemsScreenWithBack = withBack(ItemsScreen);
 const QuotationScreenWithBack = withBack(QuotationScreen);
 const UserManagementScreenWithBack = withBack(UserManagementScreen);
+const CompanyManagementScreenWithBack = withBack(CompanyManagementScreen);
 
 // Screen navigation
 const ROUTE_MAP = {
   home: '/home', admin: '/admin', ops: '/ops', customers: '/customers',
-  items: '/items', addQuotation: '/quotation/new', users: '/admin/users',userStats: '/admin/user-stats'
+  items: '/items', addQuotation: '/quotation/new', users: '/admin/users', userStats: '/admin/user-stats', companies: '/admin/companies'
 };
 
 function useScreenNavigate() {
@@ -196,6 +198,7 @@ function AppContent() {
           <Route path="/admin" element={<RequireAdmin><AdminDashboardRoute /></RequireAdmin>} />
           <Route path="/admin/users" element={<RequireAdmin><UserManagementScreenWithBack /></RequireAdmin>} />
           <Route path="/admin/user-stats" element={<RequireAdmin><UserQuotationStatsPage /></RequireAdmin>} />
+          <Route path="/admin/companies" element={<RequireAdmin><CompanyManagementScreenWithBack /></RequireAdmin>} />
           <Route path="/" element={<RootRedirect />} />
           <Route path="*" element={<RootRedirect />} />
         </Routes>

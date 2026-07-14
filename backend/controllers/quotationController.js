@@ -9,6 +9,8 @@ const { CURRENCY_OPTIONS } = require('../models/constants');
 const imageCompressor = require('../utils/imageCompressor');
 const ExcelJS = require('exceljs');
 const NotificationService = require("../utils/notificationService");
+const emailService = require('../utils/emailService');
+const User = require('../models/user');
 const logger = require('../config/logger');
 
 // ===================== S3 IMPORTS =====================
@@ -130,6 +132,27 @@ const getSignedFileUrl = async (key, expiresIn = 3600) => {
 // ─────────────────────────────────────────────────────────────
 let _browser = null;
 
+// ─────────────────────────────────────────────────────────────
+// PDF semaphore — caps concurrent Puppeteer pages so the server
+// doesn't OOM when many users download PDFs at the same time.
+// PDF_MAX_CONCURRENT from .env (default 3).
+// ─────────────────────────────────────────────────────────────
+const PDF_MAX = parseInt(process.env.PDF_MAX_CONCURRENT || '3', 10);
+let _pdfActive = 0;
+const _pdfQueue = [];
+
+function acquirePdfSlot() {
+  return new Promise((resolve) => {
+    if (_pdfActive < PDF_MAX) { _pdfActive++; resolve(); }
+    else _pdfQueue.push(resolve);
+  });
+}
+
+function releasePdfSlot() {
+  if (_pdfQueue.length > 0) { _pdfQueue.shift()(); }
+  else _pdfActive--;
+}
+
 exports.getPDFMetrics = async (req, res) => {
   const metrics = browserPool?.getMetrics() || {};
   const memory = process.memoryUsage();
@@ -151,28 +174,28 @@ const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   try {
-    // _browser = await puppeteer.launch({
-    //   headless: true,
-    //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-    //   args: [
-    //     '--no-sandbox',
-    //     '--disable-setuid-sandbox',
-    //     '--disable-dev-shm-usage',
-    //     '--disable-gpu',
-    //     '--no-zygote',
-    //     '--single-process',
-    //   ],
-    // });
+    _browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--single-process',
+      ],
+    });
 
-     _browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  });
+  //    _browser = await puppeteer.launch({
+  //   headless: true,
+  //   args: [
+  //     '--no-sandbox',
+  //     '--disable-setuid-sandbox',
+  //     '--disable-dev-shm-usage',
+  //     '--disable-gpu',
+  //   ],
+  // });
   
     _browser.on('disconnected', () => { 
       _browser = null;
@@ -528,9 +551,7 @@ exports.getMyQuotationsStats = async (req, res) => {
       ? new mongoose.Types.ObjectId(userId) 
       : userId;
     
-    console.log('🔍 ===== DEBUG START =====');
-    console.log('🔍 User ID from token:', userId);
-    console.log('🔍 CompanyId from query:', companyId);
+    logger.debug('getMyQuotationsStats', { userId, companyId: companyId || 'all' });
     
     // Build match stages
     let quotationMatchStage = { createdBy: userObjectId };
@@ -594,15 +615,7 @@ exports.getMyQuotationsStats = async (req, res) => {
     const totalValue = totalValueResult[0]?.total || 0;
     const awardedValue = awardedValueResult[0]?.total || 0;
     
-    console.log('📊 FINAL STATS:');
-    console.log('   - totalQuotations:', totalQuotations);
-    console.log('   - pending:', pendingCount);
-    console.log('   - inReview (ops_approved):', opsApprovedCount);
-    console.log('   - approved:', approvedCount);
-    console.log('   - awarded:', awardedCount);
-    console.log('   - totalValue (AED):', totalValue);  // ✅ Now correct
-    console.log('   - awardedValue (AED):', awardedValue);  // ✅ Now correct
-    console.log('🔍 ===== DEBUG END =====');
+    logger.debug('getMyQuotationsStats result', { totalQuotations, pendingCount, opsApprovedCount, approvedCount, awardedCount, totalValue, awardedValue });
     
     const stats = {
       totalQuotations: totalQuotations || 0,
@@ -662,14 +675,23 @@ exports.getMyQuotationsStats = async (req, res) => {
 
 exports.getQuotation = async (req, res) => {
   try {
-    const companyId = req.companyId || req.headers['x-company-id'] || req.query.companyId;
-    if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
-    
-    const quotation = await fullPopulate(Quotation.findOne({ _id: req.params.id, companyId })).lean();
+    const isAdmin = req.user.role === 'admin';
+    const isOps   = req.user.role === 'ops_manager';
+
+    // Admins and ops managers can view any quotation regardless of company context.
+    // Creators must belong to the same company as the quotation.
+    let query;
+    if (isAdmin || isOps) {
+      query = { _id: req.params.id };
+    } else {
+      const companyId = req.companyId || req.headers['x-company-id'] || req.query.companyId;
+      if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
+      query = { _id: req.params.id, companyId };
+    }
+
+    const quotation = await fullPopulate(Quotation.findOne(query)).lean();
     if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
-    const isAdmin = req.user.role === 'admin';
-    const isOps = req.user.role === 'ops_manager';
     const isCreator = quotation.createdBy._id.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator)
@@ -1108,7 +1130,7 @@ exports.updateQuotation = async (req, res) => {
       const removedItemKeys = [...oldItemKeys].filter(k => !keptItemKeys.has(k));
       for (const key of removedItemKeys) {
         await deleteFromS3(key);
-        console.log(`🗑️ Deleted removed item image: ${key}`);
+        logger.debug(`Deleted removed item image`, { key });
       }
       if (removedItemKeys.length > 0) {
         logger.info(`Item image cleanup: removed ${removedItemKeys.length} orphaned S3 object(s)`);
@@ -1140,7 +1162,7 @@ exports.updateQuotation = async (req, res) => {
     for (const removedImg of removedImages) {
       if (removedImg.s3Key) {
         await deleteFromS3(removedImg.s3Key);
-        console.log(`🗑️ Deleted removed terms image: ${removedImg.s3Key}`);
+        logger.debug('Deleted removed terms image', { key: removedImg.s3Key });
       }
     }
     
@@ -1196,7 +1218,7 @@ exports.updateQuotation = async (req, res) => {
       ...newUploadedImages
     ];
     
-    console.log(`📸 Terms images summary: ${dbTermsImages.length} existing, ${removedImages.length} removed, ${keptExistingImages.length} kept, ${newUploadedImages.length} new, ${finalTermsImages.length} total`);
+    logger.debug('Terms images summary', { existing: dbTermsImages.length, removed: removedImages.length, kept: keptExistingImages.length, new: newUploadedImages.length, total: finalTermsImages.length });
     // ==================== END OF TERMS IMAGES HANDLING ====================
 
     let newInternalDocs = [];
@@ -1619,13 +1641,21 @@ exports.awardQuotation = async (req, res) => {
         });
 
         // Surface a specific, actionable message per error kind
+        const isCustomerGone = zohoKind === 'client_error' && (
+          /not accessible/i.test(zohoError) ||
+          /deleted/i.test(zohoError) ||
+          /permission/i.test(zohoError)
+        );
         const kindMessages = {
           timeout:      'Zoho Books did not respond in time.',
           network:      'Could not connect to Zoho Books.',
           rate_limit:   'Zoho Books rate limit reached. Please wait a moment and try again.',
           server_error: 'Zoho Books returned a server error.',
           auth:         'Zoho Books authentication failed. Please contact your administrator.',
-          circuit_open: 'Zoho Books is currently unavailable (too many recent failures). Please try again in a minute.'
+          circuit_open: 'Zoho Books is currently unavailable (too many recent failures). Please try again in a minute.',
+          client_error: isCustomerGone
+            ? 'The customer linked to this quotation no longer exists in Zoho Books (it may have been deleted or deactivated). Go to Customers → sync with Zoho to restore it, then try awarding again.'
+            : `Zoho Books rejected the request: ${zohoError}`
         };
         const userMessage = kindMessages[zohoKind] || `Zoho Books rejected the request: ${zohoError}`;
 
@@ -1663,6 +1693,14 @@ exports.awardQuotation = async (req, res) => {
       };
 
       await quotation.save();
+
+      // Email admins + ops managers (exclude the creator if they hold one of those roles) — non-blocking
+      User.find({ role: { $in: ['admin', 'ops_manager'] }, isActive: true })
+        .select('email').lean()
+        .then(members => {
+          const emails = members.map(m => m.email).filter(e => e && e !== req.user.email);
+          if (emails.length) emailService.quotationAwardedNotifyTeam(emails, quotation, req.user.name);
+        }).catch(err => logger.warn('Failed to query team emails for award notification', { error: err.message }));
 
       const updated = await Quotation.findOne({ _id: quotationId, companyId })
         .populate('customerId').populate('companyId').lean();
@@ -1760,7 +1798,8 @@ exports.generatePDF = async (req, res) => {
 
   const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
   let page = null;
-  
+
+  await acquirePdfSlot();
   try {
     const browser = await getBrowser();
     page = await browser.newPage();
@@ -1786,10 +1825,12 @@ exports.generatePDF = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`);
     res.setHeader('Content-Length', pdfBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
+    releasePdfSlot();
     res.send(Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer));
-    
+
   } catch (err) {
     if (page) await page.close().catch(() => {});
+    releasePdfSlot();
     logger.error(`PDF generation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
   }

@@ -1,9 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const customerController = require("../controllers/customerController");
+const { protect } = require("../middleware/auth");
 const { companyContext } = require("../middleware/companyContext");
 
-// Apply company context to all routes
+// All routes require authentication
+router.use(protect);
 router.use(companyContext);
 
 // Customer CRUD Operations

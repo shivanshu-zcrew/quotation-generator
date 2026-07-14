@@ -4,7 +4,7 @@ import {
   Eye, Download, Trash2, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp, Calendar, Menu,
+  Shield, Award, Ban, Users, TrendingUp, Calendar, Menu, Building2,
 } from 'lucide-react';
 
 import { useAppStore, useCompanyQuotations } from '../services/store';
@@ -706,6 +706,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           <button onClick={() => onNavigate?.('addQuotation')} style={headerBtn('green')}><FileText size={isMobile ? 12 : 14} /> {isMobile ? 'New' : 'New Quotation'}</button>
           <button onClick={() => onNavigate?.('userStats')} style={headerBtn('soft')}><TrendingUp size={isMobile ? 12 : 14} /> {!isMobile && 'User Stats'}</button>
           <button onClick={() => onNavigate?.('users')} style={headerBtn('soft')}><Users size={isMobile ? 12 : 14} /> {!isMobile && 'Users'}</button>
+          {/* <button onClick={() => onNavigate?.('companies')} style={headerBtn('soft')}><Building2 size={isMobile ? 12 : 14} /> {!isMobile && 'Companies'}</button> */}
           <button onClick={handleLogout} style={headerBtn('ghost')}><LogOut size={isMobile ? 12 : 15} /> {!isMobile && 'Logout'}</button>
         </div>
       </div>
