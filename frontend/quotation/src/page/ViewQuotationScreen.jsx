@@ -52,71 +52,89 @@ const ReasonBanner = React.memo(({ quotation }) => {
   const opsRejectionReason = quotation?.opsRejectionReason;
   const adminRejectionReason = quotation?.rejectionReason;
   const status = quotation?.status;
-  
+
   const hasOpsRejection = opsRejectionReason && opsRejectionReason.trim();
   const hasAdminRejection = adminRejectionReason && adminRejectionReason.trim();
-  
+
   if (!hasOpsRejection && !hasAdminRejection) return null;
-  
+
   let reason = '';
-  let title = '';
+  let label = '';
+  let accentColor = '';
   let bgColor = '';
-  let borderColor = '';
+  let labelBg = '';
+  let labelColor = '';
   let icon = null;
-  
+
   if (status === 'ops_rejected' && hasOpsRejection) {
     reason = opsRejectionReason;
-    title = 'Returned by Operations Manager';
-    bgColor = '#fef2f2';
-    borderColor = '#fecaca';
-    icon = <AlertTriangle size={18} color="#dc2626" />;
+    label = 'Return Reason';
+    accentColor = '#dc2626';
+    bgColor = '#fff5f5';
+    labelBg = '#fee2e2';
+    labelColor = '#991b1b';
+    icon = <AlertTriangle size={16} color="#dc2626" />;
   } else if (status === 'rejected' && hasAdminRejection) {
     reason = adminRejectionReason;
-    title = 'Rejected by Admin';
-    bgColor = '#fef2f2';
-    borderColor = '#fecaca';
-    icon = <AlertTriangle size={18} color="#dc2626" />;
+    label = 'Rejection Reason';
+    accentColor = '#dc2626';
+    bgColor = '#fff5f5';
+    labelBg = '#fee2e2';
+    labelColor = '#991b1b';
+    icon = <AlertTriangle size={16} color="#dc2626" />;
   } else if (hasOpsRejection) {
     reason = opsRejectionReason;
-    title = 'Return Reason';
-    bgColor = '#fffbeb';
-    borderColor = '#fde68a';
-    icon = <AlertCircle size={18} color="#d97706" />;
+    label = 'Return Reason';
+    accentColor = '#d97706';
+    bgColor = '#fffdf0';
+    labelBg = '#fef3c7';
+    labelColor = '#92400e';
+    icon = <AlertCircle size={16} color="#d97706" />;
   } else if (hasAdminRejection) {
     reason = adminRejectionReason;
-    title = 'Rejection Reason';
-    bgColor = '#fffbeb';
-    borderColor = '#fde68a';
-    icon = <AlertCircle size={18} color="#d97706" />;
+    label = 'Rejection Reason';
+    accentColor = '#d97706';
+    bgColor = '#fffdf0';
+    labelBg = '#fef3c7';
+    labelColor = '#92400e';
+    icon = <AlertCircle size={16} color="#d97706" />;
   }
-  
+
   if (!reason) return null;
-  
+
   return (
     <div style={{
       backgroundColor: bgColor,
-      border: `1px solid ${borderColor}`,
-      borderRadius: '0.75rem',
+      border: `1px solid ${accentColor}22`,
+      borderLeft: `4px solid ${accentColor}`,
+      borderRadius: '0.5rem',
       padding: '1rem 1.25rem',
-      marginBottom: '1.5rem',
+      marginBottom: '1.25rem',
       display: 'flex',
       alignItems: 'flex-start',
-      gap: '0.75rem'
+      gap: '0.85rem',
     }}>
-      <div style={{ flexShrink: 0 }}>{icon}</div>
+      <div style={{ flexShrink: 0, marginTop: '2px' }}>{icon}</div>
       <div style={{ flex: 1 }}>
-        <div style={{
+        <span style={{
+          display: 'inline-block',
+          fontSize: '0.7rem',
           fontWeight: 700,
-          fontSize: '0.875rem',
-          color: status === 'ops_rejected' || status === 'rejected' ? '#991b1b' : '#92400e',
-          marginBottom: '0.25rem'
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          backgroundColor: labelBg,
+          color: labelColor,
+          padding: '0.15rem 0.55rem',
+          borderRadius: '999px',
+          marginBottom: '0.45rem',
         }}>
-          {title}
-        </div>
+          {label}
+        </span>
         <div style={{
           fontSize: '0.875rem',
           color: '#374151',
-          lineHeight: 1.5
+          lineHeight: 1.6,
+          whiteSpace: 'pre-wrap',
         }}>
           {reason}
         </div>
@@ -134,69 +152,137 @@ const ReviewBanner = ({
   showRejectForm, setShowRejectForm, rejectReason, setRejectReason,
   bannerStyle, onGoToDashboard,
 }) => (
-  <div style={bannerStyle}>
-    <div style={{ marginBottom: '1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 700, fontSize: '1rem', color: '#0C405A', marginBottom: '0.25rem' }}>
-        <CheckCircle size={20} color="#0C405A" />
-        <span>{title}</span>
+  <div style={{
+    ...bannerStyle,
+    borderRadius: '0.75rem',
+    overflow: 'hidden',
+    padding: 0,
+    border: '1px solid #bae6fd',
+    boxShadow: '0 1px 4px rgba(3,105,161,0.08)',
+  }}>
+    {/* Header strip */}
+    <div style={{
+      background: 'linear-gradient(135deg, #0c4a6e 0%, #0369a1 100%)',
+      padding: '0.9rem 1.25rem',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '0.75rem',
+      flexWrap: 'wrap',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+        <CheckCircle size={18} color="#7dd3fc" />
+        <span style={{ fontWeight: 700, fontSize: '0.95rem', color: '#fff' }}>{title}</span>
       </div>
-      <div style={{ fontSize: '0.85rem', color: '#0369a1', marginLeft: '1.75rem' }}>{meta}</div>
+      {meta && (
+        <span style={{
+          fontSize: '0.78rem',
+          color: '#bae6fd',
+          background: 'rgba(255,255,255,0.1)',
+          padding: '0.2rem 0.65rem',
+          borderRadius: '999px',
+          fontWeight: 500,
+        }}>{meta}</span>
+      )}
     </div>
-    {!showRejectForm ? (
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <button
-          onClick={onApprove}
-          disabled={isApproving || isRejecting}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#059669', color: '#fff', opacity: isApproving ? 0.7 : 1 }}
-        >
-          {isApproving ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={16} />}
-          {isApproving ? 'Approving…' : approveLabel}
-        </button>
-        <button
-          onClick={() => setShowRejectForm(true)}
-          disabled={isApproving || isRejecting}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#dc2626', color: '#fff' }}
-        >
-          <XCircle size={16} />
-          {rejectLabel}
-        </button>
-        {onGoToDashboard && (
+
+    {/* Body */}
+    <div style={{ padding: '1rem 1.25rem', background: '#f0f9ff' }}>
+      {!showRejectForm ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
           <button
-            onClick={onGoToDashboard}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1rem', border: '1px solid #6366f1', borderRadius: '0.5rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: 'transparent', color: '#6366f1' }}
+            onClick={onApprove}
+            disabled={isApproving || isRejecting}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.45rem',
+              padding: '0.6rem 1.3rem', border: 'none', borderRadius: '0.5rem',
+              fontSize: '0.875rem', fontWeight: 700, cursor: isApproving ? 'not-allowed' : 'pointer',
+              background: '#059669', color: '#fff',
+              opacity: isApproving ? 0.75 : 1,
+              boxShadow: '0 1px 3px rgba(5,150,105,0.3)',
+            }}
           >
-            <LayoutDashboard size={15} /> Dashboard
-          </button>
-        )}
-      </div>
-    ) : (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <textarea
-          placeholder={rejectPlaceholder}
-          value={rejectReason}
-          onChange={e => setRejectReason(e.target.value)}
-          rows={3}
-          style={{ width: '100%', padding: '0.65rem 0.85rem', border: '1px solid #cbd5e1', borderRadius: '0.5rem', fontSize: '0.875rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }}
-        />
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <button
-            onClick={onReject}
-            disabled={isRejecting || !rejectReason.trim()}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#dc2626', color: '#fff', opacity: isRejecting ? 0.7 : 1 }}
-          >
-            {isRejecting ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <XCircle size={16} />}
-            {isRejecting ? 'Processing…' : `Confirm — ${rejectLabel}`}
+            {isApproving ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={15} />}
+            {isApproving ? 'Approving…' : approveLabel}
           </button>
           <button
-            onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
-            disabled={isRejecting}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#e2e8f0', color: '#374151' }}
+            onClick={() => setShowRejectForm(true)}
+            disabled={isApproving || isRejecting}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.45rem',
+              padding: '0.6rem 1.3rem', border: 'none', borderRadius: '0.5rem',
+              fontSize: '0.875rem', fontWeight: 700, cursor: 'pointer',
+              background: '#dc2626', color: '#fff',
+              boxShadow: '0 1px 3px rgba(220,38,38,0.3)',
+            }}
           >
-            Cancel
+            <XCircle size={15} />
+            {rejectLabel}
           </button>
+          {onGoToDashboard && (
+            <button
+              onClick={onGoToDashboard}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.4rem',
+                padding: '0.6rem 1rem', borderRadius: '0.5rem',
+                fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer',
+                background: '#fff', color: '#0369a1',
+                border: '1px solid #bae6fd',
+              }}
+            >
+              <LayoutDashboard size={14} /> Dashboard
+            </button>
+          )}
         </div>
-      </div>
-    )}
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <textarea
+            placeholder={rejectPlaceholder}
+            value={rejectReason}
+            onChange={e => setRejectReason(e.target.value)}
+            rows={3}
+            style={{
+              width: '100%', padding: '0.7rem 0.9rem',
+              border: '1px solid #bae6fd', borderRadius: '0.5rem',
+              fontSize: '0.875rem', resize: 'vertical',
+              fontFamily: 'inherit', boxSizing: 'border-box',
+              background: '#fff', outline: 'none',
+              lineHeight: 1.55,
+            }}
+          />
+          <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={onReject}
+              disabled={isRejecting || !rejectReason.trim()}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.45rem',
+                padding: '0.6rem 1.3rem', border: 'none', borderRadius: '0.5rem',
+                fontSize: '0.875rem', fontWeight: 700,
+                cursor: isRejecting || !rejectReason.trim() ? 'not-allowed' : 'pointer',
+                background: '#dc2626', color: '#fff',
+                opacity: isRejecting || !rejectReason.trim() ? 0.65 : 1,
+                boxShadow: '0 1px 3px rgba(220,38,38,0.3)',
+              }}
+            >
+              {isRejecting ? <Loader size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <XCircle size={15} />}
+              {isRejecting ? 'Processing…' : `Confirm — ${rejectLabel}`}
+            </button>
+            <button
+              onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+              disabled={isRejecting}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.4rem',
+                padding: '0.6rem 1.1rem', border: '1px solid #cbd5e1',
+                borderRadius: '0.5rem', fontSize: '0.875rem', fontWeight: 600,
+                cursor: 'pointer', background: '#fff', color: '#374151',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   </div>
 );
 
@@ -211,39 +297,54 @@ const ROLE_LABELS = {
 
 const WrongAccountBanner = ({ currentUser, requiredRole, onSwitch }) => (
   <div style={{
-    background: '#fffbeb',
-    border: '1px solid #fbbf24',
     borderRadius: '0.75rem',
-    padding: '1.25rem 1.5rem',
+    overflow: 'hidden',
+    border: '1px solid #fde68a',
+    boxShadow: '0 1px 4px rgba(217,119,6,0.1)',
     marginBottom: '1.5rem',
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '1rem',
-    flexWrap: 'wrap',
   }}>
-    <AlertTriangle size={22} color="#d97706" style={{ flexShrink: 0, marginTop: '2px' }} />
-    <div style={{ flex: 1, minWidth: '200px' }}>
-      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#92400e', marginBottom: '0.3rem' }}>
-        Wrong account
-      </div>
-      <div style={{ fontSize: '0.875rem', color: '#78350f', lineHeight: 1.55 }}>
-        You are signed in as <strong>{currentUser?.name || currentUser?.email}</strong> ({ROLE_LABELS[currentUser?.role] || currentUser?.role}).
-        {' '}This action requires a <strong>{ROLE_LABELS[requiredRole]}</strong> account.
-        {' '}Sign in with the correct account to approve or reject this quotation.
-      </div>
+    {/* Amber header strip */}
+    <div style={{
+      background: 'linear-gradient(135deg, #92400e 0%, #b45309 100%)',
+      padding: '0.75rem 1.25rem',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.55rem',
+    }}>
+      <AlertTriangle size={16} color="#fde68a" />
+      <span style={{ fontWeight: 700, fontSize: '0.875rem', color: '#fff', letterSpacing: '0.01em' }}>
+        Wrong Account
+      </span>
     </div>
-    <button
-      onClick={onSwitch}
-      style={{
-        display: 'flex', alignItems: 'center', gap: '0.4rem',
-        padding: '0.55rem 1.1rem', border: 'none', borderRadius: '0.5rem',
-        fontSize: '0.875rem', fontWeight: 700, cursor: 'pointer',
-        background: '#d97706', color: '#fff', flexShrink: 0,
-      }}
-    >
-      <LogIn size={15} />
-      Switch Account
-    </button>
+
+    {/* Body */}
+    <div style={{
+      background: '#fffbeb',
+      padding: '1rem 1.25rem',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '1rem',
+      flexWrap: 'wrap',
+    }}>
+      <div style={{ flex: 1, minWidth: '200px', fontSize: '0.875rem', color: '#78350f', lineHeight: 1.6 }}>
+        Signed in as <strong style={{ color: '#92400e' }}>{currentUser?.name || currentUser?.email}</strong>
+        {' '}({ROLE_LABELS[currentUser?.role] || currentUser?.role}).
+        {' '}This action requires a <strong style={{ color: '#92400e' }}>{ROLE_LABELS[requiredRole]}</strong> account.
+      </div>
+      <button
+        onClick={onSwitch}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.45rem',
+          padding: '0.55rem 1.1rem', border: 'none', borderRadius: '0.5rem',
+          fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
+          background: '#b45309', color: '#fff', flexShrink: 0,
+          boxShadow: '0 1px 3px rgba(180,83,9,0.3)',
+        }}
+      >
+        <LogIn size={14} />
+        Switch Account
+      </button>
+    </div>
   </div>
 );
 
@@ -812,17 +913,7 @@ export default function ViewQuotationScreen() {
             return null;
           }
           if (role === 'admin' && status === 'rejected') {
-            return (
-              <div style={{ ...styles.reviewBanner, background: '#fee2e2', borderColor: '#fca5a5', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
-                <div style={styles.reviewBannerTitle}>
-                  <XCircle size={18} color="#991b1b" />
-                  <span style={{ color: '#991b1b' }}>This quotation has already been rejected.</span>
-                </div>
-                <button onClick={handleGoToDashboard} style={{ ...btnStyle('#6366f1'), flexShrink: 0 }}>
-                  <LayoutDashboard size={15} /> Go to Dashboard
-                </button>
-              </div>
-            );
+            return null;
           }
           return null;
         })()}

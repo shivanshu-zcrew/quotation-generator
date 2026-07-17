@@ -1776,12 +1776,13 @@ exports.awardQuotation = async (req, res) => {
 
       await quotation.save();
 
-      // Email admins + ops managers (exclude the creator if they hold one of those roles) — non-blocking
+      // Email creator + admins + ops managers — non-blocking
       User.find({ role: { $in: ['admin', 'ops_manager'] }, isActive: true })
         .select('email').lean()
         .then(members => {
-          const emails = members.map(m => m.email).filter(e => e && e !== req.user.email);
-          if (emails.length) emailService.quotationAwardedNotifyTeam(emails, quotation, req.user.name);
+          const creatorEmail = quotation.createdBySnapshot?.email;
+          const allEmails = [...new Set([...members.map(m => m.email), creatorEmail].filter(Boolean))].filter(e => e !== req.user.email);
+          if (allEmails.length) emailService.quotationAwardedNotifyAll(allEmails, quotation, req.user.name);
         }).catch(err => logger.warn('Failed to query team emails for award notification', { error: err.message }));
 
       const updated = await Quotation.findOne({ _id: quotationId, companyId })
@@ -1815,6 +1816,15 @@ exports.awardQuotation = async (req, res) => {
     };
 
     await quotation.save();
+
+    // Email creator + admins + ops managers — non-blocking
+    User.find({ role: { $in: ['admin', 'ops_manager'] }, isActive: true })
+      .select('email').lean()
+      .then(members => {
+        const creatorEmail = quotation.createdBySnapshot?.email;
+        const allEmails = [...new Set([...members.map(m => m.email), creatorEmail].filter(Boolean))].filter(e => e !== req.user.email);
+        if (allEmails.length) emailService.quotationNotAwardedNotifyAll(allEmails, quotation, req.user.name);
+      }).catch(err => logger.warn('Failed to query team emails for not-awarded notification', { error: err.message }));
 
     const updated = await Quotation.findOne({ _id: quotationId, companyId })
       .populate('customerId').populate('companyId').lean();

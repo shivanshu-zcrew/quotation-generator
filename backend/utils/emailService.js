@@ -435,15 +435,15 @@ const emailService = {
     dispatch(creatorEmail, subject, html);
   },
 
-  /** Quotation awarded → notify Admins & Ops Managers */
-  quotationAwardedNotifyTeam(teamEmails, quotation, creatorName) {
+  /** Quotation awarded → notify Creator, Admins & Ops Managers */
+  quotationAwardedNotifyAll(allEmails, quotation, markedByName) {
     const subject = `🏆 Quotation ${quotation.quotationNumber} Has Been Awarded!`;
     const html = emailWrapper(
       '🏆 Quotation Awarded',
       '#1d4ed8',
       `<p style="color:#1e293b;margin:0 0 20px;">
         Quotation <strong>${esc(quotation.quotationNumber)}</strong> has been marked as
-        <strong>Awarded</strong> by ${esc(creatorName)}.
+        <strong>Awarded</strong> by ${esc(markedByName)}.
       </p>
       ${infoRow('Quotation Number', quotation.quotationNumber)}
       ${infoRow('Project',          quotation.projectName)}
@@ -452,7 +452,64 @@ const emailService = {
       ${quotation.awardNote ? infoRow('Award Note', quotation.awardNote) : ''}
       ${actionButton('View Quotation', quotationUrl(quotation._id), '#1d4ed8')}`
     );
-    dispatch(teamEmails, subject, html);
+    dispatch(allEmails, subject, html);
+  },
+
+  /** Quotation not awarded → notify Creator, Admins & Ops Managers */
+  quotationNotAwardedNotifyAll(allEmails, quotation, markedByName) {
+    const subject = `Quotation ${quotation.quotationNumber} — Marked as Not Awarded`;
+    const html = emailWrapper(
+      '📋 Quotation Not Awarded',
+      '#475569',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        Quotation <strong>${esc(quotation.quotationNumber)}</strong> has been marked as
+        <strong>Not Awarded</strong> by ${esc(markedByName)}.
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${infoRow('Total',            formatAmount(quotation))}
+      ${quotation.awardNote ? infoRow('Note', quotation.awardNote) : ''}
+      ${actionButton('View Quotation', quotationUrl(quotation._id), '#475569')}`
+    );
+    dispatch(allEmails, subject, html);
+  },
+
+  /** Admin approved → also notify the Ops Manager who reviewed it */
+  adminApprovedNotifyOpsManager(opsEmail, quotation, adminName) {
+    const subject = `Quotation ${quotation.quotationNumber} — Approved by Admin`;
+    const html = emailWrapper(
+      '✅ Quotation Approved by Admin',
+      '#065f46',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        The quotation you reviewed has been fully approved by Admin <strong>${esc(adminName)}</strong>.
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${infoRow('Total',            formatAmount(quotation))}
+      ${infoRow('Approved By',      adminName)}
+      ${actionButton('View Quotation', quotationUrl(quotation._id), '#065f46')}`
+    );
+    dispatch(opsEmail, subject, html);
+  },
+
+  /** Admin rejected → also notify the Ops Manager who reviewed it */
+  adminRejectedNotifyOpsManager(opsEmail, quotation, adminName, reason) {
+    const subject = `Quotation ${quotation.quotationNumber} — Rejected by Admin`;
+    const html = emailWrapper(
+      '❌ Quotation Rejected by Admin',
+      '#991b1b',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        The quotation you reviewed has been rejected by Admin <strong>${esc(adminName)}</strong>.
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${reasonBox(reason)}
+      ${actionButton('View Quotation', quotationUrl(quotation._id), '#991b1b')}`
+    );
+    dispatch(opsEmail, subject, html);
   },
 };
 

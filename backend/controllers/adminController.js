@@ -615,6 +615,12 @@ exports.approveQuotation = async (req, res) => {
       emailService.adminApprovedNotifyCreator(approveCreatorEmail, quotation, req.user.name);
     }
 
+    // Also notify the Ops Manager who reviewed this quotation
+    const approveOpsEmail = quotation.opsApprovedBySnapshot?.email;
+    if (approveOpsEmail && approveOpsEmail !== req.user.email) {
+      emailService.adminApprovedNotifyOpsManager(approveOpsEmail, quotation, req.user.name);
+    }
+
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const sanitized = sanitizeQuotation(updated);
     const duration = Date.now() - startTime;
@@ -713,6 +719,12 @@ exports.rejectQuotation = async (req, res) => {
     logger.info(`[Email] reject check — createdBy: ${quotation.createdBy}, approver: ${req.user.id}, isSelf: ${rejectIsSelf}`);
     if (rejectCreatorEmail && !rejectIsSelf) {
       emailService.adminRejectedNotifyCreator(rejectCreatorEmail, quotation, req.user.name, reason.trim());
+    }
+
+    // Also notify the Ops Manager who reviewed this quotation
+    const rejectOpsEmail = quotation.opsApprovedBySnapshot?.email;
+    if (rejectOpsEmail && rejectOpsEmail !== req.user.email) {
+      emailService.adminRejectedNotifyOpsManager(rejectOpsEmail, quotation, req.user.name, reason.trim());
     }
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
