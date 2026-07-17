@@ -141,22 +141,22 @@ const quotationItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     unitPriceInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     totalPrice: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     totalPriceInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     // S3 (current)
     imageS3Keys: [{ type: String }],
@@ -286,46 +286,46 @@ const quotationSchema = new mongoose.Schema(
     subtotal: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     taxAmount: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     discountAmount: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     total: {
       type: Number,
       required: true,
       index: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
 
     // Totals (in base currency)
     subtotalInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     taxAmountInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     discountAmountInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
     totalInBaseCurrency: {
       type: Number,
       required: true,
       index: true,
-      set: (v) => Math.round(v * 100) / 100,
+      set: (v) => Math.round(v * 1000) / 1000,
     },
 
     // Notes & Terms
@@ -381,6 +381,8 @@ const quotationSchema = new mongoose.Schema(
     },
     opsApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     opsApprovedAt: { type: Date },
+    opsRejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    opsRejectedAt: { type: Date },
     opsRejectionReason: { type: String, default: "" },
 
     // Admin review
@@ -392,6 +394,8 @@ const quotationSchema = new mongoose.Schema(
     },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approvedAt: { type: Date },
+    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    rejectedAt: { type: Date },
     rejectionReason: { type: String, default: "" },
 
     // Zoho sync
@@ -420,6 +424,14 @@ quotationSchema.index({ companyId: 1, createdBy: 1 });
 quotationSchema.index({ companyId: 1, quotationNumber: 1 }, { unique: true });
 quotationSchema.index({ companyId: 1, totalInBaseCurrency: 1 });
 quotationSchema.index({ companyId: 1, queryDate: 1 });
+
+// Full-text search index — replaces per-field $regex (collection scans).
+// MongoDB tokenises on hyphens/spaces, so "QUO-2025-001" → tokens QUO, 2025, 001.
+// Weights prioritise quotation number matches over name/contact/project.
+quotationSchema.index(
+  { quotationNumber: 'text', 'customerSnapshot.name': 'text', contact: 'text', projectName: 'text' },
+  { name: 'quotation_text_search', weights: { quotationNumber: 10, 'customerSnapshot.name': 5, contact: 3, projectName: 2 } }
+);
 
 // ===== PRE-SAVE MIDDLEWARE =====
 quotationSchema.pre("save", async function (next) {

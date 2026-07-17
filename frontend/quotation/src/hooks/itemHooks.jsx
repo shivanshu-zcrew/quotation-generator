@@ -23,10 +23,6 @@ export const useItems = () => {
   } = useItemStore();
   
   const selectedCompany = useAppStore(s => s.selectedCompany);
-  const addItem = useAppStore(s => s.addItem);
-  const updateItem = useAppStore(s => s.updateItem);
-  const deleteItem = useAppStore(s => s.deleteItem);
-  const operationInProgress = useAppStore(s => s.operationInProgress);
 
   // Filter items by company (items from store should already be filtered)
   const companyItems = useMemo(() => {
@@ -56,15 +52,10 @@ export const useItems = () => {
     error: error,
     totalCount: totalCount,
     isLoaded: isLoaded,
-    isAddingItem: operationInProgress.addItem === true,
-    operationInProgress,
-    addItem,
-    updateItem,
-    deleteItem,
     loadAllItems,
     resetItems,
     refreshItems,
-    clearError: () => useItemStore.getState().setError(null),
+    clearError: () => useItemStore.getState().clearError(),
   };
 };
 
@@ -287,50 +278,22 @@ export const useCustomers = () => {
 // ============================================================================
 
 export const useItemsList = () => {
-  const { items, isLoading, isLoaded, loadAllItems, resetItems } = useItemStore();
-  const { selectedCompany } = useAppStore(s => ({ selectedCompany: s.selectedCompany }));
-  const [companyItems, setCompanyItems] = useState([]);
-  
-  // Reset and reload when company changes
-  useEffect(() => {
-    if (selectedCompany) {
-      console.log('🔄 useItemsList: Company changed to:', selectedCompany);
-      
-      // Reset store to clear old items
-      resetItems();
-      
-      // Clear local state
-      setCompanyItems([]);
-      
-      // Load new company items
-      loadAllItems(selectedCompany, true); // Force refresh
-    }
-  }, [selectedCompany, resetItems, loadAllItems]);
-  
-  // Update local items when store items change
-  useEffect(() => {
-    if (items && items.length > 0) {
-      // Filter items by current company to be safe
-      const filtered = items.filter(item =>
-        item.companyId === selectedCompany ||
-        item.companyId?._id === selectedCompany
-      );
-      console.log(`📦 useItemsList: ${filtered.length} items for company ${selectedCompany}`);
-      setCompanyItems(filtered);
-    } else if (!isLoading && selectedCompany) {
-      setCompanyItems([]);
-    }
-  }, [items, selectedCompany, isLoading]);
-  
-  // Initial load if needed
+  const { items, isLoading, isLoaded, loadAllItems } = useItemStore();
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+
   useEffect(() => {
     if (selectedCompany && !isLoaded && !isLoading) {
-      console.log('📚 useItemsList: Initial load for company:', selectedCompany);
       loadAllItems(selectedCompany);
     }
   }, [selectedCompany, isLoaded, isLoading, loadAllItems]);
-  
-  return companyItems;
+
+  return useMemo(() => {
+    if (!selectedCompany) return items;
+    return items.filter(item =>
+      item.companyId === selectedCompany ||
+      item.companyId?._id === selectedCompany
+    );
+  }, [items, selectedCompany]);
 };
 
 // ============================================================================

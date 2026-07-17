@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 const logger = require('../config/logger');
@@ -8,7 +9,7 @@ const { Quotation } = require('../models/quotation');
 // ============================================================
 
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'your-secret-key', {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   });
 };
@@ -36,18 +37,9 @@ exports.register = async (req, res) => {
   try {
     const { name, email, phone, password, role: requestedRole } = req.body;
 
-    // Only allow role assignment if the caller is an authenticated admin
-    let assignedRole = 'user';
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      try {
-        const decoded = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET || 'your-secret-key');
-        const caller = await User.findById(decoded.id).select('role isActive').lean();
-        if (caller && caller.isActive && caller.role === 'admin' && requestedRole) {
-          assignedRole = requestedRole;
-        }
-      } catch (_) { /* unauthenticated — use default role */ }
-    }
+    // Role assignment during registration is disabled for security.
+    // Use the admin panel to update user roles after creation.
+    const assignedRole = 'user'; // always default; admins use a separate endpoint
 
     if (await checkEmailExists(email)) {
       return res.status(400).json({ message: 'User already exists' });
@@ -146,7 +138,7 @@ exports.resetPasswordWithToken = async (req, res) => {
 
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch {
       return res.status(401).json({ message: 'Invalid or expired reset token' });
     }
@@ -618,7 +610,7 @@ exports.generateTemporaryPassword = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const tempPassword = Math.random().toString(36).slice(-12);
+    const tempPassword = crypto.randomBytes(9).toString('base64url');
 
     user.password = tempPassword;
     user.mustChangePassword = true;

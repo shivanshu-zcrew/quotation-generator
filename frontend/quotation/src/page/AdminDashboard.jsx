@@ -272,6 +272,7 @@ AdminQuotationCard.displayName = 'AdminQuotationCard';
 export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const navigate  = useNavigate();
   const isMobile  = useMediaQuery('(max-width: 768px)');
+  const isTablet  = useMediaQuery('(max-width: 1100px)');
 
   const [uiState, setUiState] = useState({ mobileMenuOpen: false, viewMode: 'table' });
   const [exportFilters, setExportFilters] = useState({ showFilters: false, fromDate: '', toDate: '', status: 'all' });
@@ -288,6 +289,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const {
     quotations: companyQuotations,
     pagination: quotationsPagination,
+    quotationCounts,
     refresh: refreshCompanyQuotations,
     quotationsLoading,
     quotationsInitialized,
@@ -361,13 +363,23 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   const activeTab = useMemo(() => filters.status === null ? 'all' : filters.status, [filters.status]);
 
-  const tabCounts = useMemo(() => ({
-    all:          statusCounts?.total        || totalQuotations || 0,
-    ops_approved: statusCounts?.ops_approved || actionRequired  || 0,
-    approved:     statusCounts?.approved     || approved        || 0,
-    awarded:      statusCounts?.awarded      || awarded         || 0,
-    rejected:     statusCounts?.rejected     || rejected        || 0,
-  }), [statusCounts, totalQuotations, actionRequired, approved, awarded, rejected]);
+  const tabCounts = useMemo(() => {
+    // quotationCounts from the list API reflects the active filter/search — most accurate.
+    if (quotationCounts && Object.keys(quotationCounts).length > 0) return {
+      all:          quotationCounts.all          ?? 0,
+      ops_approved: quotationCounts.ops_approved ?? 0,
+      approved:     quotationCounts.approved     ?? 0,
+      awarded:      quotationCounts.awarded      ?? 0,
+      rejected:     quotationCounts.rejected     ?? 0,
+    };
+    return {
+      all:          statusCounts?.total        || totalQuotations || 0,
+      ops_approved: statusCounts?.ops_approved || actionRequired  || 0,
+      approved:     statusCounts?.approved     || approved        || 0,
+      awarded:      statusCounts?.awarded      || awarded         || 0,
+      rejected:     statusCounts?.rejected     || rejected        || 0,
+    };
+  }, [quotationCounts, statusCounts, totalQuotations, actionRequired, approved, awarded, rejected]);
 
   // ── Effects ───────────────────────────────────────────────
   useEffect(() => {
@@ -378,7 +390,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   }, [hasCompany, initialized, isSwitchingCompany, refreshCompanyQuotations, currentLimit, filters]);
 
   useEffect(() => { changeLimit(isMobile ? 10 : 20); }, [isMobile, changeLimit]);
-  useEffect(() => { if (isMobile) setUiState(p => ({ ...p, viewMode: 'card' })); }, [isMobile]);
+  useEffect(() => { if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' })); }, [isMobile, isTablet]);
   useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false; if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current); if (searchTimer.current) clearTimeout(searchTimer.current); }; }, []);
 
   // ── Op helpers ────────────────────────────────────────────
@@ -547,7 +559,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     return { ...v[variant], borderRadius: T.radiusSm, padding: isMobile ? '0.4rem 0.7rem' : '0.5rem 0.95rem', fontSize: isMobile ? '0.72rem' : '0.8rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.45rem', fontFamily: FONT_STACK, transition: 'all 0.18s ease' };
   };
 
-  const thStyle = { padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left', borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap' };
+  const thStyle = { padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left', borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 1 };
 
   // ── Table row renderer with updated currency formatting ───
   const renderTableRow = (q) => {
@@ -629,7 +641,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink }}>
+    <div style={{ minHeight: '100vh', backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink, overflowX: 'hidden' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         @keyframes adm-spin    { to { transform: rotate(360deg); } }
@@ -765,7 +777,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           {/* Toolbar */}
           <div style={{ padding: isMobile ? '0.9rem 1rem' : '1.25rem 1.5rem', borderBottom: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.9rem' }}>
             {/* Tabs */}
-            <div style={{ display: 'flex', gap: '0.15rem', padding: '0.3rem', backgroundColor: T.canvas, borderRadius: 12, overflowX: isMobile ? 'auto' : 'visible', width: isMobile ? '100%' : 'auto', border: `1px solid ${T.line}` }}>
+            <div style={{ display: 'flex', gap: '0.15rem', padding: '0.3rem', backgroundColor: T.canvas, borderRadius: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', width: '100%', border: `1px solid ${T.line}` }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
                 const active   = activeTab === key;
                 const isAction = key === 'ops_approved';
@@ -810,8 +822,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
           {/* Content */}
           {showTableShimmer ? (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                 <thead>{['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Created By','Total','Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}</thead>
                 <tbody>{[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}</tbody>
               </table>
@@ -835,8 +847,8 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                         <thead>
                           <tr>
                             <SortHeader label="Quote #"     field="quotationNumber" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />

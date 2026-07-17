@@ -25,6 +25,7 @@ export function useQuotation() {
   const quotations = useAppStore((state) => state.quotations);
   const updateQuotation = useAppStore((state) => state.updateQuotation);
   const deleteQuotation = useAppStore((state) => state.deleteQuotation);
+  const selectedCurrency = useAppStore((state) => state.selectedCurrency);
 
   // All useState hooks must be at the top
   const [isEditing, setIsEditing] = useState(false);
@@ -51,7 +52,12 @@ export function useQuotation() {
   const [signedUrlsLoaded, setSignedUrlsLoaded] = useState(false);
 
   // Helper functions defined before useMemo/useCallback
-  const round = useCallback((num) => Number((num || 0).toFixed(2)), []);
+  const round = useCallback((num) => {
+    const decimalPlaces = { KWD: 3, BHD: 3, OMR: 3 };
+    const places = decimalPlaces[selectedCurrency] ?? 2;
+    const factor = Math.pow(10, places);
+    return Math.round((num || 0) * factor) / factor;
+  }, [selectedCurrency]);
 
   const showSnack = useCallback((msg, type = "error") => {
     setSnackbar({ show: true, message: msg, type });

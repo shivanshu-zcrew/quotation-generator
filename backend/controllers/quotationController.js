@@ -5,13 +5,17 @@ const Item = require('../models/items');
 const puppeteer = require('puppeteer');
 const mime = require('mime-types');
 const zohoBooksService = require('../zoho/customerServices');
-const { CURRENCY_OPTIONS } = require('../models/constants'); 
+const { CURRENCY_OPTIONS } = require('../models/constants');
 const imageCompressor = require('../utils/imageCompressor');
 const ExcelJS = require('exceljs');
 const NotificationService = require("../utils/notificationService");
 const emailService = require('../utils/emailService');
 const User = require('../models/user');
 const logger = require('../config/logger');
+const redisService = require('../config/redisService');
+
+// Escape regex metacharacters to prevent ReDoS
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ===================== S3 IMPORTS =====================
 const {
@@ -138,19 +142,35 @@ let _browser = null;
 // PDF_MAX_CONCURRENT from .env (default 3).
 // ─────────────────────────────────────────────────────────────
 const PDF_MAX = parseInt(process.env.PDF_MAX_CONCURRENT || '3', 10);
+const PDF_MAX_QUEUE = parseInt(process.env.PDF_MAX_QUEUE || '50', 10);
+const PDF_QUEUE_TIMEOUT_MS = 30_000;
 let _pdfActive = 0;
 const _pdfQueue = [];
 
 function acquirePdfSlot() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (_pdfActive < PDF_MAX) { _pdfActive++; resolve(); }
-    else _pdfQueue.push(resolve);
+    else {
+      if (_pdfQueue.length >= PDF_MAX_QUEUE) {
+        return reject(Object.assign(new Error('PDF generation queue is full'), { status: 503 }));
+      }
+      const entry = { resolve, reject };
+      entry.timer = setTimeout(() => {
+        const idx = _pdfQueue.indexOf(entry);
+        if (idx !== -1) _pdfQueue.splice(idx, 1);
+        reject(Object.assign(new Error('PDF generation timed out'), { status: 503 }));
+      }, PDF_QUEUE_TIMEOUT_MS);
+      _pdfQueue.push(entry);
+    }
   });
 }
 
 function releasePdfSlot() {
-  if (_pdfQueue.length > 0) { _pdfQueue.shift()(); }
-  else _pdfActive--;
+  if (_pdfQueue.length > 0) {
+    const entry = _pdfQueue.shift();
+    clearTimeout(entry.timer);
+    entry.resolve();
+  } else _pdfActive--;
 }
 
 exports.getPDFMetrics = async (req, res) => {
@@ -343,6 +363,12 @@ const fullPopulate = (q) =>
     .populate('approvedBy', 'name email')
     .populate('awardedBy', 'name email');
 
+// Lightweight populate for list endpoints — skips approval-chain refs not shown in tables.
+const listPopulate = (q) =>
+  q
+    .populate('customerId', 'name')
+    .populate('createdBy', 'name');
+
 function convertHtmlToPlainText(html) {
   if (!html) return '';
   let text = html.replace(/<[^>]*>/g, ' ');
@@ -380,11 +406,16 @@ function cleanHtmlForZoho(html) {
 
 exports.getCompanies = async (req, res) => {
   try {
+    const CACHE_KEY = 'companies:active';
+    const cached = await redisService.get(CACHE_KEY);
+    if (cached) return res.json({ success: true, companies: cached, count: cached.length });
+
     const companies = await Company.find({ isActive: true })
       .select('code name slug logo address phone email baseCurrency acceptedCurrencies')
       .sort({ name: 1 })
       .lean();
 
+    await redisService.set(CACHE_KEY, companies, 3600); // 1 hour — companies rarely change
     res.json({ success: true, companies, count: companies.length });
   } catch (err) {
     logger.error(`Get companies error: ${err.message}`);
@@ -395,6 +426,10 @@ exports.getCompanies = async (req, res) => {
 exports.getCompanyByCode = async (req, res) => {
   try {
     const { code } = req.params;
+    const CACHE_KEY = `company:code:${code.toUpperCase()}`;
+    const cached = await redisService.get(CACHE_KEY);
+    if (cached) return res.json({ success: true, company: cached });
+
     const company = await Company.findOne({ code: code.toUpperCase(), isActive: true }).lean();
 
     if (!company) {
@@ -402,6 +437,7 @@ exports.getCompanyByCode = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
+    await redisService.set(CACHE_KEY, company, 3600); // 1 hour
     res.json({ success: true, company });
   } catch (err) {
     logger.error(`Get company by code error: ${err.message}`);
@@ -413,6 +449,14 @@ exports.getCompanyStats = async (req, res) => {
   try {
     const { id } = req.params;
     const { from, to } = req.query;
+
+    // Skip cache when date filters are applied — results are filter-specific
+    const hasDateFilter = !!(from || to);
+    const CACHE_KEY = `stats:company:${id}`;
+    if (!hasDateFilter) {
+      const cached = await redisService.get(CACHE_KEY);
+      if (cached) return res.json({ success: true, ...cached });
+    }
 
     const company = await Company.findById(id);
     if (!company) {
@@ -438,11 +482,13 @@ exports.getCompanyStats = async (req, res) => {
     const statusMap = { draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0, approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0 };
     statusCounts.forEach(item => { statusMap[item._id] = item.count; });
 
-    res.json({
-      success: true,
+    const payload = {
       company: { id: company._id, code: company.code, name: company.name, baseCurrency: company.baseCurrency, logo: company.logo },
       stats: { totalQuotations, totalValue: totalValue[0]?.total || 0, statusCounts: statusMap, currencyBreakdown, recentQuotations }
-    });
+    };
+
+    if (!hasDateFilter) await redisService.set(CACHE_KEY, payload, 600); // 10 min
+    res.json({ success: true, ...payload });
   } catch (err) {
     logger.error(`Get company stats error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error fetching company stats', error: err.message });
@@ -464,10 +510,9 @@ exports.getAllQuotations = async (req, res) => {
     if (req.query.currency) filter['currency.code'] = req.query.currency;
     
     if (req.query.search) {
-      const re = new RegExp(req.query.search.trim(), 'i');
-      filter.$or = [{ quotationNumber: re }, { 'customerSnapshot.name': re }, { contact: re }];
+      filter.$text = { $search: req.query.search.trim() };
     }
-    
+
     if (req.query.from || req.query.to) {
       filter.date = {};
       if (req.query.from) filter.date.$gte = new Date(req.query.from);
@@ -476,9 +521,13 @@ exports.getAllQuotations = async (req, res) => {
 
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
+    // When searching by text, also sort by relevance score so best matches surface first
+    const sortObj = req.query.search
+      ? { score: { $meta: 'textScore' }, [sortField]: sortDir }
+      : { [sortField]: sortDir };
 
     const [data, total] = await Promise.all([
-      fullPopulate(Quotation.find(filter).sort({ [sortField]: sortDir }).skip(skip).limit(limit)).lean(),
+      listPopulate(Quotation.find(filter).sort(sortObj).skip(skip).limit(limit)).lean(),
       Quotation.countDocuments(filter),
     ]);
 
@@ -500,19 +549,17 @@ exports.getMyQuotations = async (req, res) => {
     if (req.query.status) filter.status = req.query.status;
 
     if (req.query.search) {
-      const re = new RegExp(req.query.search.trim(), 'i');
-      filter.$or = [{ quotationNumber: re }, { 'customerSnapshot.name': re }];
+      filter.$text = { $search: req.query.search.trim() };
     }
 
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
-
-    // _id tiebreaker keeps ordering stable across pages when the sort
-    // field has duplicate values (prevents rows duplicating/disappearing).
-    const sortObject = { [sortField]: sortDir, _id: 1 };
+    const sortObject = req.query.search
+      ? { score: { $meta: 'textScore' }, [sortField]: sortDir }
+      : { [sortField]: sortDir, _id: 1 };
 
     const [data, total] = await Promise.all([
-      fullPopulate(Quotation.find(filter).sort(sortObject).skip(skip).limit(limit)).lean(),
+      listPopulate(Quotation.find(filter).sort(sortObject).skip(skip).limit(limit)).lean(),
       Quotation.countDocuments(filter),
     ]);
 
@@ -542,12 +589,17 @@ exports.getMyQuotations = async (req, res) => {
 exports.getMyQuotationsStats = async (req, res) => {
   const startTime = Date.now();
   try {
-    // Get companyId from query params
     let companyId = req.query.companyId || req.headers['x-company-id'];
-    
-    // Get user ID from request
     const userId = req.user.id;
-    const userObjectId = mongoose.Types.ObjectId.isValid(userId) 
+
+    const CACHE_KEY = `stats:user:${userId}:company:${companyId || 'all'}`;
+    const cached = await redisService.get(CACHE_KEY);
+    if (cached) return res.json({ success: true, stats: cached });
+
+    // Get companyId from query params
+    companyId = req.query.companyId || req.headers['x-company-id'];
+
+    const userObjectId = mongoose.Types.ObjectId.isValid(userId)
       ? new mongoose.Types.ObjectId(userId) 
       : userId;
     
@@ -645,14 +697,15 @@ exports.getMyQuotationsStats = async (req, res) => {
     };
     
     const duration = Date.now() - startTime;
-    
+
     logger.info(`User quotations stats fetched`, {
       ...stats,
       companyId: companyId || 'all',
       duration: `${duration}ms`,
       userId: req.user?.id
     });
-    
+
+    await redisService.set(CACHE_KEY, stats, 300); // 5 min — stale stats are acceptable
     res.json({
       success: true,
       stats
@@ -692,7 +745,7 @@ exports.getQuotation = async (req, res) => {
     const quotation = await fullPopulate(Quotation.findOne(query)).lean();
     if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator)
       return res.status(403).json({ message: 'Not authorized to view this quotation' });
@@ -947,7 +1000,21 @@ exports.createQuotation = async (req, res) => {
 
   await quotation.save();
   const populated = await fullPopulate(Quotation.findById(quotation._id)).lean();
-  
+
+  // Invalidate stats caches so dashboards reflect the new quotation immediately
+  redisService.delPattern(`stats:user:${req.user.id}:*`);
+  redisService.delPattern(`stats:company:${companyId}:*`);
+
+  // Non-blocking: notify ops managers of new submission
+  if (initialStatus === 'pending') {
+    User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
+      .then(ops => {
+        const emails = ops.map(o => o.email).filter(e => e);
+        if (emails.length) emailService.creatorSubmittedNotifyOps(emails, quotation, req.user.name, false);
+      })
+      .catch(err => logger.warn('[Email] Failed to notify ops of new quotation', { error: err.message }));
+  }
+
   res.status(201).json({
     success: true, message: 'Quotation created successfully', quotation: populated,
     stats: {
@@ -1057,7 +1124,7 @@ exports.updateQuotation = async (req, res) => {
     let customerSnapshotTradeLicense = existing.customerSnapshot?.tradeLicenseNumber || '';
     
     if (customerId && customerId !== existing.customerId?.toString()) {
-      const customerDoc = await Customer.findById(customerId).lean();
+      const customerDoc = await Customer.findOne({ _id: customerId, companyId: existing.companyId }).lean();
       if (customerDoc) {
         customerTaxTreatment = customerDoc.taxTreatment || 'non_vat_registered';
         customerPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
@@ -1145,9 +1212,10 @@ exports.updateQuotation = async (req, res) => {
     const totals = calculateTotals(processedItems, tax, discount, exchangeRate);
 
     const subtotalInBaseCurrency = processedItems.reduce((sum, item) => sum + (item.totalPriceInBaseCurrency || 0), 0);
-    const taxAmountInBaseCurrency = (subtotalInBaseCurrency * tax) / 100;
     const discountAmountInBaseCurrency = (subtotalInBaseCurrency * discount) / 100;
-    const totalInBaseCurrency = subtotalInBaseCurrency + taxAmountInBaseCurrency - discountAmountInBaseCurrency;
+    const discountedSubtotalInBaseCurrency = subtotalInBaseCurrency - discountAmountInBaseCurrency;
+    const taxAmountInBaseCurrency = (discountedSubtotalInBaseCurrency * tax) / 100;
+    const totalInBaseCurrency = discountedSubtotalInBaseCurrency + taxAmountInBaseCurrency;
 
     // ==================== TERMS IMAGES HANDLING ====================
     const dbTermsImages = existing.termsImages || [];
@@ -1334,6 +1402,20 @@ exports.updateQuotation = async (req, res) => {
       .populate('approvedBy', 'name email').populate('awardedBy', 'name email')
       .populate('companyId', 'name code baseCurrency logo focalPointDesignation').lean();
     
+    // Invalidate stats caches — status may have changed
+    redisService.delPattern(`stats:user:${req.user.id}:*`);
+    redisService.delPattern(`stats:company:${companyId}:*`);
+
+    // Non-blocking: notify ops on resubmission after rejection
+    if (newStatus === 'pending' && ['ops_rejected', 'rejected'].includes(currentStatus)) {
+      User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
+        .then(ops => {
+          const emails = ops.map(o => o.email).filter(e => e);
+          if (emails.length) emailService.creatorSubmittedNotifyOps(emails, populated, req.user.name, true);
+        })
+        .catch(err => logger.warn('[Email] Failed to notify ops of resubmission', { error: err.message }));
+    }
+
     res.status(200).json({
       success: true, message: 'Quotation updated successfully', quotation: populated,
       stats: {
@@ -1417,7 +1499,7 @@ exports.updateQueryDate = async (req, res) => {
     const quotation = await Quotation.findOne({ _id: req.params.id, companyId });
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
     const isAdmin = req.user.role === 'admin';
     if (!isCreator && !isAdmin) return res.status(403).json({ success: false, message: 'Not authorized' });
 
@@ -1456,7 +1538,7 @@ exports.awardQuotation = async (req, res) => {
     const customer = await Customer.findOne({ _id: quotation.customerId, companyId }).lean();
     if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
 
-    if (quotation.createdBy._id.toString() !== req.user.id) {
+    if (!quotation.createdBy || quotation.createdBy._id?.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Only the creator can mark this quotation as awarded' });
     }
 
@@ -1756,7 +1838,7 @@ exports.deleteQuotation = async (req, res) => {
     if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     const isAdmin = req.user.role === 'admin';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isCreator) return res.status(403).json({ message: 'Not authorized to delete this quotation' });
     if (!isAdmin && !['pending', 'ops_rejected'].includes(quotation.status))
@@ -1807,7 +1889,7 @@ exports.generatePDF = async (req, res) => {
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
-      if (['stylesheet', 'font', 'media'].includes(type)) req.abort();
+      if (['stylesheet', 'font', 'media', 'script', 'fetch', 'xhr', 'websocket', 'other'].includes(type)) req.abort();
       else req.continue();
     });
 
@@ -1822,7 +1904,7 @@ exports.generatePDF = async (req, res) => {
     if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-') throw new Error('Puppeteer returned an invalid PDF buffer');
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}.pdf`);
     res.setHeader('Content-Length', pdfBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
     releasePdfSlot();
@@ -1839,7 +1921,13 @@ exports.generatePDF = async (req, res) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const { companyId } = req.query;
-    const matchStage = companyId ? { companyId } : {};
+    let matchStage = {};
+    if (companyId) {
+      if (!mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ success: false, message: 'Invalid company ID' });
+      }
+      matchStage = { companyId: new mongoose.Types.ObjectId(companyId) };
+    }
 
     const [
       total,
@@ -2018,7 +2106,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
     }
 
     if (search?.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+      const regex = new RegExp(escapeRegex(search.trim()), "i");
       query.$or = [
         { quotationNumber: regex },
         { "customerSnapshot.name": regex },
@@ -2698,7 +2786,7 @@ exports.addInternalDocuments = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to add documents to this quotation' });
@@ -2734,7 +2822,7 @@ exports.getInternalDocuments = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
@@ -2761,7 +2849,7 @@ exports.getInternalDocumentById = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
@@ -2785,7 +2873,7 @@ exports.updateInternalDocumentDescription = async (req, res) => {
     const quotation = await Quotation.findById(id);
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
     if (!isCreator) return res.status(403).json({ success: false, message: 'Only the creator can update internal document descriptions' });
 
     const document = quotation.internalDocuments?.id(docId);
@@ -2807,7 +2895,7 @@ exports.removeInternalDocument = async (req, res) => {
     const quotation = await Quotation.findById(id);
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
     if (!isCreator) return res.status(403).json({ success: false, message: 'Only the creator can remove internal documents' });
 
     const document = quotation.internalDocuments?.id(docId);
@@ -2832,7 +2920,7 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
 
     const isAdmin = req.user.role === 'admin';
     const isOps = req.user.role === 'ops_manager';
-    const isCreator = quotation.createdBy._id.toString() === req.user.id;
+    const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to download internal documents' });
@@ -2869,18 +2957,18 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
 exports.getSignedUrl = async (req, res) => {
   try {
     const { key } = req.params;
-    const { expiresIn = 3600 } = req.query;
-    
+    const expiresIn = Math.min(parseInt(req.query.expiresIn) || 3600, 3600);
+
     if (!key) {
       return res.status(400).json({ success: false, message: 'S3 key is required' });
     }
-    
-    const signedUrl = await getSignedFileUrl(key, parseInt(expiresIn));
-    
+
+    const signedUrl = await getSignedFileUrl(key, expiresIn);
+
     if (!signedUrl) {
       return res.status(404).json({ success: false, message: 'Unable to generate signed URL' });
     }
-    
+
     res.json({ success: true, url: signedUrl });
   } catch (err) {
     logger.error(`Get signed URL error: ${err.message}`);
@@ -2891,23 +2979,23 @@ exports.getSignedUrl = async (req, res) => {
 exports.getBatchSignedUrls = async (req, res) => {
   try {
     const { keys } = req.body;
-    const { expiresIn = 3600 } = req.query;
-    
-    if (!keys || !Array.isArray(keys)) {
-      return res.status(400).json({ success: false, message: 'Array of S3 keys is required' });
+    const expiresIn = Math.min(parseInt(req.query.expiresIn) || 3600, 3600);
+
+    if (!keys || !Array.isArray(keys) || keys.length > 20) {
+      return res.status(400).json({ success: false, message: 'Maximum 20 keys per batch' });
     }
-    
+
     const urls = {};
-    
+
     for (const key of keys) {
       if (key) {
-        const signedUrl = await getSignedFileUrl(key, parseInt(expiresIn));
+        const signedUrl = await getSignedFileUrl(key, expiresIn);
         if (signedUrl) {
           urls[key] = signedUrl;
         }
       }
     }
-    
+
     res.json({ success: true, urls });
   } catch (err) {
     logger.error(`Batch get signed URLs error: ${err.message}`);

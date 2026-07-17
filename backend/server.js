@@ -112,27 +112,25 @@ app.get('/health', (req, res) => {
 
 // ── Global error handler ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  // Log error with details
-  logger.error(`${err.message}`, {
-    error: err.stack,
-    url: req.url,
-    method: req.method,
-    ip: req.ip,
-    companyId: req.headers['x-company-id']
-  });
-  
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       message: 'CORS error: Origin not allowed',
       error: err.message
     });
   }
-  
-  res.status(500).json({ message: 'Something went wrong!', error: err.message });
+  next(err);
 });
+
+const errorHandler = require('./middleware/errorHandler');
+app.use(errorHandler);
 
 // ── Initialize Application ────────────────────────────────────────────────
 const initializeApp = async () => {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+    console.error('FATAL: JWT_SECRET env var is missing or shorter than 32 characters. Refusing to start.');
+    process.exit(1);
+  }
+
   try {
     logger.info('Starting application initialization...');
     

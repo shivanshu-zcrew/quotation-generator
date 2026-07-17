@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { Download, Edit2, Save, X, ArrowLeft, Loader, AlertCircle, AlertTriangle } from "lucide-react";
+import { Download, Edit2, Save, X, ArrowLeft, LayoutDashboard, Loader, AlertCircle, AlertTriangle, CheckCircle, XCircle, LogIn } from "lucide-react";
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuotation } from '../hooks/useQuotation';
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import { btnStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
 import { useAppStore } from '../services/store';
+import { getHomePath } from '../services/api';
 import LoadingOverlay from '../components/LoadingOverlay';
 
 // ============================================================
@@ -124,6 +126,128 @@ const ReasonBanner = React.memo(({ quotation }) => {
 });
 
 // ============================================================
+// REVIEW ACTION BANNER COMPONENT
+// ============================================================
+const ReviewBanner = ({
+  title, meta, approveLabel, rejectLabel, rejectPlaceholder,
+  onApprove, onReject, isApproving, isRejecting,
+  showRejectForm, setShowRejectForm, rejectReason, setRejectReason,
+  bannerStyle, onGoToDashboard,
+}) => (
+  <div style={bannerStyle}>
+    <div style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontWeight: 700, fontSize: '1rem', color: '#0C405A', marginBottom: '0.25rem' }}>
+        <CheckCircle size={20} color="#0C405A" />
+        <span>{title}</span>
+      </div>
+      <div style={{ fontSize: '0.85rem', color: '#0369a1', marginLeft: '1.75rem' }}>{meta}</div>
+    </div>
+    {!showRejectForm ? (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <button
+          onClick={onApprove}
+          disabled={isApproving || isRejecting}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#059669', color: '#fff', opacity: isApproving ? 0.7 : 1 }}
+        >
+          {isApproving ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={16} />}
+          {isApproving ? 'Approving…' : approveLabel}
+        </button>
+        <button
+          onClick={() => setShowRejectForm(true)}
+          disabled={isApproving || isRejecting}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#dc2626', color: '#fff' }}
+        >
+          <XCircle size={16} />
+          {rejectLabel}
+        </button>
+        {onGoToDashboard && (
+          <button
+            onClick={onGoToDashboard}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1rem', border: '1px solid #6366f1', borderRadius: '0.5rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: 'transparent', color: '#6366f1' }}
+          >
+            <LayoutDashboard size={15} /> Dashboard
+          </button>
+        )}
+      </div>
+    ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <textarea
+          placeholder={rejectPlaceholder}
+          value={rejectReason}
+          onChange={e => setRejectReason(e.target.value)}
+          rows={3}
+          style={{ width: '100%', padding: '0.65rem 0.85rem', border: '1px solid #cbd5e1', borderRadius: '0.5rem', fontSize: '0.875rem', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }}
+        />
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button
+            onClick={onReject}
+            disabled={isRejecting || !rejectReason.trim()}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#dc2626', color: '#fff', opacity: isRejecting ? 0.7 : 1 }}
+          >
+            {isRejecting ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <XCircle size={16} />}
+            {isRejecting ? 'Processing…' : `Confirm — ${rejectLabel}`}
+          </button>
+          <button
+            onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+            disabled={isRejecting}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.6rem 1.25rem', border: 'none', borderRadius: '0.5rem', fontSize: '0.9rem', fontWeight: 700, cursor: 'pointer', background: '#e2e8f0', color: '#374151' }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+);
+
+// ============================================================
+// WRONG ACCOUNT BANNER COMPONENT
+// ============================================================
+const ROLE_LABELS = {
+  ops_manager: 'Operations Manager',
+  admin: 'Admin',
+  user: 'Creator',
+};
+
+const WrongAccountBanner = ({ currentUser, requiredRole, onSwitch }) => (
+  <div style={{
+    background: '#fffbeb',
+    border: '1px solid #fbbf24',
+    borderRadius: '0.75rem',
+    padding: '1.25rem 1.5rem',
+    marginBottom: '1.5rem',
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '1rem',
+    flexWrap: 'wrap',
+  }}>
+    <AlertTriangle size={22} color="#d97706" style={{ flexShrink: 0, marginTop: '2px' }} />
+    <div style={{ flex: 1, minWidth: '200px' }}>
+      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#92400e', marginBottom: '0.3rem' }}>
+        Wrong account
+      </div>
+      <div style={{ fontSize: '0.875rem', color: '#78350f', lineHeight: 1.55 }}>
+        You are signed in as <strong>{currentUser?.name || currentUser?.email}</strong> ({ROLE_LABELS[currentUser?.role] || currentUser?.role}).
+        {' '}This action requires a <strong>{ROLE_LABELS[requiredRole]}</strong> account.
+        {' '}Sign in with the correct account to approve or reject this quotation.
+      </div>
+    </div>
+    <button
+      onClick={onSwitch}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.4rem',
+        padding: '0.55rem 1.1rem', border: 'none', borderRadius: '0.5rem',
+        fontSize: '0.875rem', fontWeight: 700, cursor: 'pointer',
+        background: '#d97706', color: '#fff', flexShrink: 0,
+      }}
+    >
+      <LogIn size={15} />
+      Switch Account
+    </button>
+  </div>
+);
+
+// ============================================================
 // PDF OPTIONS DROPDOWN COMPONENT
 // ============================================================
 const PDFOptionsDropdown = ({ onSelect, onClose, isExporting }) => {
@@ -185,13 +309,13 @@ const PDFOptionsDropdown = ({ onSelect, onClose, isExporting }) => {
 // ============================================================
 export default function ViewQuotationScreen() {
   const {
-    isEditing, setIsEditing, isSaving, isExporting, setIsExporting, editingImgId, setEditingImgId,
+    isEditing, setIsEditing, isSaving, isExporting, editingImgId, setEditingImgId,
     loading, fetchError, newImages, quotationData, quotationItems, tcSections, setTcSections,
     internalDocuments, newDocuments, snackbar, setSnackbar, fieldErrors, originalQuotation,
     subtotal, taxAmount, discountAmount, grandTotal, amountInWords, items, previewDoc, setPreviewDoc,
     handleDocumentPreview, handleDataChange, addItem, removeItem, updateItem, handleImageUpload,
     removeNewImage, removeExistingImage, handleDocumentUpload, handleDocumentDelete, handleDocumentDownload,
-    cancelEdit, handleSave, handleDelete, handleBack, generatePDF,
+    cancelEdit, handleSave, handleBack, generatePDF,
     termsImages, handleTermsImagesUpload, removeTermsImage,
     customerTaxTreatment, 
     customerPlaceOfSupply   
@@ -203,25 +327,62 @@ export default function ViewQuotationScreen() {
   const [pdfProgress, setPdfProgress] = useState(0);
   const [pdfStep, setPdfStep] = useState('');
   const [showPDFOptions, setShowPDFOptions] = useState(false);
-  
-  // Get current user role
+
+  const [isApproving, setIsApproving] = useState(false);
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectForm, setShowRejectForm] = useState(false);
+
+  // Router hooks for wrong-account detection
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Store bindings
   const user = useAppStore(state => state.user);
+  const handleLogout = useAppStore(s => s.handleLogout);
+  const storeApprove = useAppStore(s => s.approveQuotation);
+  const storeReject = useAppStore(s => s.rejectQuotation);
+  const storeOpsApprove = useAppStore(s => s.opsApproveQuotation);
+  const storeOpsReject = useAppStore(s => s.opsRejectQuotation);
+
+  // ── Wrong-account detection ──────────────────────────────────
+  // Email links carry ?action=review&for=<role> (e.g. for=ops_manager).
+  // We compare the URL's "for" param against the logged-in role.
+  // The banner only fires when the action is still pending for that role —
+  // once the intended user has acted (status changed), no banner is shown.
+  const isWrongAccount = useMemo(() => {
+    const forRole = searchParams.get('for');
+    if (!forRole || !originalQuotation || !user) return false;
+    if (user.role === forRole) return false; // correct account, no warning
+
+    const s = originalQuotation.status;
+    const actionStillPending =
+      (forRole === 'ops_manager' && s === 'pending') ||
+      (forRole === 'admin' && (s === 'ops_approved' || s === 'pending_admin'));
+
+    return actionStillPending;
+  }, [searchParams, originalQuotation, user]);
+
+  const actionRequiredRole = isWrongAccount ? searchParams.get('for') : null;
+
+  const handleSwitchAccount = useCallback(async () => {
+    await handleLogout();
+    navigate('/login', {
+      state: { from: { pathname: location.pathname, search: location.search } },
+      replace: true,
+    });
+  }, [handleLogout, navigate, location.pathname, location.search]);
+
+  const handleGoToDashboard = useCallback(() => {
+    navigate(getHomePath(user?.role), { replace: true });
+  }, [navigate, user?.role]);
   
   // Memoized values
   const allDocuments = useMemo(() => [...internalDocuments, ...newDocuments], [internalDocuments, newDocuments]);
   
   const isApproved = useMemo(() => 
     originalQuotation?.status === 'approved' || originalQuotation?.status === 'awarded',
-    [originalQuotation?.status]
-  );
-  
-  const isRejected = useMemo(() => 
-    originalQuotation?.status === 'rejected',
-    [originalQuotation?.status]
-  );
-  
-  const isOpsRejected = useMemo(() => 
-    originalQuotation?.status === 'ops_rejected',
     [originalQuotation?.status]
   );
   
@@ -252,9 +413,9 @@ export default function ViewQuotationScreen() {
   const canEdit = useCallback(() => {
     if (isEditing) return false;
     if (isApproved) return false;
-    if (originalQuotation?.status === 'not_awarded') return false;  
+    if (originalQuotation?.status === 'not_awarded') return false;
     return true;
-  }, [isEditing, isApproved]);
+  }, [isEditing, isApproved, originalQuotation?.status]);
   
   const getStatusText = useCallback(() => {
     const status = originalQuotation?.status;
@@ -283,12 +444,12 @@ export default function ViewQuotationScreen() {
     } catch (error) {
       setSaveProgress(0);
       setSaveStep('');
-      console.error('Save error:', error);
+      setSnackbar({ show: true, message: error?.message || 'Failed to save quotation. Please try again.', type: 'error' });
     } finally {
       clearInterval(progressInterval);
     }
-  }, [handleSave, startProgressTracking, completeProgressTracking]);
-  
+  }, [handleSave, startProgressTracking, completeProgressTracking, setSnackbar]);
+
   const handlePDFWithProgress = useCallback(async (exportType = 'with_total') => {
     setPdfProgress(10);
     setPdfStep('Preparing document...');
@@ -315,8 +476,94 @@ export default function ViewQuotationScreen() {
   const handleSnackbarClose = useCallback(() => {
     setSnackbar({ show: false, message: '', type: 'error' });
   }, [setSnackbar]);
+
+  const handleApprove = useCallback(async () => {
+    if (!originalQuotation?._id) return;
+    setIsApproving(true);
+    try {
+      const result = await storeApprove(originalQuotation._id);
+      if (result?.success === false) {
+        setSnackbar({ show: true, message: result.error || 'Failed to approve quotation', type: 'error' });
+      } else {
+        setSnackbar({ show: true, message: 'Quotation approved successfully!', type: 'success' });
+        setTimeout(() => navigate(getHomePath(user?.role), { replace: true }), 1500);
+      }
+    } catch (err) {
+      setSnackbar({ show: true, message: err.message || 'Failed to approve quotation', type: 'error' });
+    } finally {
+      setIsApproving(false);
+    }
+  }, [originalQuotation?._id, storeApprove, setSnackbar, navigate, user?.role]);
+
+  const handleReject = useCallback(async () => {
+    if (!rejectReason.trim()) {
+      setSnackbar({ show: true, message: 'Please provide a rejection reason', type: 'error' });
+      return;
+    }
+    if (!originalQuotation?._id) return;
+    setIsRejecting(true);
+    try {
+      const result = await storeReject(originalQuotation._id, rejectReason.trim());
+      if (result?.success === false) {
+        setSnackbar({ show: true, message: result.error || 'Failed to reject quotation', type: 'error' });
+      } else {
+        setSnackbar({ show: true, message: 'Quotation rejected.', type: 'success' });
+        setShowRejectForm(false);
+        setRejectReason('');
+      }
+    } catch (err) {
+      setSnackbar({ show: true, message: err.message || 'Failed to reject quotation', type: 'error' });
+    } finally {
+      setIsRejecting(false);
+    }
+  }, [originalQuotation?._id, rejectReason, storeReject, setSnackbar]);
+
+  const handleOpsApprove = useCallback(async () => {
+    if (!originalQuotation?._id) return;
+    setIsApproving(true);
+    try {
+      const result = await storeOpsApprove(originalQuotation._id);
+      if (result?.success === false) {
+        setSnackbar({ show: true, message: result.error || 'Failed to approve quotation', type: 'error' });
+      } else {
+        setSnackbar({ show: true, message: 'Quotation approved and sent to admin!', type: 'success' });
+        setTimeout(() => navigate(getHomePath(user?.role), { replace: true }), 1500);
+      }
+    } catch (err) {
+      setSnackbar({ show: true, message: err.message || 'Failed to approve quotation', type: 'error' });
+    } finally {
+      setIsApproving(false);
+    }
+  }, [originalQuotation?._id, storeOpsApprove, setSnackbar, navigate, user?.role]);
+
+  const handleOpsReject = useCallback(async () => {
+    if (!rejectReason.trim()) {
+      setSnackbar({ show: true, message: 'Please provide a reason for returning', type: 'error' });
+      return;
+    }
+    if (!originalQuotation?._id) return;
+    setIsRejecting(true);
+    try {
+      const result = await storeOpsReject(originalQuotation._id, rejectReason.trim());
+      if (result?.success === false) {
+        setSnackbar({ show: true, message: result.error || 'Failed to return quotation', type: 'error' });
+      } else {
+        setSnackbar({ show: true, message: 'Quotation returned for revision.', type: 'success' });
+        setShowRejectForm(false);
+        setRejectReason('');
+      }
+    } catch (err) {
+      setSnackbar({ show: true, message: err.message || 'Failed to return quotation', type: 'error' });
+    } finally {
+      setIsRejecting(false);
+    }
+  }, [originalQuotation?._id, rejectReason, storeOpsReject, setSnackbar]);
   
-  if (loading) {
+  // Show spinner while loading, or while the quotation is not yet resolved.
+  // The "not found" state is only correct after a fetch has been attempted
+  // and returned an error — guarding on !fetchError prevents a flash of
+  // "Quotation not found" on the first render before the useEffect fires.
+  if (loading || (!originalQuotation && !fetchError)) {
     return (
       <div style={styles.loadingContainer}>
         <div style={styles.spinner} />
@@ -324,7 +571,7 @@ export default function ViewQuotationScreen() {
       </div>
     );
   }
-  
+
   if (fetchError) {
     return (
       <div style={styles.errorContainer}>
@@ -337,7 +584,7 @@ export default function ViewQuotationScreen() {
       </div>
     );
   }
-  
+
   if (!originalQuotation) {
     return (
       <div style={styles.errorContainer}>
@@ -402,6 +649,39 @@ export default function ViewQuotationScreen() {
     }}>
       Status: {getStatusText()}
     </span>
+    {(() => {
+      const q = originalQuotation;
+      const status = q?.status;
+      let actor = null;
+      let label = null;
+      let date = null;
+      if (status === 'ops_approved') {
+        actor = q.opsApprovedBySnapshot?.name || q.opsApprovedBy?.name;
+        label = 'Approved by';
+        date = q.opsApprovedAt;
+      } else if (status === 'ops_rejected') {
+        actor = q.opsApprovedBySnapshot?.name || q.opsRejectedBy?.name;
+        label = 'Returned by';
+        date = q.opsRejectedAt;
+      } else if (status === 'approved' || status === 'awarded') {
+        actor = q.approvedBySnapshot?.name || q.approvedBy?.name;
+        label = 'Approved by';
+        date = q.approvedAt;
+      } else if (status === 'rejected') {
+        actor = q.approvedBySnapshot?.name || q.rejectedBy?.name;
+        label = 'Rejected by';
+        date = q.rejectedAt;
+      }
+      if (!actor) return null;
+      const dateStr = date ? new Date(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+      return (
+        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+          <span>{label}</span>
+          <strong style={{ color: '#374151' }}>{actor}</strong>
+          {dateStr && <span>· {dateStr}</span>}
+        </div>
+      );
+    })()}
   </div>
 )}
           </div>
@@ -454,15 +734,99 @@ export default function ViewQuotationScreen() {
               )}
             </div>
             
-            <button onClick={handleBack} style={btnStyle("#6b7280")}>
-              <ArrowLeft size={16} /> Back
+            <button onClick={handleGoToDashboard} style={btnStyle("#6366f1")}>
+              <LayoutDashboard size={16} /> Dashboard
             </button>
           </div>
         </div>
         
         {/* Rejection/Return Reason Banner */}
         <ReasonBanner quotation={originalQuotation} />
-        
+
+        {/* Wrong-account banner — shown when ?action=review but wrong role is logged in */}
+        {isWrongAccount && (
+          <WrongAccountBanner
+            currentUser={user}
+            requiredRole={actionRequiredRole}
+            onSwitch={handleSwitchAccount}
+          />
+        )}
+
+        {/* Action Banner — shown when role and status require an action */}
+        {(() => {
+          const status = originalQuotation?.status;
+          const role = user?.role;
+
+          // ── Ops Manager reviewing a pending quotation ──
+          if (role === 'ops_manager' && status === 'pending') {
+            return (
+              <ReviewBanner
+                title="Action Required — Review This Quotation"
+                meta="This quotation has been submitted and is awaiting your review. Approve to forward to Admin, or return for revision."
+                approveLabel="Approve & Forward to Admin"
+                rejectLabel="Return for Revision"
+                rejectPlaceholder="Reason for returning (required)…"
+                onApprove={handleOpsApprove}
+                onReject={handleOpsReject}
+                isApproving={isApproving}
+                isRejecting={isRejecting}
+                showRejectForm={showRejectForm}
+                setShowRejectForm={setShowRejectForm}
+                rejectReason={rejectReason}
+                setRejectReason={setRejectReason}
+                bannerStyle={styles.reviewBanner}
+                onGoToDashboard={handleGoToDashboard}
+              />
+            );
+          }
+          if (role === 'ops_manager' && status === 'ops_approved') {
+            return null;
+          }
+
+          // ── Admin reviewing an ops-approved or self-created (pending_admin) quotation ──
+          if (role === 'admin' && (status === 'ops_approved' || status === 'pending_admin')) {
+            return (
+              <ReviewBanner
+                title="Action Required — Awaiting Your Final Approval"
+                meta={status === 'pending_admin'
+                  ? "This quotation is awaiting your review and approval."
+                  : "Operations Manager approved this quotation. Please review and make a final decision."}
+
+                approveLabel="Approve"
+                rejectLabel="Reject"
+                rejectPlaceholder="Reason for rejection (required)…"
+                onApprove={handleApprove}
+                onReject={handleReject}
+                isApproving={isApproving}
+                isRejecting={isRejecting}
+                showRejectForm={showRejectForm}
+                setShowRejectForm={setShowRejectForm}
+                rejectReason={rejectReason}
+                setRejectReason={setRejectReason}
+                bannerStyle={styles.reviewBanner}
+                onGoToDashboard={handleGoToDashboard}
+              />
+            );
+          }
+          if (role === 'admin' && (status === 'approved' || status === 'awarded')) {
+            return null;
+          }
+          if (role === 'admin' && status === 'rejected') {
+            return (
+              <div style={{ ...styles.reviewBanner, background: '#fee2e2', borderColor: '#fca5a5', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={styles.reviewBannerTitle}>
+                  <XCircle size={18} color="#991b1b" />
+                  <span style={{ color: '#991b1b' }}>This quotation has already been rejected.</span>
+                </div>
+                <button onClick={handleGoToDashboard} style={{ ...btnStyle('#6366f1'), flexShrink: 0 }}>
+                  <LayoutDashboard size={15} /> Go to Dashboard
+                </button>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         {/* Edit Mode Banner */}
         {isEditing && (
           <div style={styles.editModeBanner}>
@@ -567,7 +931,7 @@ const styles = {
   innerContainer: { maxWidth: "1280px", margin: "0 auto" },
   
   // Header
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem", position: "sticky", top: 0, zIndex: 100, backgroundColor: "#f0f9ff", paddingTop: "0.5rem", paddingBottom: "0.75rem" },
   title: { fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 },
   headerActions: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
   
@@ -614,6 +978,19 @@ const styles = {
   skeletonRow: { display: "flex", padding: "0.85rem 1rem", borderBottom: "1px solid #f1f5f9", gap: "1rem" },
   skeletonCell: { flex: 1, height: "14px", borderRadius: "6px", background: "linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%)", backgroundSize: "200% 100%", animation: "skeleton 1.4s ease infinite" },
   
+  // Review Mode Banner
+  reviewBanner: {
+    background: '#e0f2fe',
+    border: '1px solid #7dd3fc',
+    borderRadius: '0.75rem',
+    padding: '1.25rem 1.5rem',
+    marginBottom: '1.5rem',
+  },
+  reviewBannerTitle: {
+    display: 'flex', alignItems: 'center', gap: '0.6rem',
+    fontWeight: 700, fontSize: '1rem', color: '#0C405A', marginBottom: '0.25rem',
+  },
+
   // PDF Option Button
   pdfOptionButton: {
     width: '100%',

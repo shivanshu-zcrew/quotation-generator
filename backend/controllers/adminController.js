@@ -1,10 +1,24 @@
-const { Quotation } = require('../models/quotation');
+const { Quotation, ExchangeRateService } = require('../models/quotation');
 const mongoose = require('mongoose');
 const logger = require('../config/logger');
 const LoggerHelper = require('../utils/loggerHelper');
 const { Customer } = require('../models/customer');
 const User = require('../models/user');
 const emailService = require('../utils/emailService');
+const redisService = require('../config/redisService');
+
+// Invalidate all stats caches affected by a quotation status change
+const invalidateQuotationStats = (quotation) => {
+  const companyId = quotation?.companyId?.toString();
+  const createdById = quotation?.createdBy?.toString();
+  if (companyId) redisService.delPattern(`stats:company:${companyId}*`);
+  if (createdById) redisService.delPattern(`stats:user:${createdById}:*`);
+};
+
+// ─────────────────────────────────────────────────────────────
+// Regex escape helper (prevents ReDoS from user-supplied search)
+// ─────────────────────────────────────────────────────────────
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ─────────────────────────────────────────────────────────────
 // Shared populate helper
@@ -16,6 +30,11 @@ const fullPopulate = (q) =>
     .populate('opsApprovedBy', 'name email')
     .populate('approvedBy', 'name email')
     .populate('awardedBy', 'name email');
+
+const listPopulate = (q) =>
+  q
+    .populate('customerId', 'name')
+    .populate('createdBy', 'name');
 
 // ─────────────────────────────────────────────────────────────
 // Sanitization function
@@ -73,7 +92,11 @@ exports.getOpsPendingQuotations = async (req, res) => {
     });
 
     const query = { status: 'pending' };
-    
+    const opsCompanyId = req.headers['x-company-id'];
+    if (opsCompanyId && mongoose.Types.ObjectId.isValid(opsCompanyId)) {
+      query.companyId = new mongoose.Types.ObjectId(opsCompanyId);
+    }
+
     const [quotations, totalCount] = await Promise.all([
       fullPopulate(
         Quotation.find(query)
@@ -165,12 +188,7 @@ exports.getAllOpsQuotations = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
-      query.$or = [
-        { quotationNumber: searchRegex },
-        { 'customerSnapshot.name': searchRegex },
-        { projectName: searchRegex }
-      ];
+      query.$text = { $search: search.trim() };
     }
 
     if (fromDate || toDate) {
@@ -180,7 +198,7 @@ exports.getAllOpsQuotations = async (req, res) => {
     }
 
     // Build sort object (with _id tiebreaker for stable pagination on
-    // non-unique sort fields).
+    // non-unique sort fields). Text search overrides sort with relevance score.
     let sortObject = {};
     switch (sortBy) {
       case 'quotationNumber':
@@ -214,10 +232,14 @@ exports.getAllOpsQuotations = async (req, res) => {
     // The status counts use an aggregation instead of loading every matching
     // document into memory (the old `Quotation.find(query).lean()` approach
     // allocated the whole filtered collection on every request).
+    const effectiveSort = search && search.trim()
+      ? { score: { $meta: 'textScore' }, ...sortObject }
+      : sortObject;
+
     const [quotations, totalCount, statusAgg] = await Promise.all([
-      fullPopulate(
+      listPopulate(
         Quotation.find(query)
-          .sort(sortObject)
+          .sort(effectiveSort)
           .skip(skip)
           .limit(parsedLimit)
       ).lean(),
@@ -285,8 +307,9 @@ exports.getAllOpsQuotations = async (req, res) => {
 exports.opsApproveQuotation = async (req, res) => {
   const startTime = Date.now();
   try {
-    const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) {
+    // First check the quotation exists and get current state
+    const existing = await Quotation.findById(req.params.id).lean();
+    if (!existing) {
       logger.warn(`Quotation not found for ops approval: ${req.params.id}`, {
         quotationId: req.params.id,
         userId: req.user?.id
@@ -294,29 +317,45 @@ exports.opsApproveQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    if (quotation.status !== 'pending') {
-      logger.warn(`Cannot approve quotation with status ${quotation.status}`, {
-        quotationId: quotation._id,
-        currentStatus: quotation.status,
+    if (existing.status !== 'pending') {
+      logger.warn(`Cannot approve quotation with status ${existing.status}`, {
+        quotationId: existing._id,
+        currentStatus: existing.status,
         userId: req.user?.id
       });
-      return res.status(400).json({ message: `Cannot approve. Current status: ${quotation.status}` });
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
     }
 
-    const oldStatus = quotation.status;
-    quotation.status = 'ops_approved';
-    quotation.opsApprovedBy = req.user.id;
-    quotation.opsApprovedAt = new Date();
-    quotation.opsRejectionReason = '';
+    const oldStatus = existing.status;
 
-    quotation.opsApprovedBySnapshot = {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      approvedAt: new Date()
-    };
+    // Build atomic filter with company scoping (Fix 6)
+    const atomicFilter = { _id: req.params.id, status: 'pending' };
+    const opsApproveCompanyId = req.headers['x-company-id'];
+    if (opsApproveCompanyId && mongoose.Types.ObjectId.isValid(opsApproveCompanyId)) {
+      atomicFilter.companyId = new mongoose.Types.ObjectId(opsApproveCompanyId);
+    }
 
-    await quotation.save();
+    // Atomic update — only succeeds if status is still 'pending' (and company matches)
+    const quotation = await Quotation.findOneAndUpdate(
+      atomicFilter,
+      { $set: {
+        status: 'ops_approved',
+        opsApprovedBy: req.user.id,
+        opsApprovedAt: new Date(),
+        opsRejectionReason: '',
+        opsApprovedBySnapshot: {
+          name: req.user.name,
+          email: req.user.email,
+          role: req.user.role,
+          approvedAt: new Date()
+        }
+      }},
+      { new: true }
+    );
+    if (!quotation) {
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
+    }
+    invalidateQuotationStats(quotation);
 
     // Email all admins (exclude the approver themselves) — non-blocking
     User.find({ role: 'admin', isActive: true })
@@ -325,6 +364,12 @@ exports.opsApproveQuotation = async (req, res) => {
         const emails = admins.map(a => a.email).filter(e => e && e !== req.user.email);
         if (emails.length) emailService.opsApprovedNotifyAdmins(emails, quotation, req.user.name);
       }).catch(err => logger.warn('Failed to query admin emails for notification', { error: err.message }));
+
+    // Notify creator their quotation moved to admin review — non-blocking
+    const opsCreatorEmail = quotation.createdBySnapshot?.email;
+    if (opsCreatorEmail && opsCreatorEmail !== req.user.email) {
+      emailService.opsApprovedNotifyCreator(opsCreatorEmail, quotation, req.user.name);
+    }
 
     const updated = await fullPopulate(Quotation.findById(quotation._id)).lean();
     const duration = Date.now() - startTime;
@@ -335,7 +380,7 @@ exports.opsApproveQuotation = async (req, res) => {
       oldStatus,
       newStatus: 'ops_approved'
     }, req);
-    
+
     logger.info(`Quotation ${quotation.quotationNumber} approved by ops manager`, {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -372,8 +417,9 @@ exports.opsRejectQuotation = async (req, res) => {
       return res.status(400).json({ message: 'Rejection reason is required' });
     }
 
-    const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) {
+    // First check the quotation exists and get current state
+    const existing = await Quotation.findById(req.params.id).lean();
+    if (!existing) {
       logger.warn(`Quotation not found for ops rejection: ${req.params.id}`, {
         quotationId: req.params.id,
         userId: req.user?.id
@@ -381,29 +427,45 @@ exports.opsRejectQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    if (quotation.status !== 'pending') {
-      logger.warn(`Cannot ops-reject quotation with status ${quotation.status}`, {
-        quotationId: quotation._id,
-        currentStatus: quotation.status,
+    if (existing.status !== 'pending') {
+      logger.warn(`Cannot ops-reject quotation with status ${existing.status}`, {
+        quotationId: existing._id,
+        currentStatus: existing.status,
         userId: req.user?.id
       });
-      return res.status(400).json({ message: `Cannot return for revision. Current status: ${quotation.status}` });
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
     }
 
-    const oldStatus = quotation.status;
-    quotation.status = 'ops_rejected';
-    quotation.opsApprovedBy = req.user.id;
-    quotation.opsApprovedAt = new Date();
-    quotation.opsRejectionReason = reason.trim();
+    const oldStatus = existing.status;
 
-    quotation.opsApprovedBySnapshot = {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      approvedAt: new Date()
-    };
+    // Build atomic filter with company scoping (Fix 6)
+    const atomicFilter = { _id: req.params.id, status: 'pending' };
+    const opsRejectCompanyId = req.headers['x-company-id'];
+    if (opsRejectCompanyId && mongoose.Types.ObjectId.isValid(opsRejectCompanyId)) {
+      atomicFilter.companyId = new mongoose.Types.ObjectId(opsRejectCompanyId);
+    }
 
-    await quotation.save();
+    // Atomic update — only succeeds if status is still 'pending' (and company matches)
+    const quotation = await Quotation.findOneAndUpdate(
+      atomicFilter,
+      { $set: {
+        status: 'ops_rejected',
+        opsRejectedBy: req.user.id,
+        opsRejectedAt: new Date(),
+        opsRejectionReason: reason.trim(),
+        opsApprovedBySnapshot: {
+          name: req.user.name,
+          email: req.user.email,
+          role: req.user.role,
+          approvedAt: new Date()
+        }
+      }},
+      { new: true }
+    );
+    if (!quotation) {
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
+    }
+    invalidateQuotationStats(quotation);
 
     // Email creator — non-blocking
     const creatorEmail = quotation.createdBySnapshot?.email;
@@ -421,7 +483,7 @@ exports.opsRejectQuotation = async (req, res) => {
       newStatus: 'ops_rejected',
       reason: reason.trim()
     }, req);
-    
+
     logger.warn(`Quotation ${quotation.quotationNumber} rejected by ops manager`, {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -493,8 +555,9 @@ exports.getPendingQuotations = async (req, res) => {
 exports.approveQuotation = async (req, res) => {
   const startTime = Date.now();
   try {
-    const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) {
+    // First check the quotation exists and get current state
+    const existing = await Quotation.findById(req.params.id).lean();
+    if (!existing) {
       logger.warn(`Quotation not found for admin approval: ${req.params.id}`, {
         quotationId: req.params.id,
         userId: req.user?.id
@@ -506,34 +569,43 @@ exports.approveQuotation = async (req, res) => {
       logger.warn(`Non-admin user attempted to approve quotation`, {
         userId: req.user?.id,
         userRole: req.user?.role,
-        quotationId: quotation._id
+        quotationId: existing._id
       });
       return res.status(403).json({ message: 'Only admin can approve quotation' });
     }
 
     const allowedStatuses = ['ops_approved', 'pending_admin'];
-    if (!allowedStatuses.includes(quotation.status)) {
-      logger.warn(`Cannot approve quotation with status ${quotation.status}`, {
-        quotationId: quotation._id,
-        currentStatus: quotation.status,
+    if (!allowedStatuses.includes(existing.status)) {
+      logger.warn(`Cannot approve quotation with status ${existing.status}`, {
+        quotationId: existing._id,
+        currentStatus: existing.status,
         userId: req.user?.id
       });
-      return res.status(400).json({ message: `Quotation cannot be approved in current status: ${quotation.status}` });
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
     }
 
-    const oldStatus = quotation.status;
-    quotation.status = 'approved';
-    quotation.approvedBy = req.user.id;
-    quotation.approvedAt = new Date();
-    
-    quotation.approvedBySnapshot = {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      approvedAt: new Date()
-    };
+    const oldStatus = existing.status;
 
-    await quotation.save();
+    // Atomic update — only succeeds if status is still ops_approved or pending_admin
+    const quotation = await Quotation.findOneAndUpdate(
+      { _id: req.params.id, status: { $in: allowedStatuses } },
+      { $set: {
+        status: 'approved',
+        approvedBy: req.user.id,
+        approvedAt: new Date(),
+        approvedBySnapshot: {
+          name: req.user.name,
+          email: req.user.email,
+          role: req.user.role,
+          approvedAt: new Date()
+        }
+      }},
+      { new: true }
+    );
+    if (!quotation) {
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
+    }
+    invalidateQuotationStats(quotation);
 
     // Email creator — skip if admin is approving their own quotation
     const approveCreatorEmail = quotation.createdBySnapshot?.email;
@@ -553,7 +625,7 @@ exports.approveQuotation = async (req, res) => {
       oldStatus,
       newStatus: 'approved'
     }, req);
-    
+
     logger.info(`Quotation ${quotation.quotationNumber} approved by admin`, {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -590,8 +662,9 @@ exports.rejectQuotation = async (req, res) => {
       return res.status(400).json({ message: 'Rejection reason is required' });
     }
 
-    const quotation = await Quotation.findById(req.params.id);
-    if (!quotation) {
+    // First check the quotation exists and get current state
+    const existing = await Quotation.findById(req.params.id).lean();
+    if (!existing) {
       logger.warn(`Quotation not found for admin rejection: ${req.params.id}`, {
         quotationId: req.params.id,
         userId: req.user?.id
@@ -599,29 +672,40 @@ exports.rejectQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    if (!['pending', 'ops_approved', 'pending_admin'].includes(quotation.status)) {
-      logger.warn(`Cannot reject quotation with status ${quotation.status}`, {
-        quotationId: quotation._id,
-        currentStatus: quotation.status,
+    // Fix 9: 'pending' removed — admin can only reject after ops review
+    const allowedStatuses = ['ops_approved', 'pending_admin'];
+    if (!allowedStatuses.includes(existing.status)) {
+      logger.warn(`Cannot reject quotation with status ${existing.status}`, {
+        quotationId: existing._id,
+        currentStatus: existing.status,
         userId: req.user?.id
       });
-      return res.status(400).json({ message: `Quotation cannot be rejected. Current status: ${quotation.status}` });
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
     }
 
-    const oldStatus = quotation.status;
-    quotation.status = 'rejected';
-    quotation.rejectionReason = reason.trim();
-    quotation.approvedBy = req.user.id;
-    quotation.approvedAt = new Date();
-    
-    quotation.approvedBySnapshot = {
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      approvedAt: new Date()
-    };
+    const oldStatus = existing.status;
 
-    await quotation.save();
+    // Atomic update — only succeeds if status is still ops_approved or pending_admin
+    const quotation = await Quotation.findOneAndUpdate(
+      { _id: req.params.id, status: { $in: allowedStatuses } },
+      { $set: {
+        status: 'rejected',
+        rejectionReason: reason.trim(),
+        rejectedBy: req.user.id,
+        rejectedAt: new Date(),
+        approvedBySnapshot: {
+          name: req.user.name,
+          email: req.user.email,
+          role: req.user.role,
+          approvedAt: new Date()
+        }
+      }},
+      { new: true }
+    );
+    if (!quotation) {
+      return res.status(409).json({ success: false, message: 'Quotation status has changed — please refresh and try again.' });
+    }
+    invalidateQuotationStats(quotation);
 
     // Email creator — skip if admin is rejecting their own quotation
     const rejectCreatorEmail = quotation.createdBySnapshot?.email;
@@ -642,7 +726,7 @@ exports.rejectQuotation = async (req, res) => {
       newStatus: 'rejected',
       reason: reason.trim()
     }, req);
-    
+
     logger.warn(`Quotation ${quotation.quotationNumber} rejected by admin`, {
       quotationId: quotation._id,
       quotationNumber: quotation.quotationNumber,
@@ -721,12 +805,7 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     }
     
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
-      query.$or = [
-        { quotationNumber: searchRegex },
-        { 'customerSnapshot.name': searchRegex },
-        { projectName: searchRegex }
-      ];
+      query.$text = { $search: search.trim() };
     }
 
     // Get total count for pagination
@@ -770,10 +849,13 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     
     logger.debug('Admin sort query', { sortBy, sortDir, sortObject });
     
-    // Get paginated results with sorting
-    const quotations = await fullPopulate(
+    const effectiveSortAdmin = search && search.trim()
+      ? { score: { $meta: 'textScore' }, ...sortObject }
+      : sortObject;
+
+    const quotations = await listPopulate(
       Quotation.find(query)
-        .sort(sortObject)        // ← ADD SORTING HERE
+        .sort(effectiveSortAdmin)
         .skip(skip)
         .limit(parsedLimit)
     ).lean();
@@ -1532,70 +1614,6 @@ exports.getQuotationsByUser = async (req, res) => {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    logger.error('Error fetching user quotations', {
-      error: error.message,
-      stack: error.stack,
-      duration: `${duration}ms`,
-      userId: req.user?.id,
-      targetUserId: req.params.userId
-    });
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error fetching user quotations', 
-      error: error.message 
-    });
-  }
-};
-exports.getQuotationsByUser = async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const { userId } = req.params;
-    const companyId = req.companyId || req.headers['x-company-id'];
-    
-    if (!companyId) {
-      logger.warn('Company ID missing in getQuotationsByUser', {
-        userId: req.user?.id,
-        targetUserId: userId
-      });
-      return res.status(400).json({ message: 'Company ID is required' });
-    }
-
-    if (req.user?.role !== 'admin') {
-      logger.warn(`Non-admin user attempted to view user quotations`, {
-        userId: req.user?.id,
-        userRole: req.user?.role,
-        targetUserId: userId
-      });
-      return res.status(403).json({ message: 'Unauthorized to view user quotations' });
-    }
-
-    const quotations = await Quotation.find({ 
-      companyId: new mongoose.Types.ObjectId(companyId),
-      createdBy: new mongoose.Types.ObjectId(userId)
-    })
-      .sort({ createdAt: -1 })
-      .populate('customerId', 'name')
-      .lean();
-
-    const duration = Date.now() - startTime;
-    
-    logger.info(`Fetched ${quotations.length} quotations for user ${userId}`, {
-      targetUserId: userId,
-      count: quotations.length,
-      companyId,
-      duration: `${duration}ms`,
-      adminId: req.user?.id
-    });
-
-    res.json({
-      success: true,
-      quotations,
-      count: quotations.length
-    });
-
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    LoggerHelper.logError('getQuotationsByUser', error, req);
     logger.error('Error fetching user quotations', {
       error: error.message,
       stack: error.stack,

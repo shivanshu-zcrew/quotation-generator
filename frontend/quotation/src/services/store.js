@@ -29,6 +29,12 @@ const debounce = (fn, delay) => {
   };
 };
 
+// Debounced version lives at module level so the timer persists across store action calls
+const debouncedRefetchQuotations = debounce(
+  (get, filters) => get().refetchQuotations({ ...filters, page: 1, forceRefresh: true }),
+  400
+);
+
 const extractResponseData = (res) => {
   if (res?.data?.data && typeof res.data.data === 'object') return res.data.data;
   if (res?.data && typeof res.data === 'object' && !Array.isArray(res.data)) return res.data;
@@ -93,6 +99,7 @@ const initialState = {
     toDate: null
   },
   opsReviewHistory: [],
+  quotationCounts: {},
   companies: [],
   exchangeRates: null,
   supportedCurrencies: null,
@@ -219,10 +226,7 @@ export const useAppStore = create(
             const response = await authAPI.deleteUser(userId);
             
             if (response.data?.success) {
-               set(s => ({ 
-                users: s.users?.filter(u => u._id !== userId) || [],
-                lastError: null 
-              }));
+              set({ lastError: null });
               return { success: true, message: response.data.message || 'User deleted successfully' };
             }
             throw new Error(response.data?.message || 'Failed to delete user');
@@ -237,7 +241,24 @@ export const useAppStore = create(
         handleLogout: () => {
           clearCompanyContext();
           clearAuthData();
-          set(initialState);
+          // Reset to a clean anonymous state — do NOT use `initialState` which
+          // captures the user from module-load time and would restore the old user.
+          set({
+            ...initialState,
+            user: null,
+            selectedCompany: null,
+            companies: [],
+            customers: [],
+            items: [],
+            quotations: [],
+            quotationsInitialized: false,
+            adminStats: null,
+            opsStats: null,
+            dashboardStats: null,
+            operationInProgress: {},
+            lastError: null,
+            initialized: false,
+          });
         },
 
         // ==================== CREATOR DASHBOARD STATS ACTIONS ====================
@@ -457,15 +478,18 @@ export const useAppStore = create(
 
             let quotationsData = [];
             let pagination = null;
+            let counts = {};
 
             if (user.role === 'admin') {
               const r = await adminAPI.getAllQuotations(params, cacheOptions);
               quotationsData = r?.data?.data || r?.data?.quotations || [];
               pagination = r?.data?.pagination;
+              counts = r?.data?.counts || {};
             } else if (user.role === 'ops_manager') {
               const r = await opsAPI.getAllQuotations(params, cacheOptions);
               quotationsData = r?.data?.data || r?.data?.quotations || [];
               pagination = r?.data?.pagination;
+              counts = r?.data?.counts || {};
             } else {
               const r = await quotationAPI.getMyQuotations(params, cacheOptions);
               quotationsData = r?.data?.data || r?.data || [];
@@ -484,12 +508,13 @@ export const useAppStore = create(
                 hasNextPage: false,
                 hasPreviousPage: false
               },
+              quotationCounts: counts,
               quotationsVersion: state.quotationsVersion + 1,
               loading: false,
               lastError: null
             }));
 
-            return { success: true, data: safeQuotationsData, pagination };
+            return { success: true, data: safeQuotationsData, pagination, counts };
           } catch (error) {
             console.error('refetchQuotations error:', error);
             set({ loading: false, lastError: AppError.from(error) });
@@ -515,8 +540,7 @@ export const useAppStore = create(
             quotationsFilters: { ...state.quotationsFilters, ...filters },
             quotationsVersion: state.quotationsVersion + 1
           }));
-          // Refetch with new filters
-          get().refetchQuotations({ ...filters, page: 1, forceRefresh: true });
+          debouncedRefetchQuotations(get, filters);
         },
 
         // FIX #5: explicit reset back to defaults (was previously merging {} = no-op)
@@ -832,13 +856,14 @@ export const useAppStore = create(
 
         updateCustomer: async (id, data) => {
           set(s => ({ operationInProgress: { ...s.operationInProgress, [`updateCustomer_${id}`]: true } }));
+          const originalCustomer = get().customers.find(c => c._id === id);
           try {
             // Prevent updating companyId to 'all'
             if (data.companyId === 'all' || data.companyId === 'ALL') {
               delete data.companyId; // Remove companyId from update
             }
 
-            const updatedCustomer = { ...get().customers.find(c => c._id === id), ...data };
+            const updatedCustomer = { ...originalCustomer, ...data };
             set(s => ({ customers: s.customers.map(c => c._id === id ? updatedCustomer : c), lastError: null }));
 
             const res = await customerAPI.update(id, data);
@@ -852,6 +877,9 @@ export const useAppStore = create(
             get().fetchCustomerStats(null, true);
             return { success: true, customer: finalCustomer };
           } catch (error) {
+            if (originalCustomer) {
+              set(s => ({ customers: s.customers.map(c => c._id === id ? originalCustomer : c) }));
+            }
             set({ lastError: AppError.from(error) });
             return { success: false, error: getErrorMessage(error) };
           } finally {
@@ -1296,7 +1324,7 @@ export const useAppStore = create(
         fetchAdminStats: async (companyId = null, options = {}) => {
           if (get().user?.role !== 'admin') return;
           const { forceRefresh = false } = options;
-          set({ statsLoading: true });
+          set({ statsLoading: true, statsError: null });
           try {
             const params = {};
             // Only add companyId if it's not null, 'all', or 'ALL'
@@ -1330,7 +1358,7 @@ export const useAppStore = create(
         fetchOpsStats: async (companyId = null, options = {}) => {
           if (get().user?.role !== 'ops_manager') return;
           const { forceRefresh = false } = options;
-          set({ statsLoading: true });
+          set({ statsLoading: true, statsError: null });
           try {
             const params = {};
             // Only add companyId if it's not null, 'all', or 'ALL'
@@ -1379,6 +1407,10 @@ export const useAppStore = create(
           try {
             await opsAPI.approveQuotation(id);
             await get().fetchQuotationsForCompany(get().selectedCompany);
+            const { selectedCompany } = get();
+            if (selectedCompany) {
+              get().fetchOpsStats(selectedCompany, { forceRefresh: true }).catch(() => {});
+            }
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -1393,6 +1425,10 @@ export const useAppStore = create(
           try {
             await opsAPI.rejectQuotation(id, { reason });
             await get().fetchQuotationsForCompany(get().selectedCompany);
+            const { selectedCompany } = get();
+            if (selectedCompany) {
+              get().fetchOpsStats(selectedCompany, { forceRefresh: true }).catch(() => {});
+            }
             return { success: true };
           } catch (error) {
             set({ lastError: AppError.from(error) });
@@ -1728,10 +1764,13 @@ export const useAppStore = create(
             // Base reference data (does NOT turn off loading yet)
             await get()._fetchCompanyBaseData(companyId);
 
-            // Dependent dashboard data, fetched concurrently
+            // Dependent dashboard data, fetched concurrently.
+            // fetchDashboardStats is only needed by the creator role (HomeScreen).
+            // Admin uses fetchAdminStats; ops_manager uses fetchOpsStats — both
+            // hit the same endpoint as fetchDashboardStats would for their role,
+            // so avoid the duplicate call.
             const dashboardFetchers = [
               get().fetchQuotationsForCompany(companyId),
-              get().fetchDashboardStats(companyId),
               get().fetchCustomerStats()
             ];
 
@@ -1739,6 +1778,8 @@ export const useAppStore = create(
               dashboardFetchers.push(get().fetchAdminStats(companyId));
             } else if (userRole === 'ops_manager') {
               dashboardFetchers.push(get().fetchOpsStats(companyId));
+            } else {
+              dashboardFetchers.push(get().fetchDashboardStats(companyId));
             }
 
             await Promise.all(dashboardFetchers);
@@ -1756,14 +1797,11 @@ export const useAppStore = create(
       {
         name: 'app-store',
         partialize: (state) => ({
-          user: state.user,
           selectedCompany: state.selectedCompany,
           selectedCurrency: state.selectedCurrency,
           gccCountries: state.gccCountries,
           taxTreatments: state.taxTreatments,
           currencyOptions: state.currencyOptions,
-          customerStats: state.customerStats,
-          customerFilters: state.customerFilters,
         })
       }
     ),
@@ -1776,6 +1814,7 @@ export const useAppStore = create(
 export const useCompanyQuotations = () => {
   const quotations = useAppStore((state) => state.quotations);
   const quotationsPagination = useAppStore((state) => state.quotationsPagination);
+  const quotationCounts = useAppStore((state) => state.quotationCounts);
   const selectedCompany = useAppStore((state) => state.selectedCompany);
   const loading = useAppStore((state) => state.quotationsLoading);
   const quotationsVersion = useAppStore((state) => state.quotationsVersion);
@@ -1932,6 +1971,7 @@ export const useCompanyQuotations = () => {
   return {
     quotations: filteredQuotations,
     pagination: quotationsPagination,
+    quotationCounts,
     quotationsInitialized,
     quotationsLoading: loading,
     totalCount: quotationsPagination?.total || filteredQuotations.length,

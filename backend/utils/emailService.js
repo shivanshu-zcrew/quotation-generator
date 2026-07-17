@@ -228,9 +228,13 @@ function esc(str) {
     .replace(/'/g, '&#39;');
 }
 
-function quotationUrl(quotationId) {
+function quotationUrl(quotationId, action, forRole) {
   const base = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
-  return `${base}/quotation/${String(quotationId)}`;
+  const url = `${base}/quotation/${String(quotationId)}`;
+  if (!action) return url;
+  const params = new URLSearchParams({ action });
+  if (forRole) params.set('for', forRole);
+  return `${url}?${params.toString()}`;
 }
 
 const baseStyle   = `font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;`;
@@ -288,6 +292,74 @@ function formatAmount(quotation) {
 
 const emailService = {
 
+  /** Submission confirmed → notify Creator their quotation is in the queue */
+  submissionConfirmedToCreator(creatorEmail, quotation, isResubmission = false) {
+    const subject = isResubmission
+      ? `Quotation ${quotation.quotationNumber} — Revision Resubmitted Successfully`
+      : `Quotation ${quotation.quotationNumber} — Submitted for Review`;
+    const html = emailWrapper(
+      isResubmission ? '🔄 Quotation Resubmitted' : '📤 Quotation Submitted',
+      '#0C405A',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        ${isResubmission
+          ? `Your revised quotation has been resubmitted successfully. The Operations Manager has been notified and will review it shortly.`
+          : `Your quotation has been submitted successfully. The Operations Manager will review it and you will be notified once a decision is made.`
+        }
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${infoRow('Total',            formatAmount(quotation))}
+      ${infoRow('Status',           isResubmission ? 'Resubmitted — Pending Ops Review' : 'Submitted — Pending Ops Review')}
+      ${actionButton('View Quotation', quotationUrl(quotation._id), '#0C405A')}`
+    );
+    dispatch(creatorEmail, subject, html);
+  },
+
+  /** Creator submitted (new OR resubmitted) → notify Ops Managers to review */
+  creatorSubmittedNotifyOps(opsEmails, quotation, creatorName, isResubmission = false) {
+    const subject = isResubmission
+      ? `[Action Required] Quotation ${quotation.quotationNumber} — Revised & Resubmitted for Your Review`
+      : `[Action Required] New Quotation ${quotation.quotationNumber} Awaiting Your Review`;
+    const html = emailWrapper(
+      isResubmission ? '🔄 Quotation Revised & Resubmitted' : '📋 New Quotation Awaiting Your Review',
+      '#0C405A',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        ${isResubmission
+          ? `Creator <strong>${esc(creatorName)}</strong> has revised and resubmitted the following quotation for your review.`
+          : `Creator <strong>${esc(creatorName)}</strong> has submitted a new quotation that requires your review.`
+        }
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${infoRow('Total',            formatAmount(quotation))}
+      ${infoRow('Submitted By',     creatorName)}
+      ${actionButton('Review Quotation', quotationUrl(quotation._id, 'review', 'ops_manager'), '#0C405A')}`
+    );
+    dispatch(opsEmails, subject, html);
+  },
+
+  /** Ops Manager approved → notify Creator that it moved to Admin */
+  opsApprovedNotifyCreator(creatorEmail, quotation, opsManagerName) {
+    const subject = `Quotation ${quotation.quotationNumber} — Passed Operations Review`;
+    const html = emailWrapper(
+      '✅ Operations Review Passed',
+      '#059669',
+      `<p style="color:#1e293b;margin:0 0 20px;">
+        Operations Manager <strong>${esc(opsManagerName)}</strong> has approved your quotation.
+        It is now with Admin for final approval — no action needed from you at this stage.
+      </p>
+      ${infoRow('Quotation Number', quotation.quotationNumber)}
+      ${infoRow('Project',          quotation.projectName)}
+      ${infoRow('Customer',         quotation.customerSnapshot?.name)}
+      ${infoRow('Total',            formatAmount(quotation))}
+      ${infoRow('Ops Approved By',  opsManagerName)}
+      ${actionButton('View Quotation Status', quotationUrl(quotation._id), '#059669')}`
+    );
+    dispatch(creatorEmail, subject, html);
+  },
+
   /** Ops Manager approved → notify Admins to take action */
   opsApprovedNotifyAdmins(adminEmails, quotation, opsManagerName) {
     const subject = `[Action Required] Quotation ${quotation.quotationNumber} Approved by Ops — Awaiting Your Review`;
@@ -303,7 +375,7 @@ const emailService = {
       ${infoRow('Customer',         quotation.customerSnapshot?.name)}
       ${infoRow('Total',            formatAmount(quotation))}
       ${infoRow('Ops Approved By',  opsManagerName)}
-      ${actionButton('Review & Approve Quotation', quotationUrl(quotation._id), '#0C405A')}`
+      ${actionButton('Review & Approve Quotation', quotationUrl(quotation._id, 'review', 'admin'), '#0C405A')}`
     );
     dispatch(adminEmails, subject, html);
   },

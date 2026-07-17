@@ -324,6 +324,7 @@ const getCurrencySymbol = (currencyCode) => {
 
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
   const isMobile = useMediaQuery("(max-width: 768px)");
+  const isTablet = useMediaQuery("(max-width: 1100px)");
   useEffect(() => {
     console.log("🟪 HomeScreen MOUNT");
     return () => console.log("🟪 HomeScreen UNMOUNT");
@@ -429,8 +430,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       hasMountedRef.current = true;
       return;
     }
-    if (isMobile) setUiState((prev) => ({ ...prev, viewMode: "card" }));
-  }, [isMobile]);
+    if (isMobile || isTablet) setUiState((prev) => ({ ...prev, viewMode: "card" }));
+  }, [isMobile, isTablet]);
 
   const addToast = useCallback((message, type = "info") => {
     const id = ++toastIdRef.current;
@@ -668,11 +669,12 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     padding: "0.85rem 1rem", fontSize: "0.68rem", fontWeight: 600, color: T.inkFaint,
     textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "left",
     borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: "nowrap",
+    position: "sticky", top: 0, zIndex: 1,
   };
 
   const SkeletonLoader = () => (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <div style={{ overflowX: "auto", width: "100%", WebkitOverflowScrolling: "touch" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
         <thead>
           <tr>
             {["Quote #", "Customer", "Project Name", "Query Date", "Submitted", "Expiry", "Total", "Status", "Actions"].map((h) => (
@@ -703,7 +705,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   };
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink }}>
+    <div style={{ minHeight: "100vh", backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink, overflowX: "hidden" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         @keyframes hs-spin { to{transform:rotate(360deg)} }
@@ -818,7 +820,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           {/* Toolbar */}
           <div style={{ padding: isMobile ? "0.9rem 1rem" : "1.25rem 1.5rem", borderBottom: `1px solid ${T.lineSoft}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.9rem" }}>
             {/* Tabs */}
-            <div style={{ display: "flex", gap: "0.15rem", padding: "0.3rem", backgroundColor: T.canvas, borderRadius: 12, overflowX: isMobile ? "auto" : "visible", width: isMobile ? "100%" : "auto", border: `1px solid ${T.line}` }}>
+            <div style={{ display: "flex", gap: "0.15rem", padding: "0.3rem", backgroundColor: T.canvas, borderRadius: 12, overflowX: "auto", WebkitOverflowScrolling: "touch", width: "100%", border: `1px solid ${T.line}` }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
                 const active = (key === "all" && !filters.status) || filters.status === getStatusForTab(key);
                 const isPending = key === "pending";
@@ -918,8 +920,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                     </>
                   ) : (
                     <>
-                      <div style={{ overflowX: "auto" }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <div style={{ overflowX: "auto", width: "100%", WebkitOverflowScrolling: "touch" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
                           <thead>
                             <tr>
                               <SortHeader label="Quote #" field="quotationNumber" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />

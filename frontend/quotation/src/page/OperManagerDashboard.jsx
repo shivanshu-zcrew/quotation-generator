@@ -496,6 +496,7 @@ const useMediaQuery = (query) => {
 export default function OpsDashboard({ onViewQuotation }) {
   const navigate = useNavigate();
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTablet = useMediaQuery('(max-width: 1100px)');
 
   const [uiState, setUiState] = useState({ mobileMenuOpen: false, viewMode: 'table' });
   const [awardModal, setAwardModal] = useState({ open: false, quotation: null, loading: false });
@@ -506,6 +507,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const {
     quotations: companyQuotations,
     pagination,
+    quotationCounts,
     refresh: refreshCompanyQuotations,
     loading: quotationsLoading,
     goToPage,
@@ -585,17 +587,20 @@ export default function OpsDashboard({ onViewQuotation }) {
   const totalPages    = pagination?.totalPages || 1;
 
   const tabCountsResolved = useMemo(() => {
+    // quotationCounts comes from the list API and reflects the current filter/search,
+    // so it's the most accurate source. Fall back to stats-based tabCounts when not yet loaded.
+    if (quotationCounts && Object.keys(quotationCounts).length > 0) return quotationCounts;
     if (tabCounts && Object.values(tabCounts).some(v => v > 0)) return tabCounts;
     return {
-      all:          pagination?.total || safeQ.length,
-      pending:      safeQ.filter(q => q?.status === 'pending').length,
-      ops_approved: safeQ.filter(q => q?.status === 'ops_approved').length,
-      ops_rejected: safeQ.filter(q => q?.status === 'ops_rejected').length,
-      rejected:     safeQ.filter(q => q?.status === 'rejected').length,
-      approved:     safeQ.filter(q => q?.status === 'approved').length,
-      awarded:      safeQ.filter(q => q?.status === 'awarded').length,
+      all:          pagination?.total || 0,
+      pending:      0,
+      ops_approved: 0,
+      ops_rejected: 0,
+      rejected:     0,
+      approved:     0,
+      awarded:      0,
     };
-  }, [safeQ, pagination, tabCounts]);
+  }, [quotationCounts, pagination, tabCounts]);
 
   // ── Responsive defaults ───────────────────────────────────
   useEffect(() => {
@@ -604,8 +609,8 @@ export default function OpsDashboard({ onViewQuotation }) {
   }, [isMobile, currentLimit, changeLimit]);
 
   useEffect(() => {
-    if (isMobile) setUiState(p => ({ ...p, viewMode: 'card' }));
-  }, [isMobile]);
+    if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' }));
+  }, [isMobile, isTablet]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -804,6 +809,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint,
     textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left',
     borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap',
+    position: 'sticky', top: 0, zIndex: 1,
   };
 
   const isRefreshing = tableLatchRef.current && quotationsLoading;
@@ -811,7 +817,7 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink }}>
+    <div style={{ minHeight: '100vh', backgroundColor: T.canvas, fontFamily: FONT_STACK, color: T.ink, overflowX: 'hidden' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         @keyframes ops-spin    { to { transform: rotate(360deg); } }
@@ -957,7 +963,7 @@ export default function OpsDashboard({ onViewQuotation }) {
           <div style={{ padding: isMobile ? '0.9rem 1rem' : '1.25rem 1.5rem', borderBottom: `1px solid ${T.lineSoft}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.9rem' }}>
 
             {/* Tabs */}
-            <div style={{ display: 'flex', gap: '0.15rem', padding: '0.3rem', backgroundColor: T.canvas, borderRadius: 12, overflowX: isMobile ? 'auto' : 'visible', width: isMobile ? '100%' : 'auto', border: `1px solid ${T.line}` }}>
+            <div style={{ display: 'flex', gap: '0.15rem', padding: '0.3rem', backgroundColor: T.canvas, borderRadius: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', width: '100%', border: `1px solid ${T.line}` }}>
               {TABS.map(({ key, label, Icon: I, count }) => {
                 const active    = activeTab === key;
                 const isPending = key === 'pending';
@@ -1032,8 +1038,8 @@ export default function OpsDashboard({ onViewQuotation }) {
 
           {/* Content */}
           {showTableShimmer ? (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
                 <thead>
                   <tr>
                     {['Quote #','Customer','Date','Expiry','Status','Created By','Items','Total','Actions'].map(h => (
@@ -1086,8 +1092,8 @@ export default function OpsDashboard({ onViewQuotation }) {
                     </div>
                   ) : (
                     /* Table view */
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 940 }}>
                         <thead>
                           <tr>
                             <SortHeader label="Quote #"    field="quotationNumber" sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />

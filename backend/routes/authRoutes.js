@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const {
   register,
   login,
@@ -19,12 +20,21 @@ const {
 } = require('../controllers/authController');
 const { protect, adminOnly } = require('../middleware/auth');
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  skipSuccessfulRequests: true,
+  message: { success: false, message: 'Too many attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ═════════════════════════════════════════════════════════════════════════
 // PUBLIC ROUTES
 // ═════════════════════════════════════════════════════════════════════════
-router.post('/register', register);
-router.post('/login', login);
-router.put('/reset-password', resetPasswordWithToken);
+router.post('/register', authLimiter, register);
+router.post('/login', authLimiter, login);
+router.put('/reset-password', authLimiter, resetPasswordWithToken);
 
 // ═════════════════════════════════════════════════════════════════════════
 // PROTECTED ROUTES (Authenticated users)

@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { useAppStore } from '../services/store';
+import useItemStore from '../services/itemStore';
 import useToast from './useToast';
 import { opsAPI, customerAPI, itemAPI } from '../services/api';
 import { formatCurrency, formatLargeNumber } from '../utils/formatNumbers';
@@ -40,19 +41,13 @@ export const useCustomers = () => {
 };
 
 export const useItems = () => {
-  const items = useAppStore((state) => state.items);
-  const addItem = useAppStore((state) => state.addItem);
-  const updateItem = useAppStore((state) => state.updateItem);
-  const deleteItem = useAppStore((state) => state.deleteItem);
-  const addLoading = useAppStore((state) => state.operationInProgress?.addItem);
-  
+  const items = useItemStore((state) => state.items);
+  const isLoading = useItemStore((state) => state.isLoading);
+
   return useMemo(() => ({
-    items, 
-    addItem, 
-    updateItem, 
-    deleteItem, 
-    isLoading: addLoading === true,
-  }), [items, addItem, updateItem, deleteItem, addLoading]);
+    items,
+    isLoading,
+  }), [items, isLoading]);
 };
 
 export const useQuotations = () => {
@@ -194,53 +189,53 @@ export const useAdminStats = () => {
   
   const refresh = useCallback(async () => {
     if (!user || user.role !== 'admin') return;
-    
-    const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? null : selectedCompany;
-    
-    if (!companyIdParam && selectedCompany !== 'all' && selectedCompany !== 'ALL') return;
-    
+    const companyIdParam = (!selectedCompany || selectedCompany === 'all' || selectedCompany === 'ALL')
+      ? null
+      : selectedCompany;
     fetchedForCompanyRef.current = selectedCompany;
     await fetchAdminStats(companyIdParam);
   }, [fetchAdminStats, selectedCompany, user]);
-  
+
   // Only fetch if store hasn't already loaded stats for this company selection
   useEffect(() => {
     if (!initialized || user?.role !== 'admin') return;
     if (fetchedForCompanyRef.current === selectedCompany) return;
-    if (adminStats && adminStats._selectionId === selectedCompany) return;
-    
+    const normalizeId = (id) => (id === null || id === undefined || id === '' ? 'all' : id);
+    const normalizedSelected = normalizeId(selectedCompany);
+    const normalizedStored = normalizeId(adminStats?._selectionId);
+    if (adminStats && normalizedStored === normalizedSelected) return;
+
     refresh();
     initialFetchDone.current = true;
   }, [initialized, user?.role, selectedCompany, adminStats, refresh]);
   
-  // Safely extract stats with fallbacks
-  const rawTotalCustomers = adminStats?.stats?.totalCustomers ?? adminStats?.totalCustomers ?? 0;
-  const rawTotalQuotations = adminStats?.stats?.totalQuotations ?? adminStats?.totalQuotations ?? 0;
-  const rawTotalRevenue = adminStats?.stats?.totalRevenue ?? adminStats?.totalRevenue ?? 0;
-  const rawAwardedValue = adminStats?.stats?.awardedValue ?? adminStats?.awardedValue ?? 0;
-  
-  // Determine if we're still loading (no stats and not initialized or still fetching)
   const isLoading = statsLoading || (!adminStats && !initialized);
-  
-  return {
-    stats: adminStats,
-    loading: isLoading,
-    refresh,
-    totalQuotations: rawTotalQuotations,
-    actionRequired: adminStats?.stats?.actionRequired ?? adminStats?.actionRequired ?? 0,
-    approved: adminStats?.stats?.approved ?? adminStats?.approved ?? 0,
-    awarded: adminStats?.stats?.awarded ?? adminStats?.awarded ?? 0,
-    notAwarded: adminStats?.stats?.notAwarded ?? adminStats?.notAwarded ?? 0,
-    totalRevenue: rawTotalRevenue,
-    awardedValue: rawAwardedValue,
-    conversionRate: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
-    rejected: adminStats?.stats?.rejected ?? adminStats?.rejected ?? 0,
-    conversionDetails: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
-    statusCounts: adminStats?.stats?.statusCounts ?? adminStats?.statusCounts ?? {},
-    totalApprovedValue: rawTotalRevenue,
-    totalAwardedValue: rawAwardedValue,
-    totalCustomers: rawTotalCustomers,
-  };
+
+  return useMemo(() => {
+    const totalCustomers = adminStats?.stats?.totalCustomers ?? adminStats?.totalCustomers ?? 0;
+    const totalQuotations = adminStats?.stats?.totalQuotations ?? adminStats?.totalQuotations ?? 0;
+    const totalRevenue = adminStats?.stats?.totalRevenue ?? adminStats?.totalRevenue ?? 0;
+    const awardedValue = adminStats?.stats?.awardedValue ?? adminStats?.awardedValue ?? 0;
+    return {
+      stats: adminStats,
+      loading: isLoading,
+      refresh,
+      totalQuotations,
+      actionRequired: adminStats?.stats?.actionRequired ?? adminStats?.actionRequired ?? 0,
+      approved: adminStats?.stats?.approved ?? adminStats?.approved ?? 0,
+      awarded: adminStats?.stats?.awarded ?? adminStats?.awarded ?? 0,
+      notAwarded: adminStats?.stats?.notAwarded ?? adminStats?.notAwarded ?? 0,
+      totalRevenue,
+      awardedValue,
+      conversionRate: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
+      rejected: adminStats?.stats?.rejected ?? adminStats?.rejected ?? 0,
+      conversionDetails: adminStats?.stats?.conversionRate ?? adminStats?.conversionRate ?? 0,
+      statusCounts: adminStats?.stats?.statusCounts ?? adminStats?.statusCounts ?? {},
+      totalApprovedValue: totalRevenue,
+      totalAwardedValue: awardedValue,
+      totalCustomers,
+    };
+  }, [adminStats, isLoading, refresh]);
 };
 
 // ✅ Fixed useOpsStats - now uses store instead of local state
@@ -273,31 +268,32 @@ export const useOpsStats = () => {
     fetchStats();
   }, [initialized, user?.role, selectedCompany, opsStats, fetchStats]);
   
-  const tabCounts = opsStats?.tabCounts || {
-    all: opsStats?.totalQuotations || 0,
-    pending: opsStats?.pendingReview || 0,
-    ops_approved: opsStats?.awaitingAdmin || 0,
-    ops_rejected: opsStats?.returnedByMe || 0,
-    rejected: opsStats?.rejectedByAdmin || 0,
-    approved: opsStats?.approved || 0,
-    awarded: opsStats?.awarded || 0,
-  };
-  
-  return {
-    stats: opsStats,
-    loading: statsLoading,
-    refresh: fetchStats,
-    totalQuotations: opsStats?.totalQuotations || 0,
-    pendingReview: opsStats?.pendingReview || 0,
-    awaitingAdmin: opsStats?.awaitingAdmin || 0,
-    returnedByMe: opsStats?.returnedByMe || 0,
-    rejectedByAdmin: opsStats?.rejectedByAdmin || 0,
-    approved: opsStats?.approved || 0,
-    awarded: opsStats?.awarded || 0,
-    totalValue: opsStats?.totalValue || 0,
-    totalCustomers: opsStats?.totalCustomers || 0,
-    tabCounts,
-  };
+  return useMemo(() => {
+    const tabCounts = opsStats?.tabCounts || {
+      all: opsStats?.totalQuotations || 0,
+      pending: opsStats?.pendingReview || 0,
+      ops_approved: opsStats?.awaitingAdmin || 0,
+      ops_rejected: opsStats?.returnedByMe || 0,
+      rejected: opsStats?.rejectedByAdmin || 0,
+      approved: opsStats?.approved || 0,
+      awarded: opsStats?.awarded || 0,
+    };
+    return {
+      stats: opsStats,
+      loading: statsLoading,
+      refresh: fetchStats,
+      totalQuotations: opsStats?.totalQuotations || 0,
+      pendingReview: opsStats?.pendingReview || 0,
+      awaitingAdmin: opsStats?.awaitingAdmin || 0,
+      returnedByMe: opsStats?.returnedByMe || 0,
+      rejectedByAdmin: opsStats?.rejectedByAdmin || 0,
+      approved: opsStats?.approved || 0,
+      awarded: opsStats?.awarded || 0,
+      totalValue: opsStats?.totalValue || 0,
+      totalCustomers: opsStats?.totalCustomers || 0,
+      tabCounts,
+    };
+  }, [opsStats, statsLoading, fetchStats]);
 };
 
 export const useItemSync = () => {

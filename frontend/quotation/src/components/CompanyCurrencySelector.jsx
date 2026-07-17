@@ -54,14 +54,15 @@ export const CompanyCurrencySelector = memo(({
   localCurrencyMode = false,  // ✅ NEW: When true, currency doesn't update global store
   localCurrencyValue = null,   // ✅ NEW: Local currency value when in localCurrencyMode
 }) => {
-  // Get store data
-  const {
-    companies, selectedCompany, selectedCurrency, setSelectedCompany,
-    setSelectedCurrency, fetchExchangeRates, fetchQuotationsForCompany,
-    refetchQuotations
-  } = useAppStore();
-
-  const user = useAppStore((state) => state.user);
+  const companies = useAppStore(s => s.companies);
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+  const selectedCurrency = useAppStore(s => s.selectedCurrency);
+  const setSelectedCompany = useAppStore(s => s.setSelectedCompany);
+  const setSelectedCurrency = useAppStore(s => s.setSelectedCurrency);
+  const fetchExchangeRates = useAppStore(s => s.fetchExchangeRates);
+  const fetchQuotationsForCompany = useAppStore(s => s.fetchQuotationsForCompany);
+  const refetchQuotations = useAppStore(s => s.refetchQuotations);
+  const user = useAppStore(s => s.user);
   const isAdmin = user?.role === 'admin';
   const showAllCompaniesOption = isAdmin;
 
@@ -429,8 +430,9 @@ CompanyCurrencySelector.displayName = 'CompanyCurrencySelector';
 
  
 export const CompanyCurrencyDisplay = memo(({ showRate = true, className = '', isMobile = false }) => {
-  const { companies, selectedCompany, selectedCurrency, exchangeRates } = useAppStore();
-  
+  const companies = useAppStore(s => s.companies);
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+
   const isAllCompanies = selectedCompany === 'all';
   
   const company = isAllCompanies
@@ -467,22 +469,29 @@ export const CompanyCurrencyDisplay = memo(({ showRate = true, className = '', i
 CompanyCurrencyDisplay.displayName = 'CompanyCurrencyDisplay';
 
 export const useCompanyCurrency = () => {
-  const {
-    companies, selectedCompany, selectedCurrency, setSelectedCompany,
-    setSelectedCurrency, exchangeRates, convertCurrency, fetchQuotationsForCompany,
-    refetchQuotations
-  } = useAppStore();
+  const companies = useAppStore(s => s.companies);
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+  const selectedCurrency = useAppStore(s => s.selectedCurrency);
+  const setSelectedCompany = useAppStore(s => s.setSelectedCompany);
+  const setSelectedCurrency = useAppStore(s => s.setSelectedCurrency);
+  const exchangeRates = useAppStore(s => s.exchangeRates);
+  const convertCurrency = useAppStore(s => s.convertCurrency);
+  const fetchQuotationsForCompany = useAppStore(s => s.fetchQuotationsForCompany);
+  const refetchQuotations = useAppStore(s => s.refetchQuotations);
+  const user = useAppStore(s => s.user);
 
-  const user = useAppStore((state) => state.user);
   const isAdmin = user?.role === 'admin';
   const isAllCompanies = selectedCompany === 'all';
-  
+
   // Only admin can access all companies view
   const canViewAllCompanies = isAdmin && isAllCompanies;
-  
-  const company = isAllCompanies
-    ? { name: 'All Companies', code: 'ALL', baseCurrency: 'AED' }
-    : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+
+  const company = useMemo(() =>
+    isAllCompanies
+      ? { name: 'All Companies', code: 'ALL', baseCurrency: 'AED' }
+      : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany),
+    [isAllCompanies, companies, selectedCompany]
+  );
   
   const currency = CURRENCY_METADATA[selectedCurrency] || CURRENCY_METADATA.AED;
   const acceptedCurrencies = useMemo(() => {
