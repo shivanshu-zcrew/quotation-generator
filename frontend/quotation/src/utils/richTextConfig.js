@@ -199,8 +199,6 @@ export const TERMS_TOOLBAR_MODULE = [
   [{ color: [] }, { background: [] }],
   [{ list: "ordered" }, { list: "bullet" }, { indent: "-1" }, { indent: "+1" }],
   [{ align: [] }],
-  ["blockquote", "link"],
-  ["clean"],
 ];
 
 export const TERMS_EDITOR_FORMATS = [
@@ -216,6 +214,4 @@ export const TERMS_EDITOR_FORMATS = [
   "list",
   "indent",
   "align",
-  "blockquote",
-  "link",
 ];
