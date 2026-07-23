@@ -2,9 +2,33 @@ import { imageToBase64 } from './imageUtils';
 import { numberToWords } from './numberToWords';
 import { fmtDate } from './formatters';
 import headerImage from '../assets/header.png';
-import { quotationAPI } from '../services/api'; 
+import { quotationAPI } from '../services/api';
+import { sanitizeTermsHtml } from './sanitizeTermsHtml';
 
 import { ITEMS_PER_FIRST_PAGE, BASE_URL } from './constants';
+
+/**
+ * Escapes a value for safe interpolation into the PDF/print HTML template.
+ * Almost every field below (customer/contact details, project name, item
+ * descriptions, payment terms, notes, approval-chain names…) is free-text
+ * user input. This template is rendered two ways that both execute HTML:
+ * server-side in Puppeteer (generatePDF) and client-side via document.write
+ * in an iframe (printQuotation) — an unescaped "<script>" or "<img onerror>"
+ * in any of these fields would run in the *viewing* user's browser on
+ * Print, or reach Puppeteer's page (which still allows <img> network
+ * requests) on PDF export. Only the Terms & Conditions field is meant to
+ * contain real HTML — that one goes through sanitizeTermsHtml separately
+ * and must NOT be passed through this.
+ */
+const escapeHtml = (value) => {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
 
 /**
  * Safely extract customer name from various data structures
@@ -19,15 +43,12 @@ const getCustomerName = (quotation) => {
 };
 
 /**
- * Safely extract contact person name
+ * Safely extract the manually-entered contact person name (optional)
  */
 const getCustomerContactName = (quotation) => {
   if (quotation.customerName) return quotation.customerName;
   if (quotation.customerSnapshot?.contactPerson) return quotation.customerSnapshot.contactPerson;
-  if (quotation.contact) return quotation.contact;
-  if (quotation.customerSnapshot?.name) return quotation.customerSnapshot.name;
-  if (quotation.customer) return quotation.customer;
-  return 'N/A';
+  return '';
 };
 
 /**
@@ -384,19 +405,28 @@ const buildTermsImagesHTML = async (termsImages = []) => {
 /**
  * Format terms and conditions text with proper line breaks
  */
+const HTML_TAG_RE = /<[a-z][\s\S]*>/i;
+
 const formatTermsText = (text) => {
   if (!text) return '';
-  
+
+  // Real HTML (from the Quill terms editor, or old wrapper-div HTML) is
+  // sanitized and passed through as-is; legacy plain text still gets the
+  // \n -> <br> treatment it always got.
+  if (HTML_TAG_RE.test(text)) {
+    return sanitizeTermsHtml(text);
+  }
+
   let cleaned = text;
-  
+
   if (cleaned.startsWith('\n')) {
     cleaned = cleaned.replace(/^\n+/, '');
   }
-  
+
   if (cleaned.endsWith('\n')) {
     cleaned = cleaned.replace(/\n+$/, '');
   }
-  
+
   return cleaned.replace(/\n/g, '<br>');
 };
 
@@ -412,37 +442,37 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const discountPercent = quotation.discountPercent || quotation.discount || 0;
   
   // Customer details - LEFT SIDE
-  const customerName = getCustomerName(quotation);
-  const customerContactName = getCustomerContactName(quotation);
-  const customerEmail = getCustomerEmail(quotation);
-  const customerPhone = getCustomerPhone(quotation);
-  const customerDesignation = getCustomerDesignation(quotation);
-  const customerTradeLicense = getCustomerTradeLicense(quotation);
-  const customerTaxRegistration = getCustomerTaxRegistration(quotation);
-  
+  const customerName = escapeHtml(getCustomerName(quotation));
+  const customerContactName = escapeHtml(getCustomerContactName(quotation));
+  const customerEmail = escapeHtml(getCustomerEmail(quotation));
+  const customerPhone = escapeHtml(getCustomerPhone(quotation));
+  const customerDesignation = escapeHtml(getCustomerDesignation(quotation));
+  const customerTradeLicense = escapeHtml(getCustomerTradeLicense(quotation));
+  const customerTaxRegistration = escapeHtml(getCustomerTaxRegistration(quotation));
+
   // Focal Point details - RIGHT SIDE
-  const focalPointName = getFocalPointName(quotation);
-  const focalPointPhone = getFocalPointPhone(quotation);
-  const focalPointEmail = getFocalPointEmail(quotation);
-  const focalPointDesignation = getFocalPointDesignation(quotation);
-  const companyTradeLicense = getCompanyTradeLicense(quotation);
-  const companyTaxRegistration = getCompanyTaxRegistration(quotation);
-  
+  const focalPointName = escapeHtml(getFocalPointName(quotation));
+  const focalPointPhone = escapeHtml(getFocalPointPhone(quotation));
+  const focalPointEmail = escapeHtml(getFocalPointEmail(quotation));
+  const focalPointDesignation = escapeHtml(getFocalPointDesignation(quotation));
+  const companyTradeLicense = escapeHtml(getCompanyTradeLicense(quotation));
+  const companyTaxRegistration = escapeHtml(getCompanyTaxRegistration(quotation));
+
   // Dates
   const date = quotation.date || new Date().toISOString().split('T')[0];
   const expiryDate = quotation.expiryDate || '';
-  
+
   // Project and reference fields
-  const projectName = quotation.projectName || '';
-  const scopeOfWork = getScopeOfWork(quotation);
+  const projectName = escapeHtml(quotation.projectName || '');
+  const scopeOfWork = escapeHtml(getScopeOfWork(quotation));
   const tl = quotation.tl || '';
   const trn = quotation.trn || '';
-  const ourRef = quotation.ourRef || '';
+  const ourRef = escapeHtml(quotation.ourRef || '');
   const ourContact = quotation.ourContact || '';
   const salesManagerEmail = quotation.salesManagerEmail || '';
-  const paymentTerms = quotation.paymentTerms || '';
-  const deliveryTerms = quotation.deliveryTerms || '';
-  const notes = quotation.notes || '';
+  const paymentTerms = escapeHtml(quotation.paymentTerms || '');
+  const deliveryTerms = escapeHtml(quotation.deliveryTerms || '');
+  const notes = escapeHtml(quotation.notes || '');
   
   // Terms and Conditions
   let termsAndConditions = quotation.termsAndConditions || '';
@@ -475,21 +505,28 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       .join("\n\n");
   }
   
-  const quotationNumber = quotation.quotationNumber || '';
-  const currency = quotation.currency?.code || 'AED';
+  const quotationNumber = escapeHtml(quotation.quotationNumber || '');
+  const currency = escapeHtml(quotation.currency?.code || 'AED');
   const companySnapshot = quotation.companySnapshot || null;
 
-  const createdByName = quotation.createdBy?.name || quotation.createdBySnapshot?.name || '—';
-  const createdByEmail = quotation.createdBy?.email || quotation.createdBySnapshot?.email || '';
+  // Falls back to a title-cased role (e.g. "ops_manager" -> "Ops Manager")
+  // when the user hasn't set a designation, so the footer never shows blank.
+  const roleLabel = (role) => (role ? String(role).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : '');
+
+  const createdByName = escapeHtml(quotation.createdBy?.name || quotation.createdBySnapshot?.name || '—');
+  const createdByEmail = escapeHtml(quotation.createdBy?.email || quotation.createdBySnapshot?.email || '');
   const createdByRole = quotation.createdBy?.role || quotation.createdBySnapshot?.role || 'user';
-  
-  const opsReviewedByName = quotation.opsApprovedBySnapshot?.name || '—';
-  const opsReviewedByEmail = quotation.opsApprovedBySnapshot?.email || '';
+  const createdByDesignation = escapeHtml(quotation.createdBy?.designation || roleLabel(createdByRole));
+
+  const opsReviewedByName = escapeHtml(quotation.opsApprovedBySnapshot?.name || '—');
+  const opsReviewedByEmail = escapeHtml(quotation.opsApprovedBySnapshot?.email || '');
   const opsReviewedAt = quotation.opsApprovedBySnapshot?.approvedAt ? fmtDate(quotation.opsApprovedBySnapshot.approvedAt) : '—';
-  
-  const approvedByName = quotation.approvedBy?.name || '—';
-  const approvedByEmail = quotation.approvedBy?.email || '';
+  const opsReviewedByDesignation = escapeHtml(quotation.opsApprovedBy?.designation || roleLabel(quotation.opsApprovedBySnapshot?.role) || 'Operations Manager');
+
+  const approvedByName = escapeHtml(quotation.approvedBy?.name || '—');
+  const approvedByEmail = escapeHtml(quotation.approvedBy?.email || '');
   const approvedAt = quotation.approvedAt ? fmtDate(quotation.approvedAt) : '—';
+  const approvedByDesignation = escapeHtml(quotation.approvedBy?.designation || 'Admin');
 
   // Convert header image to base64
   const headerBase64 = await imageToBase64(headerImage);
@@ -538,7 +575,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     return `<tr>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${index + 1}</td>
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
-        ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;">${item.description}</div>` : ''}
+        ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;">${escapeHtml(item.description)}</div>` : ''}
         ${imageRows.map(row => `
           <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;">
             ${row.map(src => `
@@ -551,7 +588,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         `).join('')}
       </td>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.quantity}</td>
-      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unit || '-'}</td>
+      <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${escapeHtml(item.unit || '-')}</td>
       <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unitPrice.toFixed(2)}</td>
       <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${(item.quantity * item.unitPrice).toFixed(2)}</td>
     </tr>`;
@@ -606,7 +643,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const companyFooter = `
     <div style="margin-top:24px;padding-top:16px;border-top:2px solid #e5e7eb;">
       <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
-      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${companyInfo?.name || 'Mega Repairing Machinery Equipment LLC'}</div>
+      <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${escapeHtml(companyInfo?.name) || 'Mega Repairing Machinery Equipment LLC'}</div>
     </div>
     
     <!-- Approval Chain Section -->
@@ -626,14 +663,15 @@ export const buildPDFHTML = async (quotation, options = {}) => {
             <td style="padding:8px 6px;vertical-align:top;">
               <div style="font-weight:600;color:#0f172a;">${createdByName}</div>
               <div style="font-size:9px;color:#64748b;">${createdByEmail}</div>
-              <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Role: ${createdByRole}</div>
+              <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${createdByDesignation}</div>
             </td>
             ${showReviewedBy ? `
               <td style="padding:8px 6px;vertical-align:top;">
                 ${opsReviewedByName !== '—' ? `
                   <div style="font-weight:600;color:#0f172a;">${opsReviewedByName}</div>
                   <div style="font-size:9px;color:#64748b;">${opsReviewedByEmail}</div>
-                  <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${opsReviewedAt}</div>
+                  <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${opsReviewedByDesignation}</div>
+                  <div style="font-size:8px;color:#94a3b8;">Date: ${opsReviewedAt}</div>
                 ` : `
                   <div style="color:#94a3b8;font-style:italic;">Not reviewed yet</div>
                 `}
@@ -643,7 +681,8 @@ export const buildPDFHTML = async (quotation, options = {}) => {
               ${approvedByName !== '—' ? `
                 <div style="font-weight:600;color:#0f172a;">${approvedByName}</div>
                 <div style="font-size:9px;color:#64748b;">${approvedByEmail}</div>
-                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">Date: ${approvedAt}</div>
+                <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${approvedByDesignation}</div>
+                <div style="font-size:8px;color:#94a3b8;">Date: ${approvedAt}</div>
               ` : `
                 <div style="color:#94a3b8;font-style:italic;">Not approved yet</div>
               `}
@@ -667,6 +706,23 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     thead{display:table-row-group;}
     @media print{body{margin:0;padding:0;}.page-break{page-break-before:always;}thead{display:table-row-group;}}
     .terms-content{white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.5; text-indent: 0;margin: 0;padding: 0;}
+    /* Minimal subset of Quill's own editor CSS (quill.snow.css/quill.core.css),
+       reproduced here because this document is rendered in an isolated
+       Puppeteer page that doesn't load that stylesheet — keeps rich-text
+       terms content (headings/lists/blockquote/links) looking the same as
+       the in-app editor and viewer. */
+    .terms-content p{margin:0 0 6px;white-space:normal;}
+    .terms-content h1,.terms-content h2,.terms-content h3,.terms-content h4,.terms-content h5,.terms-content h6{margin:10px 0 6px;font-weight:700;color:#0f172a;white-space:normal;}
+    .terms-content h1{font-size:18px;} .terms-content h2{font-size:15px;} .terms-content h3{font-size:13px;}
+    .terms-content h4{font-size:11px;} .terms-content h5{font-size:10px;} .terms-content h6{font-size:9px;}
+    .terms-content a{color:#2563eb;text-decoration:underline;}
+    .terms-content blockquote{border-left:3px solid #cbd5e1;margin:6px 0;padding:2px 0 2px 12px;color:#64748b;font-style:italic;white-space:normal;}
+    /* Quill's persisted list HTML (quill.getSemanticHTML(), used for
+       onChange/save) is genuine nested <ul>/<ol><li> — no data-list
+       attribute or indent classes, those only exist in the live editor's
+       internal DOM. Plain list-style + native nesting is all that's needed. */
+    .terms-content ul,.terms-content ol{margin:4px 0;padding-left:1.5em;}
+    .terms-content li{margin-bottom:2px;white-space:normal;}
   </style>
 </head>
 <body>
@@ -695,7 +751,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
         <span style="font-weight:600;color:#4b5563;">Project Name</span><span>:</span><span>${projectName || "N/A"}</span>
         ${scopeOfWork ? `<span style="font-weight:600;color:#4b5563;">Scope of Work</span><span>:</span><span>${scopeOfWork}</span>` : ''}
         <span style="font-weight:600;color:#4b5563;">Company Name</span><span>:</span><span>${customerName}</span>
-        <span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${customerContactName}</span>
+        ${customerContactName ? `<span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${customerContactName}</span>` : ''}
         <span style="font-weight:600;color:#4b5563;">Phone</span><span>:</span><span>${customerPhone || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Email</span><span>:</span><span>${customerEmail || "N/A"}</span>
         ${customerDesignation ? `<span style="font-weight:600;color:#4b5563;">Designation</span><span>:</span><span>${customerDesignation}</span>` : ''}

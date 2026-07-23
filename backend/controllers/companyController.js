@@ -43,9 +43,9 @@ function generateSlug(name) {
  */
 exports.getAllCompanies = async (req, res) => {
   try {
-    const companies = await Company.find({ isActive: true })
-      .select('code name slug logo address phone email website baseCurrency acceptedCurrencies bankDetails vatNumber crNumber taxRate zohoOrganizationId')
-      .sort({ name: 1 })
+    const companies = await Company.find({})
+      .select('code name slug logo address phone email website baseCurrency acceptedCurrencies bankDetails vatNumber crNumber taxRate zohoOrganizationId isActive')
+      .sort({ isActive: -1, name: 1 })
       .lean();
 
     res.json({
@@ -304,13 +304,6 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    if (!zohoOrganizationId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Zoho Organization ID is required' 
-      });
-    }
-
     // Check if company with same code exists
     const existingCode = await Company.findOne({ code: code.toUpperCase() });
     if (existingCode) {
@@ -320,13 +313,15 @@ exports.createCompany = async (req, res) => {
       });
     }
 
-    // Check if Zoho Organization ID already exists
-    const existingZohoOrg = await Company.findOne({ zohoOrganizationId });
-    if (existingZohoOrg) {
-      return res.status(409).json({ 
-        success: false, 
-        message: 'Zoho Organization ID is already associated with another company' 
-      });
+    // Check if Zoho Organization ID already exists (only when provided)
+    if (zohoOrganizationId) {
+      const existingZohoOrg = await Company.findOne({ zohoOrganizationId });
+      if (existingZohoOrg) {
+        return res.status(409).json({
+          success: false,
+          message: 'Zoho Organization ID is already associated with another company'
+        });
+      }
     }
 
     const slug = generateSlug(name);
@@ -354,7 +349,7 @@ exports.createCompany = async (req, res) => {
       baseCurrency: baseCurrency || 'AED',
       acceptedCurrencies: acceptedCurrencies || ['AED'],
       bankDetails: bankDetails || {},
-      zohoOrganizationId,
+      ...(zohoOrganizationId ? { zohoOrganizationId } : {}),
       createdBy: req.user.id,
       isActive: true
     });
@@ -441,22 +436,31 @@ exports.updateCompany = async (req, res) => {
       }
     }
 
+    let unsetZohoOrg = false;
     if (updates.zohoOrganizationId) {
-      const existing = await Company.findOne({ 
+      const existing = await Company.findOne({
         zohoOrganizationId: updates.zohoOrganizationId,
         _id: { $ne: id }
       });
       if (existing) {
-        return res.status(409).json({ 
-          success: false, 
-          message: 'Zoho Organization ID already associated with another company' 
+        return res.status(409).json({
+          success: false,
+          message: 'Zoho Organization ID already associated with another company'
         });
       }
+    } else if ('zohoOrganizationId' in updates) {
+      // Empty value means "clear it" — must $unset so the sparse unique index
+      // doesn't treat multiple companies with '' as a duplicate key.
+      unsetZohoOrg = true;
+      delete updates.zohoOrganizationId;
     }
 
     const updatedCompany = await Company.findByIdAndUpdate(
       id,
-      { ...updates, updatedBy: req.user.id },
+      {
+        $set: { ...updates, updatedBy: req.user.id },
+        ...(unsetZohoOrg ? { $unset: { zohoOrganizationId: 1 } } : {})
+      },
       { new: true, runValidators: true }
     );
 
@@ -644,13 +648,24 @@ exports.bulkImportCompanies = async (req, res) => {
         }
 
         const slug = generateSlug(companyData.name);
-        
-        const company = await Company.create({
-          ...companyData,
-          code: companyData.code.toUpperCase(),
-          slug,
-          createdBy: req.user.id
-        });
+        const code = companyData.code.toUpperCase();
+
+        // Upsert by zohoOrganizationId so re-importing activates existing companies
+        // instead of failing with a duplicate-key error.
+        const company = await Company.findOneAndUpdate(
+          { zohoOrganizationId: companyData.zohoOrganizationId },
+          {
+            $set: {
+              ...companyData,
+              code,
+              slug,
+              isActive: true,
+              updatedBy: req.user.id,
+            },
+            $setOnInsert: { createdBy: req.user.id },
+          },
+          { upsert: true, new: true, runValidators: true }
+        );
 
         results.successful.push({
           code: company.code,
@@ -677,7 +692,7 @@ exports.bulkImportCompanies = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Imported ${results.successful.length} companies, ${results.failed.length} failed`,
+      message: `Imported/updated ${results.successful.length} companies, ${results.failed.length} failed`,
       results
     });
   } catch (error) {

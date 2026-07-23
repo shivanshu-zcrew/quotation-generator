@@ -17,6 +17,7 @@ const {
   resetPasswordWithToken,
   generateTemporaryPassword,
   forceChangePassword,
+  getOpsManagers,
 } = require('../controllers/authController');
 const { protect, adminOnly } = require('../middleware/auth');
 
@@ -43,6 +44,7 @@ router.get('/me', protect, getMe);
 router.put('/updatedetails', protect, updateDetails);  // Users update themselves
 router.put('/updatepassword', protect, updatePassword);
 router.put('/force-change-password', protect, forceChangePassword);
+router.get('/ops-managers', protect, getOpsManagers);
 
 // ═════════════════════════════════════════════════════════════════════════
 // ADMIN ONLY ROUTES

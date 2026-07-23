@@ -4,10 +4,13 @@ import { Plus, Trash2, Upload, FileText,Eye , Download, ChevronDown, ChevronUp, 
 import ValidatedInput from './ValidatedInput';
 import TermsEditor, { TermsViewer } from './TermsCondition';
 import Snackbar from './Snackbar';
+import PhoneInput from './PhoneInput';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
+import { validatePhoneNumber } from '../utils/quotationUtils';
 import { fmtDate } from '../utils/formatters';
 import { inputStyle } from './QuotationLayout';
-import { useAppStore } from '../services/store'; 
+import { useAppStore } from '../services/store';
+import { CommentableText, CommentBadge } from './ReviewComments';
 
 import headerImage from '../assets/header.png';
 
@@ -15,26 +18,28 @@ import headerImage from '../assets/header.png';
 // Mobile Field Component (Updated with read-only support)
 // ============================================================
  
-const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false, showSnack }) => {
+const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false, showSnack, commentProps, contactPersons = [] }) => {
   // Check if this is a phone field
-  const isPhoneField = field === 'customerPhone' || field === 'ourContact' || field === 'companyPhone';
-  
+  const isCustomerPhoneField = field === 'customerPhone';
+  const isPhoneField = field === 'ourContact' || field === 'companyPhone';
+  const isContactNameField = field === 'customerName';
+
   // Handle phone number validation
   const handlePhoneChange = (e) => {
     const newValue = e.target.value;
-    
+
     // Remove any letters as user types
     let cleanedValue = newValue.replace(/[a-zA-Z]/g, '');
-    
+
     // Validate the cleaned value
     const validation = validatePhoneNumber(cleanedValue);
     if (!validation.isValid && cleanedValue) {
       showSnack?.(validation.error, 'error');
     }
-    
+
     onChange(field, cleanedValue);
   };
-  
+
   const handlePhoneKeyDown = (e) => {
     // Prevent letters from being typed
     if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
@@ -42,7 +47,15 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
       showSnack?.('Phone number cannot contain letters', 'error');
     }
   };
-  
+
+  const handleContactPersonSelect = (contact) => {
+    if (!contact) return;
+    onChange('customerName', `${contact.firstName || ''} ${contact.lastName || ''}`.trim());
+    if (contact.email) onChange('customerEmail', contact.email);
+    const matchedPhone = contact.workPhone || contact.mobile;
+    if (matchedPhone) onChange('customerPhone', matchedPhone);
+  };
+
   return (
     <div style={styles.fieldCard}>
       <label style={styles.fieldLabel}>
@@ -64,6 +77,13 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
               resize: 'vertical',
             }}
           />
+        ) : isCustomerPhoneField ? (
+          <PhoneInput
+            value={value || ''}
+            onChange={(newValue) => onChange(field, newValue)}
+            placeholder="50 123 4567"
+            isMobile={true}
+          />
         ) : isPhoneField ? (
           <input
             type="tel"
@@ -77,6 +97,41 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
               backgroundColor: error ? '#fef2f2' : undefined,
             }}
           />
+        ) : isContactNameField ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {contactPersons.filter(cp => cp.firstName?.trim()).length > 0 && (
+              <select
+                value=""
+                onChange={(e) => {
+                  const selectedIdx = e.target.value;
+                  if (selectedIdx === '') return;
+                  handleContactPersonSelect(contactPersons[Number(selectedIdx)]);
+                }}
+                style={{ ...inputStyle, color: '#6b7280' }}
+              >
+                <option value="">+ Add contact manually, or pick existing below</option>
+                {contactPersons
+                  .map((cp, idx) => ({ cp, idx }))
+                  .filter(({ cp }) => cp.firstName?.trim())
+                  .map(({ cp, idx }) => (
+                    <option key={cp._id || idx} value={idx}>
+                      {cp.firstName} {cp.lastName || ''}{cp.isPrimaryContact ? ' (Primary)' : ''}
+                    </option>
+                  ))}
+              </select>
+            )}
+            <input
+              type="text"
+              value={value || ''}
+              onChange={(e) => onChange('customerName', e.target.value)}
+              placeholder="Contact person name"
+              style={{
+                ...inputStyle,
+                borderColor: error ? '#dc2626' : undefined,
+                backgroundColor: error ? '#fef2f2' : undefined,
+              }}
+            />
+          </div>
         ) : (
           <input
             type={type}
@@ -89,6 +144,12 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
             }}
           />
         )
+      ) : commentProps && type !== 'date' && value ? (
+        <CommentableText
+          {...commentProps}
+          text={String(value)}
+          textStyle={styles.fieldValue}
+        />
       ) : (
         <div style={{
           ...styles.fieldValue,
@@ -102,16 +163,17 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
           <AlertCircle size={10} /> {error}
         </div>
       )}
+      {isEditing && commentProps && <CommentBadge {...commentProps} />}
     </div>
   );
 };
 // ============================================================
 // Mobile Item Card Component (Updated with search support)
 // ============================================================
-const MobileItemCard = ({ 
+const MobileItemCard = ({
   item, index, isEditing, onUpdate, onRemove, onAddImages,
   newImages, onRemoveNewImage, onRemoveExistingImage,
-  availableItems, fieldErrors, showLocalSnack, currency 
+  availableItems, fieldErrors, showLocalSnack, currency, commentProps,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [showImageUpload, setShowImageUpload] = useState(false);
@@ -218,13 +280,18 @@ const MobileItemCard = ({
           <div style={styles.itemField}>
             <label style={styles.itemLabel}>Description</label>
             {isEditing ? (
-              <textarea
-                value={item.description || ''}
-                onChange={(e) => onUpdate(item.id, 'description', e.target.value)}
-                placeholder="Item description (optional)…"
-                rows={2}
-                style={{ ...inputStyle, resize: 'vertical' }}
-              />
+              <>
+                <textarea
+                  value={item.description || ''}
+                  onChange={(e) => onUpdate(item.id, 'description', e.target.value)}
+                  placeholder="Item description (optional)…"
+                  rows={2}
+                  style={{ ...inputStyle, resize: 'vertical' }}
+                />
+                {commentProps && <CommentBadge {...commentProps} />}
+              </>
+            ) : commentProps && item.description ? (
+              <CommentableText {...commentProps} text={item.description} textStyle={styles.itemDescription} />
             ) : (
               <div style={styles.itemDescription}>{item.description || '—'}</div>
             )}
@@ -635,6 +702,7 @@ const MobileQuotationLayout = ({
   companyName,
   customerTaxTreatment = 'non_vat_registered',
   customerPlaceOfSupply = 'Dubai',
+  customerContactPersons = [],
   showTaxSection = false,
   taxPresets = [],
   defaultTaxValue = '0',
@@ -647,12 +715,31 @@ const MobileQuotationLayout = ({
   companyEmail = '',
   companyTradeLicense = '',
   companyTaxRegistration = '',
-  selectedCurrency = 'AED'
+  selectedCurrency = 'AED',
+  commentsByTarget = {},
+  canAddComments = false,
+  canManageComments = false,
+  canDeleteComment,
+  onAddComment,
+  onResolveComment,
+  onDeleteComment,
 }) => {
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
-  
+
   // Get current user from store
   const currentUser = useAppStore((state) => state.user);
+
+  const commentsFor = (targetType, targetKey) => ({
+    targetType,
+    targetKey: String(targetKey),
+    comments: commentsByTarget[`${targetType}:${targetKey}`] || [],
+    canAdd: canAddComments,
+    onAdd: onAddComment,
+    canManage: canManageComments,
+    onResolve: onResolveComment,
+    canDeleteComment,
+    onDelete: onDeleteComment,
+  });
 
   const showLocalSnack = (message, type = 'error') => {
     setSnackbar({ show: true, message, type });
@@ -676,8 +763,8 @@ const MobileQuotationLayout = ({
     { label: 'Project Name', field: 'projectName', type: 'text', required: true },
     { label: 'Scope of Work', field: 'scopeOfWork', type: 'textarea', required: false },
     { label: 'Company Name', field: 'customer', type: 'text', required: true },
-    { label: 'Contact Name', field: 'customerName', type: 'text', required: true },
-    { label: 'Phone', field: 'customerPhone', type: 'tel', required: true, isPhone: true },  
+    { label: 'Name', field: 'customerName', type: 'text', required: false },
+    { label: 'Phone', field: 'customerPhone', type: 'tel', required: true, isPhone: true },
     { label: 'Email', field: 'customerEmail', type: 'email', required: true },
     { label: 'Designation', field: 'customerDesignation', type: 'text', required: false },
     { label: 'Trade License Number', field: 'customerTradeLicenseNumber', type: 'text', required: false },
@@ -685,6 +772,7 @@ const MobileQuotationLayout = ({
   ];
 
   const RIGHT_FIELDS = [
+    { label: 'Company Name', field: 'companyName', type: 'text', required: false, isReadOnly: true },
     { label: 'Name', field: 'ourFocalPoint', type: 'text', required: true, isReadOnly: false },
     { label: 'Phone', field: 'ourContact', type: 'tel', required: false, isReadOnly: true, isPhone: true }, 
     { label: 'Email', field: 'salesManagerEmail', type: 'email', required: false, isReadOnly: true },
@@ -693,10 +781,12 @@ const MobileQuotationLayout = ({
     { label: 'Tax Registration Number', field: 'companyTaxRegistration', type: 'text', required: false, isReadOnly: true },
     { label: 'Date', field: 'date', type: 'date', required: true, isReadOnly: false },
     { label: 'Expiry Date', field: 'expiryDate', type: 'date', required: true, isReadOnly: false },
+    { label: 'Payment Terms', field: 'paymentTerms', type: 'text', required: false, isReadOnly: false },
   ];
 
   // Get field values with fallbacks
   const getFieldValue = (field) => {
+    if (field === 'companyName') return companyName;
     if (field === 'companyTradeLicense') return companyTradeLicense || quotationData.companyTradeLicense;
     if (field === 'companyTaxRegistration') return companyTaxRegistration || quotationData.companyTaxRegistration;
     if (field === 'ourContact') return quotationData.ourContact || companyPhone;
@@ -769,11 +859,13 @@ const MobileQuotationLayout = ({
               error={headerErrors[field]}
               isReadOnly={false}
               required={required}
-              showSnack={showLocalSnack} 
+              showSnack={showLocalSnack}
+              commentProps={commentsFor('header', field)}
+              contactPersons={customerContactPersons}
             />
           ))}
         </div>
-        
+
         {/* Right Column - Company & Dates */}
         <div style={styles.column}>
           <h4 style={styles.columnTitle}>Company Details</h4>
@@ -789,7 +881,8 @@ const MobileQuotationLayout = ({
               error={headerErrors[field]}
               isReadOnly={isReadOnly}
               required={required}
-              showSnack={showLocalSnack} 
+              showSnack={showLocalSnack}
+              commentProps={commentsFor('header', field)}
             />
           ))}
         </div>
@@ -814,6 +907,7 @@ const MobileQuotationLayout = ({
             fieldErrors={fieldErrors}
             showLocalSnack={showLocalSnack}
             currency={displayCurrency}
+            commentProps={commentsFor('item', item.id)}
           />
         ))}
         {isEditing && (
@@ -930,17 +1024,19 @@ const MobileQuotationLayout = ({
       <div style={styles.termsSection}>
         <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
         {isEditing ? (
-          <TermsEditor 
-            sections={tcSections} 
+          <TermsEditor
+            sections={tcSections}
             onChange={onTcChange}
             termsImages={termsImages}
             onTermsImagesUpload={onTermsImagesUpload}
             onRemoveTermsImage={onRemoveTermsImage}
+            commentProps={commentsFor('terms', 'terms')}
           />
         ) : (
-          <TermsViewer 
-            sections={tcSections} 
+          <TermsViewer
+            sections={tcSections}
             termsImages={termsImages}
+            commentProps={commentsFor('terms', 'terms')}
           />
         )}
       </div>

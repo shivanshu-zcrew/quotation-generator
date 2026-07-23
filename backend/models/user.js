@@ -34,6 +34,11 @@ const userSchema = new mongoose.Schema(
         message: 'Please provide a valid phone number'
       }
     },
+    designation: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     password: {
       type: String,
       required: [true, 'Please provide a password'],

@@ -25,6 +25,8 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  XCircle,
+  TrendingDown,
 } from "lucide-react";
 
 import {
@@ -122,6 +124,8 @@ const STATUS_CONFIG = {
   not_awarded: { label: "Not Awarded", bg: "#eef1f4", color: "#52606d", borderColor: "#dde3e8", icon: "—", description: "Lost to competitor" },
   ops_rejected: { label: "Returned", bg: "#fdeaf0", color: "#be185d", borderColor: "#f8d2e0", icon: "△", description: "Ops rejected — revise" },
   rejected: { label: "Rejected", bg: "#fdeceb", color: "#c1352b", borderColor: "#f8d6d2", icon: "✕", description: "Customer rejected" },
+  cancelled: { label: "Cancelled", bg: "#fce7f3", color: "#9d174d", borderColor: "#fbcfe8", icon: "⊗", description: "Cancelled — edit to revise" },
+  amended: { label: "Amended", bg: "#ffedd5", color: "#9a3412", borderColor: "#fed7aa", icon: "✎", description: "Awaiting edit — click Edit & Amend" },
 };
 
 const TAB_STATUS_MAP = {
@@ -358,6 +362,8 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     approved: globalApproved,
     awarded: globalAwarded,
     rejected: globalRejected,
+    notAwarded: globalNotAwarded,
+    cancelled: globalCancelled,
     awardedValue: globalAwardedValue,
     totalCustomers: globalTotalCustomers,
     conversionRate: globalConversionRate,
@@ -451,6 +457,10 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
         case "approved": newStatus = "approved"; break;
         case "awarded": newStatus = "awarded"; break;
         case "returned": newStatus = "ops_rejected"; break;
+        case "rejected": newStatus = "rejected"; break;
+        case "not_awarded": newStatus = "not_awarded"; break;
+        case "cancelled": newStatus = "cancelled"; break;
+        case "amended": newStatus = "amended"; break;
         default: newStatus = null;
       }
       setFilters((prev) => ({ ...prev, status: newStatus, sortBy: "date", sortDir: "desc" }));
@@ -482,6 +492,10 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       case "approved": return "approved";
       case "awarded": return "awarded";
       case "returned": return "ops_rejected";
+      case "rejected": return "rejected";
+      case "not_awarded": return "not_awarded";
+      case "cancelled": return "cancelled";
+      case "amended": return "amended";
       default: return null;
     }
   };
@@ -655,14 +669,18 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const TABS = useMemo(
     () => [
-      { key: "all", label: "All", Icon: FileText, count: globalTotalQuotations },
-      { key: "pending", label: "Pending", Icon: Clock, count: globalPending },
-      { key: "in_review", label: "In Review", Icon: Shield, count: globalInReview },
-      { key: "approved", label: "Approved", Icon: CheckCircle, count: globalApproved },
-      { key: "awarded", label: "Awarded", Icon: Award, count: globalAwarded },
-      { key: "returned", label: "Returned", Icon: Ban, count: globalReturned },
+      { key: "all",         label: "All",         Icon: FileText,     count: globalTotalQuotations },
+      { key: "pending",     label: "Pending",     Icon: Clock,        count: globalPending },
+      { key: "in_review",   label: "In Review",   Icon: Shield,       count: globalInReview },
+      { key: "approved",    label: "Approved",    Icon: CheckCircle,  count: globalApproved },
+      { key: "awarded",     label: "Awarded",     Icon: Award,        count: globalAwarded },
+      { key: "returned",    label: "Returned",    Icon: Ban,          count: globalReturned },
+      { key: "rejected",    label: "Rejected",    Icon: XCircle,      count: globalRejected },
+      { key: "not_awarded", label: "Not Awarded", Icon: TrendingDown, count: globalNotAwarded },
+      { key: "cancelled",   label: "Cancelled",   Icon: XCircle,     count: globalCancelled },
+      // "Amended" tab hidden for now — amend feature is disabled.
     ],
-    [globalTotalQuotations, globalPending, globalInReview, globalApproved, globalAwarded, globalReturned]
+    [globalTotalQuotations, globalPending, globalInReview, globalApproved, globalAwarded, globalReturned, globalRejected, globalNotAwarded, globalCancelled]
   );
 
   const thStyle = {
@@ -947,6 +965,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}>
                                     <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
                                       <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: "0.8rem" }}>{q.quotationNumber || "—"}</span>
+                                      {q.revisedFrom && <span style={{ fontSize: "0.6rem", fontWeight: 700, color: "#6d28d9", background: "#f5f3ff", padding: "1px 6px", borderRadius: 999, border: "1px solid #c4b5fd" }}>Rev</span>}
                                       {expired && <span style={{ fontSize: "0.6rem", fontWeight: 600, color: "#c1352b", background: "#fdeceb", padding: "1px 6px", borderRadius: 999, border: "1px solid #f8d6d2" }}>Expired</span>}
                                       {expiring && <span style={{ fontSize: "0.6rem", fontWeight: 600, color: "#b45309", background: "#fff7e6", padding: "1px 6px", borderRadius: 999, border: "1px solid #fde9c8" }}>Expiring</span>}
                                     </div>

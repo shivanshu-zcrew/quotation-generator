@@ -24,11 +24,11 @@ const companySchema = new mongoose.Schema({
     lowercase: true,
     index: true
   },
-  // Add Zoho Organization ID for this company
+  // Add Zoho Organization ID for this company (optional — required only to award quotations)
   zohoOrganizationId: {
     type: String,
-    required: true,
     unique: true,
+    sparse: true,
     index: true
   },
   address: {

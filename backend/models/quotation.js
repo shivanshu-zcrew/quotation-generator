@@ -123,6 +123,29 @@ const quotationDocumentSchema = new mongoose.Schema({
   description: { type: String, default: "" },
 });
 
+// Review comments — reviewer (ops_manager/admin) annotations anchored to a
+// highlighted quote inside an item description, the terms & conditions text,
+// or a header field. Anchored by quote+context rather than offsets since the
+// underlying text can be edited/reloaded (see quotationSchema.reviewComments).
+const reviewCommentSchema = new mongoose.Schema({
+  targetType: { type: String, enum: ["item", "terms", "header"], required: true },
+  targetKey: { type: String, required: true }, // item._id string | 'terms' | header field name
+  quote: { type: String, required: true, trim: true },
+  prefix: { type: String, default: "" },
+  suffix: { type: String, default: "" },
+  comment: { type: String, required: true, trim: true },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  createdBySnapshot: {
+    name: String,
+    email: String,
+    role: String,
+  },
+  createdAt: { type: Date, default: Date.now },
+  resolved: { type: Boolean, default: false },
+  resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  resolvedAt: { type: Date },
+});
+
 const quotationItemSchema = new mongoose.Schema(
   {
 
@@ -135,7 +158,7 @@ const quotationItemSchema = new mongoose.Schema(
     quantity: {
       type: Number,
       required: true,
-      min: 1,
+      min: 0.001,
     },
     unitPrice: {
       type: Number,
@@ -164,8 +187,9 @@ const quotationItemSchema = new mongoose.Schema(
     // Cloudinary (legacy)
     imagePaths: [{ type: String }],
     imagePublicIds: [{ type: String }],
-  },
-  { _id: false }
+  }
+  // Items get a real, stable _id (unlike before) so review comments can
+  // anchor to a specific item across loads/saves — see reviewCommentSchema.
 );
 
 // ===== MAIN QUOTATION SCHEMA =====
@@ -231,6 +255,9 @@ const quotationSchema = new mongoose.Schema(
     },
     customerSnapshot: {
       name: { type: String, required: true },
+      // Manually-entered contact person for this quotation (kept separate
+      // from `name`, which is the client's company name).
+      contactPerson: { type: String, trim: true, default: "" },
       email: String,
       phone: String,
       address: String,
@@ -398,6 +425,9 @@ const quotationSchema = new mongoose.Schema(
     rejectedAt: { type: Date },
     rejectionReason: { type: String, default: "" },
 
+    // Inline review comments (highlight-and-comment annotations)
+    reviewComments: [reviewCommentSchema],
+
     // Zoho sync
     zohoEstimateId: { type: String, default: null, index: true, sparse: true },
     zohoEstimateNumber: { type: String, default: null },
@@ -408,6 +438,30 @@ const quotationSchema = new mongoose.Schema(
     awardedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     awardedAt: { type: Date },
     awardNote: { type: String, default: "" },
+
+    // Revision (set when an in-place revision is made from a cancelled-post-approval quotation)
+    revisedFrom: { type: mongoose.Schema.Types.ObjectId, ref: "Quotation", default: null, index: true },
+    revisionNote: { type: String, default: "" },
+    revisionNumber: { type: Number, default: 0 },
+    isRevision: { type: Boolean, default: false },
+
+    // Amendment (set when editing a cancelled-pre-approval quotation in-place)
+    isAmendment: { type: Boolean, default: false },
+    amendmentNote: { type: String, default: "" },
+
+    // Cancellation metadata
+    cancelledFromStatus: { type: String, default: "" },
+    cancelledAt: { type: Date, default: null },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    cancelledBySnapshot: {
+      name: { type: String },
+      email: { type: String },
+      role: { type: String },
+    },
+    cancelReason: { type: String, default: "" },
+
+    // Duplicate reference (set when duplicating an old quotation)
+    duplicatedFrom: { type: mongoose.Schema.Types.ObjectId, ref: "Quotation", default: null },
   },
   {
     timestamps: true,

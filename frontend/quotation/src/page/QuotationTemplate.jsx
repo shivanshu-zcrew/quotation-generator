@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText, Plus, Trash2, X } from "lucide-react";
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import { useAppStore } from '../services/store';
+import useCustomerStore from '../services/customerStore';
 import { useQuotations } from '../hooks/customHooks';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { sectionsToHTML, sectionsToHTMLWithoutImages, newSection } from '../components/TermsCondition';
@@ -21,7 +22,7 @@ import ItemModal from "../components/AddItemModal";
 // ============================================================
 // S3 SERVICE IMPORTS
 // ============================================================
-import { quotationAPI } from '../services/api';
+import { quotationAPI, authAPI } from '../services/api';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from '../hooks/useS3Image';
 import { uploadItemImage, uploadTermsImage } from "../utils/imageUpload";
 
@@ -53,11 +54,29 @@ const ContentSkeleton = React.memo(() => (
   </div>
 ));
 
-const ActionButton = ({ onClick, disabled, bgColor, icon, label, loading }) => (
-  <button onClick={onClick} disabled={disabled || loading} style={{ ...styles.actionButton, backgroundColor: disabled ? "#d1d5db" : bgColor, opacity: disabled ? 0.6 : 1 }}>
-    {loading ? <Loader size={18} style={styles.spinningIconSmall} /> : icon} {loading ? (label === "Save" ? "Saving..." : "Generating...") : label}
-  </button>
-);
+const ActionButton = ({ onClick, disabled, bgColor, icon, label, loading, variant = "solid", loadingLabel }) => {
+  const [hover, setHover] = useState(false);
+  const outline = variant === "outline";
+  const style = outline
+    ? {
+        ...styles.actionButton,
+        backgroundColor: hover && !disabled ? "#f8fafc" : "#fff",
+        color: disabled ? "#9ca3af" : "#374151",
+        border: `1px solid ${disabled ? "#e5e7eb" : hover ? "#9ca3af" : "#d1d5db"}`,
+      }
+    : { ...styles.actionButton, backgroundColor: disabled ? "#d1d5db" : bgColor, opacity: disabled ? 0.6 : 1 };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled || loading}
+      style={style}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      {loading ? <Loader size={15} style={styles.spinningIconSmall} /> : icon} {loading ? (loadingLabel || "Saving...") : label}
+    </button>
+  );
+};
 
 const LoadingState = () => (
   <div style={styles.loadingState}>
@@ -70,16 +89,6 @@ const ErrorState = ({ message }) => (
   <div style={styles.errorState}>
     <AlertCircle size={18} />
     <span>Failed to load catalogue items: <strong>{message}</strong></span>
-  </div>
-);
-
-// SaveButton component
-const SaveButton = ({ onClick, disabled, hasError, loading }) => (
-  <div style={styles.saveButtonContainer}>
-    <button onClick={onClick} disabled={disabled} style={{ ...styles.saveButton, opacity: hasError ? 0.6 : 1 }}>
-      {loading ? <><Loader size={18} style={styles.spinningIconSmall} /> Saving Quotation...</> : <>💾 Save Quotation</>}
-    </button>
-    {hasError && <div style={styles.saveError}><AlertCircle size={14} /> Fix validation errors above to save</div>}
   </div>
 );
 
@@ -165,10 +174,10 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     scopeOfWork: initialQuotationData?.scopeOfWork || "",
     
     // Customer/Left side fields
-    customer: initialQuotationData?.customer|| "",
-    customerName: initialQuotationData?.customerName || customer?.contactPerson || customer?.name || "",
-    customerPhone: initialQuotationData?.customerPhone || customer?.phone || "",
-    customerEmail: initialQuotationData?.customerEmail || customer?.email || "",
+    customer: initialQuotationData?.customer || customer?.companyName || customer?.name || "",
+    customerName: initialQuotationData?.customerName || "",
+    customerPhone: initialQuotationData?.customerPhone || "",
+    customerEmail: initialQuotationData?.customerEmail || "",
     customerDesignation: initialQuotationData?.customerDesignation || customer?.designation || "",
     customerTradeLicenseNumber: initialQuotationData?.customerTradeLicenseNumber || customer?.tradeLicenseNumber || "",
     customerTaxRegistrationNumber: initialQuotationData?.customerTaxRegistrationNumber || customer?.vatNumber || "",
@@ -192,7 +201,10 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     termsAndConditions: initialQuotationData?.termsAndConditions || "",
     termsImage: initialQuotationData?.termsImage || null,
     currency: initialQuotationData?.currency || getCurrencyObject(selectedCurrency),
-    queryDate: initialQuotationData?.queryDate || ""   
+    queryDate: initialQuotationData?.queryDate || "",
+    revisedFrom: initialQuotationData?.revisedFrom || null,
+    revisionNote: initialQuotationData?.revisionNote || "",
+    originalQuotationNumber: initialQuotationData?.originalQuotationNumber || null,
   });
   const [fieldErrors, setFieldErrors] = useState({});
   const [headerErrors, setHeaderErrors] = useState({});
@@ -208,7 +220,11 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [imageCount, setImageCount] = useState(0);
   const [tcSections, setTcSections] = useState([newSection()]);
   const [snackbar, setSnackbar] = useState(SNACK_HIDE);
-  
+  const [managerModalOpen, setManagerModalOpen] = useState(false);
+  const [opsManagers, setOpsManagers] = useState([]);
+  const [managersLoading, setManagersLoading] = useState(false);
+  const [selectedManagerId, setSelectedManagerId] = useState(null);
+
   // Terms images state (now stores S3 keys instead of URLs)
   const [termsImages, setTermsImages] = useState([]);
   
@@ -336,41 +352,19 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     return () => { cancelled = true; };
   }, [quotationItems]);
   
-  // Add this useEffect to auto-populate customer TRN when customer changes
+  // Add this useEffect to auto-populate customer fields when the selected client changes
   useEffect(() => {
     if (customer) {
       setQuotationData(prev => ({
         ...prev,
-         customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
-        
-        customerName: customer.contactPerson || customer.name || "",
-        customerPhone: customer.phone || "",
-        customerEmail: customer.email || "",
+        customer: customer.companyName || customer.name || "",
+        customerTaxRegistrationNumber: customer.vatNumber || customer.trn || customer.taxRegistrationNumber || "",
         customerDesignation: customer.designation || "",
         customerTradeLicenseNumber: customer.tradeLicenseNumber || "",
       }));
     }
   }, [customer]);
 
-  // Auto-populate Company Name from selectedCompany
-  useEffect(() => {
-    if (selectedCompany) {
-      let companyNameValue = '';
-      
-      if (typeof selectedCompany === 'object') {
-        companyNameValue = selectedCompany.name || '';
-      } else {
-        const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
-        companyNameValue = company?.name || '';
-      }
-      
-      setQuotationData(prev => ({
-        ...prev,
-        customer: companyNameValue,
-      }));
-    }
-  }, [selectedCompany, companies]);
-  
   // Add this useEffect to auto-populate creator (user) details on the right side
   useEffect(() => {
     if (user && !quotationData.ourFocalPoint) {
@@ -463,9 +457,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     }
     if (!quotationData.customer?.trim()) {
       errors.customer = "Company Name is required";
-    }
-    if (!quotationData.customerName?.trim()) {
-      errors.customerName = "Contact Name is required";
     }
     if (!quotationData.customerPhone?.trim()) {
       errors.customerPhone = "Phone number is required";
@@ -646,7 +637,33 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     });
   }, [quotationItems]);
   
-  const handleSubmit = useCallback(async () => {
+  const handleManagerPicker = useCallback(async () => {
+    if (!validateAll()) return;
+    if (!selectedCompany) { showSnack("Please select a company", "error"); return; }
+    if (Object.keys(uploadingImages).length > 0) {
+      showSnack("Please wait — images are still uploading.", "error");
+      return;
+    }
+    // Admin quotations go to pending_admin — no ops email, skip picker
+    if (user?.role === 'admin') { handleSubmitWithEmails([]); return; }
+
+    setManagersLoading(true);
+    setSelectedManagerId(null);
+    setManagerModalOpen(true);
+    try {
+      const res = await authAPI.getOpsManagers();
+      setOpsManagers(res.data?.managers || []);
+    } catch {
+      showSnack("Failed to load managers", "error");
+      setManagerModalOpen(false);
+    } finally {
+      setManagersLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validateAll, selectedCompany, uploadingImages, user, showSnack]);
+
+  const handleSubmitWithEmails = useCallback(async (notifyManagerEmails) => {
+    setManagerModalOpen(false);
     if (!validateAll()) return;
     if (!selectedCompany) {
       showSnack("Please select a company", "error");
@@ -745,11 +762,21 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         items: formattedItems,
         internalDocuments: uploadedDocuments.map(doc => doc.fileData),
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
+        revisedFrom: quotationData.revisedFrom || undefined,
+        revisionNote: quotationData.revisionNote?.trim() || undefined,
+        notifyManagerEmails: notifyManagerEmails || [],
       };
-  
+
       const result = await addQuotation(quotation);
-  
+
       if (result?.success) {
+        // The backend echoes back the customer's up-to-date contactPersons
+        // after syncing this quotation's contact onto them — patch it into
+        // the customer picker's cache so the *next* "create quotation" shows
+        // it immediately, instead of only after a full page reload.
+        if (result.customerContactPersons && customer?._id) {
+          useCustomerStore.getState().updateCustomerContactPersons(customer._id, result.customerContactPersons);
+        }
         setTermsImages([]);
         showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
         setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1200);
@@ -764,6 +791,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       setSaveProgress(0);
       setSaveStep("");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency, uploadingImages]);
 
   const handleExportPDF = useCallback(async () => {
@@ -913,6 +941,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         projectName: quotationData.projectName || '',
         scopeOfWork: quotationData.scopeOfWork || '',
         customer: quotationData.customer || customer?.name || '',
+        customerName: quotationData.customerName || '',
         contact: quotationData.contact || customer?.phone || '',
         customerDesignation: quotationData.customerDesignation || '',
         customerTradeLicenseNumber: quotationData.customerTradeLicenseNumber || '',
@@ -1090,14 +1119,59 @@ const handleDocumentDownload = useCallback((docId) => {
       )}
       
       <div style={styles.innerContainer}>
+        {quotationData.revisedFrom && (
+          <div className="no-print" style={{
+            margin: '12px 0 0',
+            padding: '10px 16px',
+            borderRadius: 8,
+            background: 'linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)',
+            border: '1px solid #c4b5fd',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}>
+            <span style={{ fontSize: 16 }}>📝</span>
+            <div>
+              <span style={{ fontWeight: 700, color: '#6d28d9', fontSize: 13 }}>
+                Revision of {quotationData.originalQuotationNumber || 'previous quotation'}
+              </span>
+              {quotationData.revisionNote && (
+                <span style={{ color: '#7c3aed', fontSize: 12, marginLeft: 10 }}>
+                  — {quotationData.revisionNote}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         <div className="no-print" style={styles.header}>
           <h1 style={styles.title}>📄 Create Quotation</h1>
           <div style={styles.headerActions}>
-            <ActionButton onClick={() => setIsEditing(!isEditing)} disabled={false} 
-              bgColor={isEditing ? "#ef4444" : "#f59e0b"} icon={isEditing ? <Save size={18} /> : <Edit2 size={18} />} label={isEditing ? "Done" : "Edit"} />
-            <ActionButton onClick={onBack} bgColor="#6b7280" icon={<ArrowLeft size={18} />} label="Back" />
+            {!isEditing && (
+              <ActionButton
+                onClick={handleManagerPicker}
+                disabled={isSaving || hasAnyError}
+                loading={isSaving}
+                loadingLabel="Saving Quotation..."
+                bgColor="#10b981"
+                icon={<Save size={15} />}
+                label="Save Quotation"
+              />
+            )}
+            <ActionButton
+              onClick={() => setIsEditing(!isEditing)}
+              disabled={false}
+              bgColor="#0f172a"
+              icon={isEditing ? <Save size={15} /> : <Edit2 size={15} />}
+              label={isEditing ? "Done" : "Edit"}
+            />
+            <ActionButton onClick={onBack} variant="outline" icon={<ArrowLeft size={15} />} label="Back" />
           </div>
         </div>
+        {!isEditing && hasAnyError && (
+          <div className="no-print" style={styles.saveError}>
+            <AlertCircle size={14} /> Fix validation errors above to save
+          </div>
+        )}
         
         <QuotationLayout
   isEditing={isEditing}
@@ -1142,19 +1216,11 @@ const handleDocumentDownload = useCallback((docId) => {
   
   customerTaxTreatment={customer?.taxTreatment || 'non_vat_registered'}
   customerPlaceOfSupply={customer?.placeOfSupply || 'Dubai'}
+  customerContactPersons={customer?.contactPersons || []}
   termsImages={termsImages}
   onTermsImagesUpload={handleTermsImagesUpload}
   onRemoveTermsImage={handleRemoveTermsImage}
 />
-        
-        {!isEditing && (
-          <SaveButton 
-            onClick={handleSubmit} 
-            disabled={isSaving || hasAnyError} 
-            hasError={hasAnyError}
-            loading={isSaving}
-          />
-        )}
       </div>
       
       {/* Item Modal for Add/Edit */}
@@ -1171,6 +1237,76 @@ const handleDocumentDownload = useCallback((docId) => {
       />
       
       {snackbar.show && <Snackbar message={snackbar.message} type={snackbar.type} onClose={hideSnack} />}
+
+      {/* Manager picker modal */}
+      {managerModalOpen && (
+        <div style={managerModalStyles.overlay} onClick={() => setManagerModalOpen(false)}>
+          <div style={managerModalStyles.dialog} onClick={e => e.stopPropagation()}>
+            <div style={managerModalStyles.header}>
+              <span style={managerModalStyles.title}>Select Manager to Notify</span>
+              <button style={managerModalStyles.closeBtn} onClick={() => setManagerModalOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={managerModalStyles.subtitle}>
+              The quotation will be visible to all managers. Choose who receives the email notification.
+            </p>
+
+            <div style={managerModalStyles.list}>
+              {managersLoading ? (
+                <div style={managerModalStyles.loading}>
+                  <Loader size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                  <span>Loading managers…</span>
+                </div>
+              ) : opsManagers.length === 0 ? (
+                <p style={managerModalStyles.empty}>No active ops managers found.</p>
+              ) : (
+                opsManagers.map(mgr => (
+                  <label key={mgr._id} style={{
+                    ...managerModalStyles.option,
+                    background: selectedManagerId === mgr._id ? '#eff6ff' : 'transparent',
+                    borderColor: selectedManagerId === mgr._id ? '#3b82f6' : '#e2e8f0',
+                  }}>
+                    <input
+                      type="radio"
+                      name="managerPick"
+                      value={mgr._id}
+                      checked={selectedManagerId === mgr._id}
+                      onChange={() => setSelectedManagerId(mgr._id)}
+                      style={{ accentColor: '#3b82f6' }}
+                    />
+                    <div>
+                      <div style={managerModalStyles.mgrName}>{mgr.name}</div>
+                      <div style={managerModalStyles.mgrEmail}>{mgr.email}</div>
+                    </div>
+                  </label>
+                ))
+              )}
+            </div>
+
+            <div style={managerModalStyles.footer}>
+              <button style={managerModalStyles.cancelBtn} onClick={() => setManagerModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                style={{
+                  ...managerModalStyles.confirmBtn,
+                  opacity: !selectedManagerId ? 0.5 : 1,
+                  cursor: !selectedManagerId ? 'not-allowed' : 'pointer',
+                }}
+                disabled={!selectedManagerId || managersLoading}
+                onClick={() => {
+                  const mgr = opsManagers.find(m => m._id === selectedManagerId);
+                  handleSubmitWithEmails(mgr ? [mgr.email] : []);
+                }}
+              >
+                Confirm &amp; Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1182,18 +1318,16 @@ const handleDocumentDownload = useCallback((docId) => {
 const styles = {
   container: { minHeight: "100vh", backgroundColor: "#f0f9ff", padding: "1.5rem" },
   innerContainer: { maxWidth: "1280px", margin: "0 auto" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "0.75rem" },
-  title: { fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 },
-  headerActions: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
-  actionButton: { color: "white", padding: "0.625rem 1rem", borderRadius: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", border: "none", cursor: "pointer", fontSize: "0.875rem", fontWeight: "500", transition: "all 0.2s" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem", position: "sticky", top: 0, zIndex: 100, backgroundColor: "#f0f9ff", paddingTop: "0.5rem", paddingBottom: "0.75rem", borderBottom: "1px solid #e2e8f0" },
+  title: { fontSize: "1.375rem", fontWeight: "700", color: "#1f2937", margin: 0 },
+  headerActions: { display: "flex", gap: "0.5rem", flexWrap: "wrap" },
+  actionButton: { color: "white", padding: "0.55rem 0.9rem", borderRadius: "0.5rem", display: "flex", alignItems: "center", gap: "0.4rem", border: "none", cursor: "pointer", fontSize: "0.8125rem", fontWeight: "600", transition: "background-color 0.15s ease, border-color 0.15s ease" },
   loadingContainer: { minHeight: "100vh", backgroundColor: "#f0f9ff", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column" },
   loadingText: { fontSize: "0.9375rem", fontWeight: "500", color: "#6b7280", marginTop: "1rem" },
   loadingState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#1e40af" },
   errorState: { display: "flex", alignItems: "center", gap: "0.75rem", backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.875rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#991b1b" },
-  
-  saveButtonContainer: { display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem", marginTop: "2rem" },
-  saveButton: { backgroundColor: "#10b981", color: "white", padding: "1rem 2rem", borderRadius: "0.5rem", fontWeight: "bold", border: "none", cursor: "pointer", fontSize: "1rem", display: "flex", alignItems: "center", gap: "0.75rem", transition: "all 0.2s" },
-  saveError: { display: "flex", alignItems: "center", gap: "0.375rem", color: "#dc2626", fontSize: "0.8125rem", fontWeight: "500" },
+
+  saveError: { display: "flex", alignItems: "center", gap: "0.375rem", color: "#dc2626", fontSize: "0.8125rem", fontWeight: "500", marginTop: "-0.75rem", marginBottom: "1rem" },
   
   spinningIcon: { animation: "spin 1s linear infinite", marginBottom: "1rem" },
   spinningIconSmall: { animation: "spin 1s linear infinite" },
@@ -1216,4 +1350,22 @@ const styles = {
     .edit-input:focus{outline:2px solid #3b82f6;border-color:#3b82f6!important;}
     .field-error-input{border-color:#dc2626!important;background:#fef2f2!important;}
   `
+};
+
+const managerModalStyles = {
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' },
+  dialog: { background: '#fff', borderRadius: '0.75rem', width: '100%', maxWidth: '440px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', maxHeight: '90vh' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.25rem 1.25rem 0' },
+  title: { fontWeight: 700, fontSize: '1.0625rem', color: '#111827' },
+  closeBtn: { background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center', padding: '0.25rem' },
+  subtitle: { fontSize: '0.8125rem', color: '#6b7280', margin: '0.5rem 1.25rem 0.75rem', lineHeight: 1.5 },
+  list: { overflowY: 'auto', padding: '0 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '260px' },
+  loading: { display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#6b7280', fontSize: '0.875rem', padding: '1rem 0' },
+  empty: { color: '#9ca3af', fontSize: '0.875rem', textAlign: 'center', padding: '1rem 0' },
+  option: { display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.625rem 0.875rem', borderRadius: '0.5rem', border: '1.5px solid', cursor: 'pointer', transition: 'all 0.15s' },
+  mgrName: { fontWeight: 600, fontSize: '0.9rem', color: '#111827' },
+  mgrEmail: { fontSize: '0.8rem', color: '#6b7280' },
+  footer: { display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', padding: '1rem 1.25rem', borderTop: '1px solid #f1f5f9', marginTop: '0.75rem' },
+  cancelBtn: { padding: '0.5rem 1.125rem', borderRadius: '0.5rem', border: '1.5px solid #e2e8f0', background: '#fff', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem' },
+  confirmBtn: { padding: '0.5rem 1.25rem', borderRadius: '0.5rem', border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: '0.875rem', transition: 'opacity 0.15s' },
 };

@@ -4,7 +4,7 @@ import {
   Eye, Download, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, Menu,
+  Shield, Award, Ban, Users, Menu, TrendingDown,
 } from 'lucide-react';
 
 import { useOpsStats } from '../hooks/customHooks';
@@ -72,6 +72,8 @@ const STATUS_CONFIG = {
   not_awarded:  { label: 'Not Awarded',      bg: '#eef1f4', color: '#52606d', borderColor: '#dde3e8', icon: '—' },
   ops_rejected: { label: 'Returned by Me',   bg: '#fdeaf0', color: '#be185d', borderColor: '#f8d2e0', icon: '△' },
   rejected:     { label: 'Rejected by Admin',bg: '#fdeceb', color: '#c1352b', borderColor: '#f8d6d2', icon: '✕' },
+  cancelled:    { label: 'Cancelled',         bg: '#fce7f3', color: '#9d174d', borderColor: '#fbcfe8', icon: '⊗' },
+  amended:      { label: 'Amended',           bg: '#ffedd5', color: '#9a3412', borderColor: '#fed7aa', icon: '✎' },
 };
 
 const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
@@ -408,6 +410,7 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{quotation.quotationNumber || '—'}</span>
           <EnhancedStatusBadge status={quotation.status} quotation={quotation} />
+          {quotation.revisedFrom && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#6d28d9', background: '#f5f3ff', padding: '1px 6px', borderRadius: 999, border: '1px solid #c4b5fd' }}>Rev</span>}
           {expired  && <ExpiryBadge type="expired" />}
           {expiring && <ExpiryBadge type="expiring" />}
         </div>
@@ -460,7 +463,7 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         {canAct && (
           <>
-            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id)} icon={Check} label="Approve" size="small" disabled={isApproving} />
+            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation)} icon={Check} label="Approve" size="small" disabled={isApproving} />
             <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onReject(quotation)} icon={X} label="Reject" size="small" disabled={isRejecting} />
           </>
         )}
@@ -526,10 +529,9 @@ export default function OpsDashboard({ onViewQuotation }) {
   const clearError         = useAppStore((s) => s.clearError);
   const selectedCompany    = useAppStore((s) => s.selectedCompany);
 
-  const { 
-    loading: statsLoading, 
-    refresh: refreshStats, 
-    totalQuotations, 
+  const {
+    refresh: refreshStats,
+    totalQuotations,
     pendingReview, 
     awaitingAdmin, 
     returnedByMe, 
@@ -558,12 +560,13 @@ export default function OpsDashboard({ onViewQuotation }) {
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [approveTarget, setApproveTarget] = useState(null);
 
   // Latch refs — prevent shimmer flashing on re-renders
   const statsLatchRef = useRef(false);
   const tableLatchRef = useRef(false);
 
-  const statsReady = !statsLoading && totalQuotations != null;
+  const statsReady = quotationsInitialized;
   const tableReady = quotationsInitialized;
 
   if (statsReady) statsLatchRef.current = true;
@@ -579,7 +582,7 @@ export default function OpsDashboard({ onViewQuotation }) {
     }
   }, [selectedCompany]);
 
-  const showStatsShimmer = !statsLatchRef.current && statsLoading;
+  const showStatsShimmer = !statsLatchRef.current;
   const showTableShimmer = !tableLatchRef.current && !tableReady;
 
   const safeQ = useMemo(() => Array.isArray(companyQuotations) ? companyQuotations : [], [companyQuotations]);
@@ -599,6 +602,9 @@ export default function OpsDashboard({ onViewQuotation }) {
       rejected:     0,
       approved:     0,
       awarded:      0,
+      not_awarded:  0,
+      cancelled:    0,
+      amended:      0,
     };
   }, [quotationCounts, pagination, tabCounts]);
 
@@ -710,17 +716,24 @@ export default function OpsDashboard({ onViewQuotation }) {
     } finally { refreshInProgress.current = false; }
   }, [refreshCompanyQuotations, refreshStats, addToast, currentPage, currentLimit, activeTab, search, sort]);
 
-  const handleApprove = useCallback(async (id) => {
-    setOp(id, 'approve', true);
-    try {
-      const result = await opsApproveQuotation(id);
-      if (result?.success) {
-        addToast('Approved and forwarded to admin', 'success');
-        await Promise.all([refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }), refreshStats()]);
-      } else { addToast(result?.error || 'Failed to approve', 'error'); }
-    } catch (e) { addToast(e.message || 'Failed to approve', 'error'); }
-    finally { setOp(id, 'approve', false); }
-  }, [opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit, activeTab, search, sort]);
+  const handleApprove = {
+    open:    useCallback((q) => setApproveTarget(q), []),
+    close:   useCallback(() => setApproveTarget(null), []),
+    confirm: useCallback(async () => {
+      if (!approveTarget) return;
+      const id = approveTarget._id;
+      setOp(id, 'approve', true);
+      try {
+        const result = await opsApproveQuotation(id);
+        if (result?.success) {
+          addToast('Approved and forwarded to admin', 'success');
+          setApproveTarget(null);
+          await Promise.all([refreshCompanyQuotations({ page: currentPage, limit: currentLimit, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir }), refreshStats()]);
+        } else { addToast(result?.error || 'Failed to approve', 'error'); }
+      } catch (e) { addToast(e.message || 'Failed to approve', 'error'); }
+      finally { setOp(id, 'approve', false); }
+    }, [approveTarget, opsApproveQuotation, addToast, refreshCompanyQuotations, refreshStats, setOp, currentPage, currentLimit, activeTab, search, sort]),
+  };
 
   const handleReject = {
     open:    useCallback((q) => { setRejectTarget(q); setRejectReason(''); }, []),
@@ -780,13 +793,16 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   // ── Tab config ────────────────────────────────────────────
   const TABS = useMemo(() => [
-    { key: 'all',          label: 'All',             Icon: FileText,    count: tabCountsResolved.all },
-    { key: 'pending',      label: 'Pending',         Icon: Clock,       count: tabCountsResolved.pending },
-    { key: 'ops_approved', label: 'Awaiting Admin',  Icon: Shield,      count: tabCountsResolved.ops_approved },
-    { key: 'ops_rejected', label: 'Returned',        Icon: Ban,         count: tabCountsResolved.ops_rejected },
-    { key: 'rejected',     label: 'Admin Rejected',  Icon: XCircle,     count: tabCountsResolved.rejected },
-    { key: 'approved',     label: 'Approved',        Icon: CheckCircle, count: tabCountsResolved.approved },
-    { key: 'awarded',      label: 'Awarded',         Icon: Award,       count: tabCountsResolved.awarded },
+    { key: 'all',          label: 'All',             Icon: FileText,     count: tabCountsResolved.all },
+    { key: 'pending',      label: 'Pending',         Icon: Clock,        count: tabCountsResolved.pending },
+    { key: 'ops_approved', label: 'Awaiting Admin',  Icon: Shield,       count: tabCountsResolved.ops_approved },
+    { key: 'ops_rejected', label: 'Returned',        Icon: Ban,          count: tabCountsResolved.ops_rejected },
+    { key: 'rejected',     label: 'Admin Rejected',  Icon: XCircle,      count: tabCountsResolved.rejected },
+    { key: 'approved',     label: 'Approved',        Icon: CheckCircle,  count: tabCountsResolved.approved },
+    { key: 'awarded',      label: 'Awarded',         Icon: Award,        count: tabCountsResolved.awarded },
+    { key: 'not_awarded',  label: 'Not Awarded',     Icon: TrendingDown, count: tabCountsResolved.not_awarded },
+    { key: 'cancelled',    label: 'Cancelled',        Icon: XCircle,      count: tabCountsResolved.cancelled },
+    // "Amended" tab hidden for now — amend feature is disabled.
   ], [tabCountsResolved]);
 
   // ── Header button style ──────────────────────────────────
@@ -831,6 +847,16 @@ export default function OpsDashboard({ onViewQuotation }) {
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* ── MODALS ── */}
+      <ConfirmModal
+        open={!!approveTarget}
+        title="Approve Quotation"
+        message={`Approve ${approveTarget?.quotationNumber ? `quotation ${approveTarget.quotationNumber}` : 'this quotation'} and forward it to admin for final approval?`}
+        confirmLabel="Approve"
+        icon={CheckCircle}
+        loading={isOp(approveTarget?._id, 'approve')}
+        onConfirm={handleApprove.confirm}
+        onCancel={handleApprove.close}
+      />
       <ConfirmModal
         open={!!rejectTarget}
         title="Reject Quotation"
@@ -1079,7 +1105,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                           quotation={q}
                           selectedCurrency={selectedCurrency}
                           onView={handleView}
-                          onApprove={handleApprove}
+                          onApprove={handleApprove.open}
                           onReject={handleReject.open}
                           onDownload={handleDownload}
                           onAward={handleAwardOpen}
@@ -1121,6 +1147,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                                     <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{q.quotationNumber || '—'}</span>
+                                    {q.revisedFrom && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#6d28d9', background: '#f5f3ff', padding: '1px 6px', borderRadius: 999, border: '1px solid #c4b5fd' }}>Rev</span>}
                                     {expired  && <ExpiryBadge type="expired" />}
                                     {expiring && <ExpiryBadge type="expiring" />}
                                   </div>
@@ -1170,7 +1197,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                                     <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation" />
                                     {canAct && (
                                       <>
-                                        <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove(q._id)} icon={Check} label="Approve" title="Approve" disabled={isOp(q._id, 'approve')} />
+                                        <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove.open(q)} icon={Check} label="Approve" title="Approve" disabled={isOp(q._id, 'approve')} />
                                         <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleReject.open(q)} icon={X} label="Reject" title="Reject" disabled={isOp(q._id, 'reject')} />
                                       </>
                                     )}

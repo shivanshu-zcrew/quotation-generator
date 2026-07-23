@@ -24,7 +24,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
           description: editingItem.description || '',
           quantity: editingItem.quantity || 1,
           unit: editingItem.unit || '',
-          unitPrice: editingItem.unitPrice || ''
+          unitPrice: editingItem.unitPrice ?? ''
         });
       } else {
         // Reset for new item
@@ -47,8 +47,8 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
       newErrors.description = 'Description is required';
     }
     
-    if (!itemData.quantity || itemData.quantity < 1) {
-      newErrors.quantity = 'Quantity must be at least 1';
+    if (!itemData.quantity || itemData.quantity <= 0) {
+      newErrors.quantity = 'Quantity must be greater than 0';
     }
     
     if (itemData.unitPrice === '' || itemData.unitPrice === null || itemData.unitPrice < 0) {
@@ -64,7 +64,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
     if (value === '') {
       setItemData(prev => ({ ...prev, quantity: '' }));
     } else {
-      const numValue = parseInt(value, 10);
+      const numValue = parseFloat(value);
       if (!isNaN(numValue) && numValue >= 0) {
         setItemData(prev => ({ ...prev, quantity: numValue }));
       }
@@ -284,8 +284,8 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
                     </label>
                     <input
                       type="number"
-                      min="1"
-                      step="1"
+                      min="0.001"
+                      step="any"
                       value={itemData.quantity === '' ? '' : itemData.quantity}
                       onChange={handleQuantityChange}
                       placeholder="1"
@@ -299,7 +299,7 @@ const ItemModal = ({ isOpen, onClose, onAddItem, onEditItem, editingItem, select
                       }}
                       onFocus={(e) => e.currentTarget.style.borderColor = '#0f172a'}
                       onBlur={(e) => {
-                        if (itemData.quantity === '' || itemData.quantity < 1) {
+                        if (itemData.quantity === '' || itemData.quantity <= 0) {
                           setItemData(prev => ({ ...prev, quantity: 1 }));
                         }
                         if (!errors.quantity) e.currentTarget.style.borderColor = '#e2e8f0';

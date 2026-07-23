@@ -277,6 +277,8 @@ export const useOpsStats = () => {
       rejected: opsStats?.rejectedByAdmin || 0,
       approved: opsStats?.approved || 0,
       awarded: opsStats?.awarded || 0,
+      not_awarded: 0,
+      cancelled: 0,
     };
     return {
       stats: opsStats,

@@ -4,7 +4,7 @@ import {
   Eye, Download, Trash2, Clock, CheckCircle, XCircle,
   FileText, Search, X, Check, LogOut,
   AlertCircle, RefreshCw, ChevronLeft, ChevronRight,
-  Shield, Award, Ban, Users, TrendingUp, Calendar, Menu, Building2,
+  Shield, Award, Ban, Users, TrendingUp, TrendingDown, Calendar, Menu, Building2,
 } from 'lucide-react';
 
 import { useAppStore, useCompanyQuotations } from '../services/store';
@@ -77,6 +77,8 @@ const STATUS_CFG = {
   not_awarded:   { label: 'Not Awarded',      bg: '#eef1f4', color: '#52606d', borderColor: '#dde3e8', icon: '—' },
   ops_rejected:  { label: 'Returned by Ops',  bg: '#fdeaf0', color: '#be185d', borderColor: '#f8d2e0', icon: '△' },
   rejected:      { label: 'Rejected',         bg: '#fdeceb', color: '#c1352b', borderColor: '#f8d6d2', icon: '✕' },
+  cancelled:     { label: 'Cancelled',         bg: '#fce7f3', color: '#9d174d', borderColor: '#fbcfe8', icon: '⊗' },
+  amended:       { label: 'Amended',           bg: '#ffedd5', color: '#9a3412', borderColor: '#fed7aa', icon: '✎' },
 };
 
 const EnhancedStatusBadge = React.memo(({ status, quotation }) => {
@@ -213,6 +215,7 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{quotation.quotationNumber || '—'}</span>
           <EnhancedStatusBadge status={quotation.status} quotation={quotation} />
+          {quotation.revisedFrom && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#6d28d9', background: '#f5f3ff', padding: '1px 6px', borderRadius: 999, border: '1px solid #c4b5fd' }}>Rev</span>}
           {expired  && <ExpiryBadge type="expired" />}
           {expiring && <ExpiryBadge type="expiring" />}
         </div>
@@ -253,7 +256,7 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
         {canAct && (
           <>
-            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id)} icon={Check} label="Approve" size="small" disabled={isApproving} />
+            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id, quotation.quotationNumber)} icon={Check} label="Approve" size="small" disabled={isApproving} />
             <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onReject(quotation._id)} icon={X} label="Reject" size="small" disabled={isRejecting} />
           </>
         )}
@@ -306,11 +309,10 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const clearError       = useAppStore((s) => s.clearError);
   const fetchAllData     = useAppStore((s) => s.fetchAllData);
   const selectedCompany  = useAppStore((s) => s.selectedCompany);
-  const initialized      = useAppStore((s) => s.initialized);
   const awardQuotation   = useAppStore((s) => s.awardQuotation);
 
-  const { stats, loading: statsLoading, refresh: refreshStats, totalQuotations, actionRequired, approved, awarded, awardedValue, conversionRate, statusCounts, rejected, conversionDetails, totalAwardedValue, totalCustomers } = useAdminStats();
-  const { selectedCompany: companyId, currentCompany, selectedCurrency, hasCompany, isSwitchingCompany } = useCompanyContext();
+  const { stats, loading: statsLoading, refresh: refreshStats, totalQuotations, actionRequired, approved, awarded, notAwarded, awardedValue, conversionRate, statusCounts, rejected, conversionDetails, totalAwardedValue, totalCustomers } = useAdminStats();
+  const { selectedCompany: companyId, currentCompany, selectedCurrency, isSwitchingCompany } = useCompanyContext();
   const { isAdmin, user } = useUserRole();
   const { toasts, addToast, dismissToast } = useToast();
 
@@ -318,13 +320,13 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const searchTimer = useRef(null);
   const isMountedRef      = useRef(true);
   const loadingTimeoutRef = useRef(null);
-  const initialLoadTriggered = useRef(false);
 
   // ── Filters ───────────────────────────────────────────────
   const [filters, setFilters] = useState({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc' });
   const [searchInput, setSearchInput] = useState('');
 
   // ── Action state ──────────────────────────────────────────
+  const [approveModal, setApproveModal] = useState({ open: false, id: null, quotationNumber: '' });
   const [rejectModal, setRejectModal]   = useState({ open: false, id: null, reason: '' });
   const [deleteModal, setDeleteModal]   = useState({ open: false, id: null });
   const [actionLoadingIds, setActionLoadingIds] = useState({});
@@ -334,7 +336,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const statsLatchRef = useRef(false);
   const tableLatchRef = useRef(false);
 
-  const statsReady = totalQuotations != null && !statsLoading;
+  const statsReady = quotationsInitialized;
   const tableReady = quotationsInitialized && !quotationsLoading;
 
   if (statsReady) statsLatchRef.current = true;
@@ -350,7 +352,6 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       resetPagination();
       setFilters({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc' });
       setSearchInput('');
-      initialLoadTriggered.current = false;
     }
   }, [selectedCompany, resetPagination]);
 
@@ -367,28 +368,31 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     // quotationCounts from the list API reflects the active filter/search — most accurate.
     if (quotationCounts && Object.keys(quotationCounts).length > 0) return {
       all:          quotationCounts.all          ?? 0,
+      pending:      quotationCounts.pending      ?? 0,
       ops_approved: quotationCounts.ops_approved ?? 0,
+      ops_rejected: quotationCounts.ops_rejected ?? 0,
       approved:     quotationCounts.approved     ?? 0,
       awarded:      quotationCounts.awarded      ?? 0,
       rejected:     quotationCounts.rejected     ?? 0,
+      not_awarded:  quotationCounts.not_awarded  ?? 0,
+      cancelled:    quotationCounts.cancelled    ?? 0,
+      amended:      quotationCounts.amended      ?? 0,
     };
     return {
       all:          statusCounts?.total        || totalQuotations || 0,
+      pending:      statusCounts?.pending      || 0,
       ops_approved: statusCounts?.ops_approved || actionRequired  || 0,
+      ops_rejected: statusCounts?.ops_rejected || 0,
       approved:     statusCounts?.approved     || approved        || 0,
       awarded:      statusCounts?.awarded      || awarded         || 0,
       rejected:     statusCounts?.rejected     || rejected        || 0,
+      not_awarded:  statusCounts?.not_awarded  || notAwarded      || 0,
+      cancelled:    statusCounts?.cancelled    || 0,
+      amended:      statusCounts?.amended      || 0,
     };
-  }, [quotationCounts, statusCounts, totalQuotations, actionRequired, approved, awarded, rejected]);
+  }, [quotationCounts, statusCounts, totalQuotations, actionRequired, approved, awarded, rejected, notAwarded]);
 
   // ── Effects ───────────────────────────────────────────────
-  useEffect(() => {
-    if (hasCompany && initialized && !initialLoadTriggered.current && !isSwitchingCompany) {
-      initialLoadTriggered.current = true;
-      refreshCompanyQuotations({ page: 1, limit: currentLimit, status: filters.status, sortBy: filters.sortBy, sortDir: filters.sortDir, search: filters.search });
-    }
-  }, [hasCompany, initialized, isSwitchingCompany, refreshCompanyQuotations, currentLimit, filters]);
-
   useEffect(() => { changeLimit(isMobile ? 10 : 20); }, [isMobile, changeLimit]);
   useEffect(() => { if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' })); }, [isMobile, isTablet]);
   useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false; if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current); if (searchTimer.current) clearTimeout(searchTimer.current); }; }, []);
@@ -478,14 +482,20 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     finally { clearInterval(t); setIsExporting(false); }
   }, [selectedCompany, activeTab, filters.search, exportFilters, addToast]);
 
-  const handleApprove = useCallback(async (id) => {
-    setActionLoading(id, 'approve', true);
-    try {
-      const result = await approveQuotation(id);
-      if (result?.success) { addToast('Quotation approved', 'success'); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit, forceRefresh: true }), refreshStats()]); }
-      else addToast(result?.error || 'Failed to approve', 'error');
-    } finally { setActionLoading(id, 'approve', false); }
-  }, [approveQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit]);
+  const handleApprove = {
+    open:    useCallback((id, quotationNumber) => setApproveModal({ open: true, id, quotationNumber }), []),
+    close:   useCallback(() => setApproveModal({ open: false, id: null, quotationNumber: '' }), []),
+    confirm: useCallback(async () => {
+      const id = approveModal.id;
+      if (!id) return;
+      setActionLoading(id, 'approve', true);
+      try {
+        const result = await approveQuotation(id);
+        if (result?.success) { addToast('Quotation approved', 'success'); setApproveModal({ open: false, id: null, quotationNumber: '' }); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit, forceRefresh: true }), refreshStats()]); }
+        else addToast(result?.error || 'Failed to approve', 'error');
+      } finally { setActionLoading(id, 'approve', false); }
+    }, [approveModal, approveQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit]),
+  };
 
   const handleReject = {
     open:    useCallback((id) => setRejectModal({ open: true, id, reason: '' }), []),
@@ -541,11 +551,16 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
 
   // ── Tabs ──────────────────────────────────────────────────
   const TABS = useMemo(() => [
-    { key: 'all',          label: 'All',             Icon: FileText,    count: tabCounts.all },
-    { key: 'ops_approved', label: 'Action Required', Icon: Clock,       count: tabCounts.ops_approved },
-    { key: 'approved',     label: 'Approved',        Icon: CheckCircle, count: tabCounts.approved },
-    { key: 'awarded',      label: 'Awarded',         Icon: Award,       count: tabCounts.awarded },
-    { key: 'rejected',     label: 'Rejected',        Icon: XCircle,     count: tabCounts.rejected },
+    { key: 'all',          label: 'All',             Icon: FileText,     count: tabCounts.all },
+    { key: 'pending',      label: 'Pending',         Icon: Clock,        count: tabCounts.pending },
+    { key: 'ops_approved', label: 'Action Required', Icon: Shield,       count: tabCounts.ops_approved },
+    { key: 'ops_rejected', label: 'Returned',        Icon: Ban,          count: tabCounts.ops_rejected },
+    { key: 'approved',     label: 'Approved',        Icon: CheckCircle,  count: tabCounts.approved },
+    { key: 'awarded',      label: 'Awarded',         Icon: Award,        count: tabCounts.awarded },
+    { key: 'rejected',     label: 'Rejected',        Icon: XCircle,      count: tabCounts.rejected },
+    { key: 'not_awarded',  label: 'Not Awarded',     Icon: TrendingDown, count: tabCounts.not_awarded },
+    { key: 'cancelled',    label: 'Cancelled',        Icon: XCircle,      count: tabCounts.cancelled },
+    // "Amended" tab hidden for now — amend feature is disabled.
   ], [tabCounts]);
 
   // ── Header button helper ──────────────────────────────────
@@ -578,6 +593,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
         <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: '0.8rem' }}>{q.quotationNumber || '—'}</span>
+            {q.revisedFrom && <span style={{ fontSize: '0.6rem', fontWeight: 700, color: '#6d28d9', background: '#f5f3ff', padding: '1px 6px', borderRadius: 999, border: '1px solid #c4b5fd' }}>Rev</span>}
             {expired  && <ExpiryBadge type="expired" />}
             {expiring && <ExpiryBadge type="expiring" />}
           </div>
@@ -626,7 +642,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             {canAct && (
               <>
-                <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove(q._id)} icon={Check} label="Approve" title="Approve" size="small" disabled={isActionLoading(q._id, 'approve')} />
+                <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove.open(q._id, q.quotationNumber)} icon={Check} label="Approve" title="Approve" size="small" disabled={isActionLoading(q._id, 'approve')} />
                 <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleReject.open(q._id)} icon={X} label="Reject" title="Reject" size="small" disabled={isActionLoading(q._id, 'reject')} />
               </>
             )}
@@ -655,6 +671,16 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* Modals */}
+      <ConfirmModal
+        open={approveModal.open}
+        title="Approve Quotation"
+        message={`Approve ${approveModal.quotationNumber ? `quotation ${approveModal.quotationNumber}` : 'this quotation'}? This confirms it for the next stage of the workflow.`}
+        confirmLabel="Approve"
+        icon={CheckCircle}
+        onConfirm={handleApprove.confirm}
+        onCancel={handleApprove.close}
+        loading={isActionLoading(approveModal.id, 'approve')}
+      />
       <ConfirmModal open={rejectModal.open} title="Reject Quotation" message="Provide a reason for rejecting this quotation." confirmLabel="Reject" danger onConfirm={handleReject.confirm} onCancel={handleReject.close} loading={false}>
         <textarea value={rejectModal.reason} onChange={(e) => setRejectModal(p => ({ ...p, reason: e.target.value }))} rows={4} placeholder="Enter rejection reason…" autoFocus style={{ width: '100%', padding: '0.75rem', border: `1.5px solid ${T.line}`, borderRadius: T.radiusSm, fontSize: '0.875rem', fontFamily: FONT_STACK, marginBottom: '0.5rem', resize: 'vertical', outline: 'none', color: T.ink }} />
       </ConfirmModal>
@@ -718,7 +744,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           <button onClick={() => onNavigate?.('addQuotation')} style={headerBtn('green')}><FileText size={isMobile ? 12 : 14} /> {isMobile ? 'New' : 'New Quotation'}</button>
           <button onClick={() => onNavigate?.('userStats')} style={headerBtn('soft')}><TrendingUp size={isMobile ? 12 : 14} /> {!isMobile && 'User Stats'}</button>
           <button onClick={() => onNavigate?.('users')} style={headerBtn('soft')}><Users size={isMobile ? 12 : 14} /> {!isMobile && 'Users'}</button>
-          {/* <button onClick={() => onNavigate?.('companies')} style={headerBtn('soft')}><Building2 size={isMobile ? 12 : 14} /> {!isMobile && 'Companies'}</button> */}
+          <button onClick={() => onNavigate?.('companies')} style={headerBtn('soft')}><Building2 size={isMobile ? 12 : 14} /> {!isMobile && 'Companies'}</button>
           <button onClick={handleLogout} style={headerBtn('ghost')}><LogOut size={isMobile ? 12 : 15} /> {!isMobile && 'Logout'}</button>
         </div>
       </div>
@@ -843,7 +869,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                   {(isMobile || uiState.viewMode === 'card') ? (
                     <div style={{ padding: isMobile ? '1rem' : '1.5rem', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2,1fr)', gap: isMobile ? '0.75rem' : '1rem' }}>
                       {safeQ.map((q) => (
-                        <AdminQuotationCard key={q._id} quotation={q} selectedCurrency={selectedCurrency} onView={handleView} onApprove={handleApprove} onReject={handleReject.open} onDownload={handleDownload} onDelete={handleDelete.open} onAward={handleAward.open} isExporting={exportingId === q._id} isApproving={isActionLoading(q._id, 'approve')} isRejecting={isActionLoading(q._id, 'reject')} isAwarding={isActionLoading(q._id, 'award')} />
+                        <AdminQuotationCard key={q._id} quotation={q} selectedCurrency={selectedCurrency} onView={handleView} onApprove={handleApprove.open} onReject={handleReject.open} onDownload={handleDownload} onDelete={handleDelete.open} onAward={handleAward.open} isExporting={exportingId === q._id} isApproving={isActionLoading(q._id, 'approve')} isRejecting={isActionLoading(q._id, 'reject')} isAwarding={isActionLoading(q._id, 'award')} />
                       ))}
                     </div>
                   ) : (

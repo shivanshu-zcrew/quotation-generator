@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Plus, Trash2, Upload, FileText, Download, Search, AlertCircle, ChevronDown, ChevronUp, X, Loader2 } from 'lucide-react';
 import headerImage from '../assets/header.png';
 import TermsEditor, { TermsViewer } from './TermsCondition';
+import { CommentableText, CommentBadge } from './ReviewComments';
 import ValidatedInput from './ValidatedInput';
 import Snackbar from './Snackbar';
+import PhoneInput from './PhoneInput';
 import { useCompanyCurrency } from './CompanyCurrencySelector';
 import MobileQuotationLayout from './MobileQuotationLayout';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
@@ -35,8 +37,8 @@ const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
 const LEFT_FIELDS = [
   { label: 'Project Name', field: 'projectName', type: 'text', required: true },
   { label: 'Scope of Work', field: 'scopeOfWork', type: 'textarea', required: false },
-  { label: 'Company Name', field: 'customer', type: 'text', required: true },  // This is the company name
-  { label: 'Name', field: 'customerName', type: 'text', required: true },  // Contact person name
+  { label: 'Company Name', field: 'customer', type: 'text', required: true },  // Client's company name
+  { label: 'Name', field: 'customerName', type: 'text', required: false },  // Manually entered contact person
   { label: 'Phone', field: 'customerPhone', type: 'text', required: true },  // Contact phone
   { label: 'Email', field: 'customerEmail', type: 'email', required: true },  // Contact email
   { label: 'Designation', field: 'customerDesignation', type: 'text', required: false },
@@ -45,6 +47,7 @@ const LEFT_FIELDS = [
 ];
 
 const RIGHT_FIELDS = [
+  { label: 'Company Name', field: 'companyName', type: 'text', required: false },  // Our own selected company
   { label: 'Name', field: 'ourFocalPoint', type: 'text', required: true },  // Focal point name
   { label: 'Phone', field: 'ourContact', type: 'text', required: false },  // Changed from companyPhone to ourContact
   { label: 'Email', field: 'salesManagerEmail', type: 'email', required: false },  // Changed from companyEmail to salesManagerEmail
@@ -53,6 +56,7 @@ const RIGHT_FIELDS = [
   { label: 'Tax Registration Number', field: 'companyTaxRegistration', type: 'text', required: false },
   { label: 'Date', field: 'date', type: 'date', required: true },
   { label: 'Expiry Date', field: 'expiryDate', type: 'date', required: true },
+  { label: 'Payment Terms', field: 'paymentTerms', type: 'text', required: false },
 ];
 // ============================================================
 // STYLES
@@ -870,12 +874,29 @@ export default function QuotationLayout({
   amountInWords = '', tcSections, onTcChange, actionBar, headerErrors = {},
   fieldErrors = {}, setHeaderErrors, documents = [], onDocumentUpload, onDocumentDelete,
   onDocumentDownload, onDocumentPreview, documentLoading = false, formatFileSize, getFileIcon,
-  companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai', 
+  companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai',
+  customerContactPersons = [],
   termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
-  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = ''
+  companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = '',
+  commentsByTarget = {}, canAddComments = false, canManageComments = false, canDeleteComment,
+  onAddComment, onResolveComment, onDeleteComment,
 }) {
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
+
+  // Review-comment props shared by CommentableText/CommentBadge instances,
+  // keyed by target so callers just spread `commentsFor('item', qi.id)`.
+  const commentsFor = (targetType, targetKey) => ({
+    targetType,
+    targetKey: String(targetKey),
+    comments: commentsByTarget[`${targetType}:${targetKey}`] || [],
+    canAdd: canAddComments,
+    onAdd: onAddComment,
+    canManage: canManageComments,
+    onResolve: onResolveComment,
+    canDeleteComment,
+    onDelete: onDeleteComment,
+  });
   
   // ✅ Store original company values in state (these never change during edit)
   const [originalCompanyTradeLicense, setOriginalCompanyTradeLicense] = useState(companyTradeLicense);
@@ -909,11 +930,11 @@ export default function QuotationLayout({
   const getTaxPresets = useCallback(() => {
     if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') return [];
     if (customerTaxTreatment === 'vat_registered') {
-      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }];
+      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }, { value: "15", label: "15%" }];
       if (isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (Export - Zero-rated)" }];
     }
     if (customerTaxTreatment === 'gcc_vat_registered') {
-      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }];
+      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }, { value: "15", label: "15%" }];
       if (isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (GCC Domestic)" }];
     }
     return [];
@@ -938,11 +959,12 @@ export default function QuotationLayout({
   // ✅ This function determines if a field should be read-only
   const isFieldReadOnly = useCallback((field) => {
     const isDateField = field === 'date' || field === 'expiryDate';
-    const isCustomerField = field === 'customer' || field === 'customerName';
+    const isCustomerField = field === 'customer';
+    const isCompanyNameField = field === 'companyName';
     const isCompanyTradeTaxField = field === 'companyTradeLicense' || field === 'companyTaxRegistration';
     const isCustomerTradeTaxField = field === 'customerTradeLicenseNumber' || field === 'customerTaxRegistrationNumber';
-    
-    if (isDateField || isCustomerField) return true;
+
+    if (isDateField || isCustomerField || isCompanyNameField) return true;
     
     // ✅ For company fields: check ORIGINAL database value
     if (isCompanyTradeTaxField) {
@@ -974,6 +996,9 @@ export default function QuotationLayout({
         let errorMessage = headerErrors[field];
         
         // Special handling for specific fields
+        if (field === 'companyName') {
+          fieldValue = companyName;
+        }
         if (field === 'companyTradeLicense') {
           fieldValue = quotationData.tl !== undefined ? quotationData.tl : companyTradeLicense;
         }
@@ -988,8 +1013,10 @@ export default function QuotationLayout({
         }
         
         const readOnly = isFieldReadOnly(field);
-        const isPhoneField = field === 'customerPhone' || field === 'ourContact' || field === 'companyPhone';
-        
+        const isCustomerPhoneField = field === 'customerPhone';
+        const isPhoneField = field === 'ourContact' || field === 'companyPhone';
+        const isContactNameField = field === 'customerName';
+
         const handlePhoneChange = (e) => {
           const value = e.target.value;
           let cleanedValue = value.replace(/[a-zA-Z]/g, '');
@@ -1000,7 +1027,15 @@ export default function QuotationLayout({
           }
           handleFieldChange(field, cleanedValue);
         };
-        
+
+        const handleContactPersonSelect = (contact) => {
+          if (!contact) return;
+          handleFieldChange('customerName', `${contact.firstName || ''} ${contact.lastName || ''}`.trim());
+          if (contact.email) handleFieldChange('customerEmail', contact.email);
+          const matchedPhone = contact.workPhone || contact.mobile;
+          if (matchedPhone) handleFieldChange('customerPhone', matchedPhone);
+        };
+
         return (
           <React.Fragment key={field}>
             <span style={required ? styles.fieldLabelRequired : styles.fieldLabel}>
@@ -1020,6 +1055,13 @@ export default function QuotationLayout({
                       borderColor: errorMessage ? '#dc2626' : undefined,
                       backgroundColor: errorMessage ? '#fef2f2' : undefined
                     }}
+                  />
+                ) : isCustomerPhoneField ? (
+                  <PhoneInput
+                    value={fieldValue || ''}
+                    onChange={(newValue) => handleFieldChange(field, newValue)}
+                    placeholder="50 123 4567"
+                    isMobile={false}
                   />
                 ) : isPhoneField ? (
                   <input
@@ -1041,6 +1083,42 @@ export default function QuotationLayout({
                       backgroundColor: errorMessage ? '#fef2f2' : undefined
                     }}
                   />
+                ) : isContactNameField ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {customerContactPersons.filter(cp => cp.firstName?.trim()).length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const selectedIdx = e.target.value;
+                          if (selectedIdx === '') return;
+                          handleContactPersonSelect(customerContactPersons[Number(selectedIdx)]);
+                        }}
+                        style={{ ...inputStyle, color: '#6b7280' }}
+                      >
+                        <option value="">+ Add contact manually, or pick existing below</option>
+                        {customerContactPersons
+                          .map((cp, idx) => ({ cp, idx }))
+                          .filter(({ cp }) => cp.firstName?.trim())
+                          .map(({ cp, idx }) => (
+                            <option key={cp._id || idx} value={idx}>
+                              {cp.firstName} {cp.lastName || ''}{cp.isPrimaryContact ? ' (Primary)' : ''}
+                            </option>
+                          ))}
+                      </select>
+                    )}
+                    <input
+                      type="text"
+                      className="edit-input"
+                      value={fieldValue || ''}
+                      onChange={(e) => handleFieldChange('customerName', e.target.value)}
+                      placeholder="Contact person name"
+                      style={{
+                        ...inputStyle,
+                        borderColor: errorMessage ? '#dc2626' : undefined,
+                        backgroundColor: errorMessage ? '#fef2f2' : undefined
+                      }}
+                    />
+                  </div>
                 ) : (
                   <input
                     type={type}
@@ -1069,7 +1147,15 @@ export default function QuotationLayout({
                     <AlertCircle size={12} /> {errorMessage}
                   </div>
                 )}
+                {type !== 'date' && <CommentBadge {...commentsFor('header', field)} />}
               </div>
+            ) : type !== 'date' && fieldValue ? (
+              <CommentableText
+                {...commentsFor('header', field)}
+                text={String(fieldValue)}
+                as="span"
+                textStyle={styles.fieldValue}
+              />
             ) : (
               <span style={styles.fieldValue}>
                 {type === 'date' ? fmtDate(fieldValue) : (fieldValue || 'N/A')}
@@ -1138,16 +1224,19 @@ export default function QuotationLayout({
       <td style={styles.tableCellCenter}>{index + 1}</td>
       <td style={styles.tableCellDescription}>
         {isEditing ? (
-          <textarea
-            className="edit-input"
-            value={qi.description || ''}
-            onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
-            placeholder="Item description (optional)…"
-            rows={2}
-            style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
-          />
+          <>
+            <textarea
+              className="edit-input"
+              value={qi.description || ''}
+              onChange={(e) => onUpdateItem(qi.id, 'description', e.target.value)}
+              placeholder="Item description (optional)…"
+              rows={2}
+              style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
+            />
+            <CommentBadge {...commentsFor('item', qi.id)} />
+          </>
         ) : (
-          qi.description && <div style={styles.itemDescription}>{qi.description}</div>
+          <CommentableText {...commentsFor('item', qi.id)} text={qi.description} textStyle={styles.itemDescription} />
         )}
         {renderItemImages(qi)}
         {renderNewImages(qi)}
@@ -1219,7 +1308,7 @@ export default function QuotationLayout({
         return;
       }
     }
-    if (field === 'quantity') value = parseInt(value, 10);
+    if (field === 'quantity') value = parseFloat(value);
     if (field === 'unitPrice') value = parseFloat(value) || 0;
     onUpdateItem(itemId, field, value);
   };
@@ -1276,6 +1365,7 @@ export default function QuotationLayout({
       companyName={companyName}
       customerTaxTreatment={customerTaxTreatment}
       customerPlaceOfSupply={customerPlaceOfSupply}
+      customerContactPersons={customerContactPersons}
       showTaxSection={showTaxSection}
       showTaxRow={showTaxRow}
       taxPresets={taxPresets}
@@ -1289,6 +1379,13 @@ export default function QuotationLayout({
       companyTradeLicense={companyTradeLicense}
       companyTaxRegistration={companyTaxRegistration}
       selectedCurrency={displayCurrency}
+      commentsByTarget={commentsByTarget}
+      canAddComments={canAddComments}
+      canManageComments={canManageComments}
+      canDeleteComment={canDeleteComment}
+      onAddComment={onAddComment}
+      onResolveComment={onResolveComment}
+      onDeleteComment={onDeleteComment}
     />;
   }
 
@@ -1433,17 +1530,19 @@ export default function QuotationLayout({
       <div style={{ marginBottom: '2rem' }}>
         <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
         {isEditing ? (
-          <TermsEditor 
-            sections={tcSections} 
+          <TermsEditor
+            sections={tcSections}
             onChange={onTcChange}
             termsImages={termsImages}
             onTermsImagesUpload={onTermsImagesUpload}
             onRemoveTermsImage={onRemoveTermsImage}
+            commentProps={commentsFor('terms', 'terms')}
           />
         ) : (
-          <TermsViewer 
-            sections={tcSections} 
+          <TermsViewer
+            sections={tcSections}
             termsImages={termsImages}
+            commentProps={commentsFor('terms', 'terms')}
           />
         )}
       </div>

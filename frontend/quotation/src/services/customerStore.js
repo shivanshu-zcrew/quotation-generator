@@ -85,6 +85,26 @@ const useCustomerStore = create((set, get) => ({
     }
   },
 
+  // Patches a single customer's contactPersons in-place across every cached
+  // spot (list, search results, id-cache) without forcing a full refetch —
+  // used right after a quotation adds/updates a contact on this customer,
+  // so the next "create quotation" customer picker (which otherwise trusts
+  // its own 5-minute cache) sees it immediately instead of only after reload.
+  updateCustomerContactPersons: (customerId, contactPersons) => {
+    if (!customerId || !contactPersons) return;
+    set(state => {
+      const patch = (c) => (c._id === customerId ? { ...c, contactPersons } : c);
+      const newCache = new Map(state.customersCache);
+      const existing = newCache.get(customerId);
+      if (existing) newCache.set(customerId, { ...existing, contactPersons });
+      return {
+        customers: state.customers.map(patch),
+        searchResults: state.searchResults.map(patch),
+        customersCache: newCache,
+      };
+    });
+  },
+
   // Search customers
  searchCustomers: async (searchTerm, companyId) => {
   const trimmed = searchTerm?.trim();

@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { Download, Edit2, Save, X, ArrowLeft, LayoutDashboard, Loader, AlertCircle, AlertTriangle, CheckCircle, XCircle, LogIn } from "lucide-react";
+import { Download, Edit2, Save, X, ArrowLeft, LayoutDashboard, Loader, AlertCircle, AlertTriangle, CheckCircle, XCircle, LogIn, FilePlus, Info } from "lucide-react";
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuotation } from '../hooks/useQuotation';
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
-import { btnStyle, getFileIcon } from '../utils/quotationUtils';
+import ConfirmModal from '../components/ConfirmModal';
+import { btnStyle, outlineBtnStyle, outlineBtnHoverStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
 import { useAppStore } from '../services/store';
-import { getHomePath } from '../services/api';
+import { getHomePath, quotationAPI } from '../services/api';
 import LoadingOverlay from '../components/LoadingOverlay';
 
 // ============================================================
@@ -219,7 +220,7 @@ const ReviewBanner = ({
             <XCircle size={15} />
             {rejectLabel}
           </button>
-          {onGoToDashboard && (
+          {/* {onGoToDashboard && (
             <button
               onClick={onGoToDashboard}
               style={{
@@ -232,7 +233,7 @@ const ReviewBanner = ({
             >
               <LayoutDashboard size={14} /> Dashboard
             </button>
-          )}
+          )} */}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -412,14 +413,16 @@ export default function ViewQuotationScreen() {
   const {
     isEditing, setIsEditing, isSaving, isExporting, editingImgId, setEditingImgId,
     loading, fetchError, newImages, quotationData, quotationItems, tcSections, setTcSections,
-    internalDocuments, newDocuments, snackbar, setSnackbar, fieldErrors, originalQuotation,
+    internalDocuments, newDocuments, reviewComments, handleAddComment, handleResolveComment, handleDeleteComment,
+    snackbar, setSnackbar, fieldErrors, originalQuotation,
     subtotal, taxAmount, discountAmount, grandTotal, amountInWords, items, previewDoc, setPreviewDoc,
     handleDocumentPreview, handleDataChange, addItem, removeItem, updateItem, handleImageUpload,
     removeNewImage, removeExistingImage, handleDocumentUpload, handleDocumentDelete, handleDocumentDownload,
     cancelEdit, handleSave, handleBack, generatePDF,
     termsImages, handleTermsImagesUpload, removeTermsImage,
-    customerTaxTreatment, 
-    customerPlaceOfSupply   
+    customerTaxTreatment,
+    customerPlaceOfSupply,
+    customerContactPersons
   } = useQuotation();
 
   // Local state
@@ -433,6 +436,11 @@ export default function ViewQuotationScreen() {
   const [isRejecting, setIsRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  const [approveConfirm, setApproveConfirm] = useState({ open: false, kind: null });
+
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // Router hooks for wrong-account detection
   const [searchParams] = useSearchParams();
@@ -510,13 +518,146 @@ export default function ViewQuotationScreen() {
     }, delayMs);
   }, []);
   
-  // Check if edit button should be shown
+  // 'cancelled' now only ever means the revise path (an approved quotation
+  // being retired for a brand-new replacement document); 'amended' means
+  // the amend path (a pre-approval quotation paused for an in-place edit) —
+  // see cancelQuotation's status branching on the backend.
+  const isCancelled = originalQuotation?.status === 'cancelled';
+  const isAmended = originalQuotation?.status === 'amended';
+  const isFinalised = ['awarded', 'not_awarded'].includes(originalQuotation?.status);
+  const isRevisePath = isCancelled;
+
+  // Whether this cancelled quotation already has an active (non-cancelled)
+  // revision — if so, "Edit & Revise" must be blocked (the backend rejects
+  // it anyway) since only one active revision is allowed at a time. The
+  // quotation object already carries `activeRevision` when freshly fetched
+  // via getQuotation; when it came from a list cache instead, fetch it
+  // explicitly so this check works regardless of navigation path.
+  const [activeRevisionCheck, setActiveRevisionCheck] = useState({ checked: false, revision: null });
+
+  useEffect(() => {
+    if (!isRevisePath || !originalQuotation?._id) {
+      setActiveRevisionCheck({ checked: false, revision: null });
+      return;
+    }
+    if (originalQuotation.activeRevision !== undefined) {
+      setActiveRevisionCheck({ checked: true, revision: originalQuotation.activeRevision });
+      return;
+    }
+    let cancelled = false;
+    quotationAPI.getById(originalQuotation._id)
+      .then((res) => { if (!cancelled) setActiveRevisionCheck({ checked: true, revision: res.data?.activeRevision || null }); })
+      .catch(() => { if (!cancelled) setActiveRevisionCheck({ checked: true, revision: null }); });
+    return () => { cancelled = true; };
+  }, [isRevisePath, originalQuotation?._id, originalQuotation?.activeRevision]);
+
+  // ── Review comments (highlight-and-comment annotations) ──────────────────
+  // Same condition that gates the ReviewBanner: only the reviewer whose turn
+  // it is to act can add new annotations.
+  const canAddComments = useMemo(() => {
+    const role = user?.role;
+    const status = originalQuotation?.status;
+    return (role === 'ops_manager' && status === 'pending')
+      || (role === 'admin' && (status === 'ops_approved' || status === 'pending_admin'));
+  }, [user?.role, originalQuotation?.status]);
+
+  const isCreatorViewer = useMemo(() => {
+    const creatorId = originalQuotation?.createdBy?._id || originalQuotation?.createdBy;
+    return !!(creatorId && user?._id && String(creatorId) === String(user._id));
+  }, [originalQuotation?.createdBy, user?._id]);
+
+  const canManageComments = isCreatorViewer || user?.role === 'admin';
+
+  const canDeleteComment = useCallback((comment) => {
+    return user?.role === 'admin' || !!(comment?.createdBy && String(comment.createdBy) === String(user?._id));
+  }, [user?.role, user?._id]);
+
+  const commentsByTarget = useMemo(() => {
+    const map = {};
+    (reviewComments || []).forEach((c) => {
+      const key = `${c.targetType}:${c.targetKey}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(c);
+    });
+    return map;
+  }, [reviewComments]);
+
+  // Edit is available for pre-approval statuses AND for cancelled/amended quotations (revision/amendment path)
   const canEdit = useCallback(() => {
     if (isEditing) return false;
+    if (isFinalised) return false;
     if (isApproved) return false;
-    if (originalQuotation?.status === 'not_awarded') return false;
+    // All three roles can edit a cancelled (revise) or amended quotation
+    if (isCancelled || isAmended) return true;
+    // Once a reviewer rejects/returns a quotation, only the creator (or admin)
+    // may revise it — the reviewer's job is done until the creator resubmits.
+    const status = originalQuotation?.status;
+    if ((status === 'rejected' || status === 'ops_rejected') && !isCreatorViewer && user?.role !== 'admin') {
+      return false;
+    }
+    // Once ops has forwarded to admin, only admin may edit — matches the
+    // backend's editableStatuses gate (quotationController.js updateQuotation),
+    // which 400s a creator/ops_manager save attempt on 'ops_approved'. Without
+    // this check the Edit button renders for everyone but fails for them on save.
+    if (status === 'ops_approved' && user?.role !== 'admin') {
+      return false;
+    }
     return true;
-  }, [isEditing, isApproved, originalQuotation?.status]);
+  }, [isEditing, isApproved, isCancelled, isAmended, isFinalised, originalQuotation?.status, isCreatorViewer, user?.role]);
+
+  // Cancel: admin can cancel an approved quotation (revise path).
+  // The "Amend" path (cancelling a pre-approval quotation) is hidden for now.
+  const canCancel = !isEditing && !isCancelled && !isAmended && !isFinalised &&
+    isApproved && user?.role === 'admin';
+
+  // Duplicate: only once a quotation has reached a final outcome
+  // (approved / awarded / not awarded) — earlier-stage statuses (pending,
+  // ops_approved, rejected, ops_rejected, pending_admin, cancelled) are
+  // still live and should be edited/resubmitted, not duplicated.
+  const canDuplicate = !isEditing && (originalQuotation?.status === 'approved' || isFinalised);
+
+  // Handle cancel — calls API, stays on page with updated status
+  const handleCancel = useCallback(async () => {
+    if (!originalQuotation?._id) return;
+    setIsCancelling(true);
+    try {
+      const res = await quotationAPI.cancel(originalQuotation._id, { cancelReason });
+      if (res.data?.success) {
+        setShowCancelModal(false);
+        setCancelReason('');
+        setSnackbar({ message: 'Quotation cancelled', type: 'success' });
+        // Reload page so updated status is shown
+        setTimeout(() => window.location.reload(), 900);
+      } else {
+        setSnackbar({ message: res.data?.message || 'Failed to cancel', type: 'error' });
+      }
+    } catch (err) {
+      setSnackbar({ message: err?.response?.data?.message || 'Failed to cancel', type: 'error' });
+    } finally {
+      setIsCancelling(false);
+    }
+  }, [originalQuotation, cancelReason, setSnackbar]);
+
+  // Handle duplicate — navigate to new quotation form pre-filled with this quotation's data
+  const handleDuplicate = useCallback(() => {
+    if (!originalQuotation) return;
+    navigate('/quotation/new', {
+      state: {
+        prefillFrom: {
+          ...originalQuotation,
+          // No revisedFrom — this is a fresh quotation, not a revision
+          revisedFrom: undefined,
+          revisionNote: undefined,
+          revisionNumber: undefined,
+          isRevision: undefined,
+          isAmendment: undefined,
+          duplicatedFrom: originalQuotation._id,
+          quotationNumber: '',   // user will enter a new one
+          date: new Date().toISOString(),
+        }
+      }
+    });
+  }, [originalQuotation, navigate]);
   
   const getStatusText = useCallback(() => {
     const status = originalQuotation?.status;
@@ -528,11 +669,47 @@ export default function ViewQuotationScreen() {
       'pending_admin': 'Pending Admin',
       'ops_rejected': 'Returned',
       'ops_approved': 'In Review',
-      'not_awarded' : 'Not Awarded'
+      'not_awarded': 'Not Awarded',
+      'cancelled': 'Cancelled',
+      'amended': 'Amended',
     };
     return statusMap[status] || status || 'Draft';
   }, [originalQuotation?.status]);
-  
+
+  // Plain-language "what's happening / what's next" explanation of the
+  // approval workflow, shown to everyone regardless of role — the
+  // ReviewBanner below already tells the *current reviewer* that action is
+  // required, but a creator (or anyone else) just watching a quotation move
+  // through the pipeline previously had no explanation of where it stood.
+  const getProcessMessage = useCallback(() => {
+    switch (originalQuotation?.status) {
+      case 'draft':
+        return <>This quotation is a <strong>draft</strong> and hasn't been submitted yet.</>;
+      case 'pending':
+        return <>Submitted — waiting for <strong>Ops Manager</strong> review. Once approved, it moves to the <strong>Admin</strong> for final approval.</>;
+      case 'pending_admin':
+        return <>Submitted directly for admin review (no Ops Manager step) — waiting for <strong>Admin</strong> final approval.</>;
+      case 'ops_approved':
+        return <>Approved by the <strong>Ops Manager</strong> and forwarded — waiting for <strong>Admin</strong> final approval.</>;
+      case 'ops_rejected':
+        return <>Returned by the <strong>Ops Manager</strong> for changes. Edit and resubmit to send it back for review.</>;
+      case 'rejected':
+        return <>Rejected by the <strong>Admin</strong>. Edit and resubmit to send it back for review.</>;
+      case 'approved':
+        return <>Approved — ready to share with the client. Once they respond, mark it as <strong>Awarded</strong> or <strong>Not Awarded</strong>.</>;
+      case 'awarded':
+        return <>The client accepted this quotation — marked <strong>Awarded</strong>. No further action needed.</>;
+      case 'not_awarded':
+        return <>The client didn't proceed with this quotation — marked <strong>Not Awarded</strong>. No further action needed.</>;
+      case 'cancelled':
+        return <>Cancelled to make way for a new revision. Click <strong>Edit &amp; Revise</strong> to continue.</>;
+      case 'amended':
+        return <>Paused for editing. Click <strong>Edit &amp; Amend</strong> to update it and resubmit for review.</>;
+      default:
+        return null;
+    }
+  }, [originalQuotation?.status]);
+
   const handleSaveWithProgress = useCallback(async () => {
     setSaveProgress(10);
     setSaveStep('Validating data...');
@@ -611,6 +788,8 @@ export default function ViewQuotationScreen() {
         setSnackbar({ show: true, message: 'Quotation rejected.', type: 'success' });
         setShowRejectForm(false);
         setRejectReason('');
+        // Reload so the updated status/banner is shown (same pattern as handleCancel)
+        setTimeout(() => window.location.reload(), 900);
       }
     } catch (err) {
       setSnackbar({ show: true, message: err.message || 'Failed to reject quotation', type: 'error' });
@@ -652,6 +831,8 @@ export default function ViewQuotationScreen() {
         setSnackbar({ show: true, message: 'Quotation returned for revision.', type: 'success' });
         setShowRejectForm(false);
         setRejectReason('');
+        // Reload so the updated status/banner is shown (same pattern as handleCancel)
+        setTimeout(() => window.location.reload(), 900);
       }
     } catch (err) {
       setSnackbar({ show: true, message: err.message || 'Failed to return quotation', type: 'error' });
@@ -735,7 +916,9 @@ export default function ViewQuotationScreen() {
         const status = originalQuotation?.status;
         if (status === 'approved' || status === 'awarded') return '#d1fae5';
         if (status === 'rejected' || status === 'ops_rejected') return '#fee2e2';
-        if (status === 'not_awarded') return '#f1f5f9';  // ← Grey color
+        if (status === 'cancelled') return '#fce7f3';
+        if (status === 'amended') return '#ffedd5';
+        if (status === 'not_awarded') return '#f1f5f9';
         if (status === 'pending' || status === 'pending_admin') return '#fef3c7';
         return '#f1f5f9';
       })(),
@@ -743,7 +926,9 @@ export default function ViewQuotationScreen() {
         const status = originalQuotation?.status;
         if (status === 'approved' || status === 'awarded') return '#065f46';
         if (status === 'rejected' || status === 'ops_rejected') return '#991b1b';
-        if (status === 'not_awarded') return '#64748b';  // ← Dark grey text
+        if (status === 'cancelled') return '#9d174d';
+        if (status === 'amended') return '#9a3412';
+        if (status === 'not_awarded') return '#64748b';
         if (status === 'pending' || status === 'pending_admin') return '#92400e';
         return '#64748b';
       })()
@@ -789,60 +974,184 @@ export default function ViewQuotationScreen() {
           
           <div style={styles.headerActions}>
             {!isEditing && showEditButton && (
-              <button onClick={() => setIsEditing(true)} style={btnStyle("#f59e0b")}>
-                <Edit2 size={16} /> Edit
+              <button
+                disabled={isRevisePath && activeRevisionCheck.checked && !!activeRevisionCheck.revision}
+                title={isRevisePath && activeRevisionCheck.revision ? `Already revised as ${activeRevisionCheck.revision.quotationNumber} — cancel that revision first` : undefined}
+                onClick={() => {
+                  // Revision: cancelled (post-approval) → create a NEW document (preserve the original)
+                  if (isCancelled) {
+                    if (activeRevisionCheck.checked && activeRevisionCheck.revision) return;
+                    navigate('/quotation/new', {
+                      state: {
+                        prefillFrom: {
+                          ...originalQuotation,
+                          revisedFrom: originalQuotation._id,
+                          revisionNote: '',
+                          revisionNumber: undefined,
+                          isRevision: undefined,
+                          isAmendment: undefined,
+                          cancelledFromStatus: undefined,
+                          cancelledAt: undefined,
+                          cancelledBy: undefined,
+                          cancelReason: undefined,
+                          status: undefined,
+                        }
+                      }
+                    });
+                  } else {
+                    // Amendment or regular edit: in-place update
+                    setIsEditing(true);
+                  }
+                }}
+                style={{ ...btnStyle('#0f172a', isRevisePath && activeRevisionCheck.checked && !!activeRevisionCheck.revision), display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Edit2 size={15} />
+                {isCancelled ? 'Edit & Revise' : isAmended ? 'Edit & Amend' : 'Edit'}
               </button>
             )}
-            
+
             {isEditing && (
               <>
-                <button 
-                  onClick={handleSaveWithProgress} 
-                  disabled={isSaving} 
-                  style={{ ...btnStyle("#10b981", isSaving), display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                <button
+                  onClick={handleSaveWithProgress}
+                  disabled={isSaving}
+                  style={{ ...btnStyle('#10b981', isSaving), display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
-                  {isSaving ? <Loader size={16} style={styles.spinningIconSmall} /> : <Save size={16} />} 
-                  {isSaving ? "Saving…" : "Save Changes"}
+                  {isSaving ? <Loader size={15} style={styles.spinningIconSmall} /> : <Save size={15} />}
+                  {isSaving ? 'Saving…' : 'Save Changes'}
                 </button>
-                <button onClick={cancelEdit} style={btnStyle("#ef4444")}>
-                  <X size={16} /> Cancel
+                <button
+                  onClick={cancelEdit}
+                  style={{ ...outlineBtnStyle(), color: '#dc2626' }}
+                  onMouseEnter={(e) => Object.assign(e.currentTarget.style, outlineBtnHoverStyle)}
+                  onMouseLeave={(e) => Object.assign(e.currentTarget.style, { backgroundColor: '#fff', borderColor: '#d1d5db' })}
+                >
+                  <X size={15} /> Cancel
                 </button>
               </>
             )}
-            
+
+            {/* Cancel button (approved → revise path), admin only. The "Amend" path
+                (pre-approval quotations) is hidden for now — canCancel no longer
+                allows it, so this always renders as "Cancel Quotation". */}
+            {canCancel && (
+              <button
+                onClick={() => setShowCancelModal(true)}
+                style={{ ...btnStyle(isApproved ? '#dc2626' : '#c2410c'), display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                {isApproved ? <><XCircle size={15} /> Cancel Quotation</> : <><Edit2 size={15} /> Amend</>}
+              </button>
+            )}
+
+            {/* Duplicate button — clone to a fresh new quotation */}
+            {canDuplicate && (
+              <button
+                onClick={handleDuplicate}
+                style={outlineBtnStyle()}
+                onMouseEnter={(e) => Object.assign(e.currentTarget.style, outlineBtnHoverStyle)}
+                onMouseLeave={(e) => Object.assign(e.currentTarget.style, { backgroundColor: '#fff', borderColor: '#d1d5db' })}
+              >
+                <FilePlus size={15} /> Duplicate
+              </button>
+            )}
+
             {/* PDF Download with Dropdown */}
             <div style={{ position: 'relative' }}>
-              <button 
-                onClick={() => setShowPDFOptions(prev => !prev)} 
-                disabled={isExporting} 
-                style={{ 
-                  ...btnStyle("#0369a1", isExporting), 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem' 
-                }}
+              <button
+                onClick={() => setShowPDFOptions(prev => !prev)}
+                disabled={isExporting}
+                style={outlineBtnStyle(isExporting)}
+                onMouseEnter={(e) => !isExporting && Object.assign(e.currentTarget.style, outlineBtnHoverStyle)}
+                onMouseLeave={(e) => !isExporting && Object.assign(e.currentTarget.style, { backgroundColor: '#fff', borderColor: '#d1d5db' })}
               >
-                {isExporting ? <Loader size={16} style={styles.spinningIconSmall} /> : <Download size={16} />} 
+                {isExporting ? <Loader size={15} style={styles.spinningIconSmall} /> : <Download size={15} />}
                 {isExporting ? "Generating…" : "Download PDF"}
               </button>
-              
+
               {showPDFOptions && (
-                <PDFOptionsDropdown 
+                <PDFOptionsDropdown
                   onSelect={handlePDFOptionSelect}
                   onClose={() => setShowPDFOptions(false)}
                   isExporting={isExporting}
                 />
               )}
             </div>
-            
-            <button onClick={handleGoToDashboard} style={btnStyle("#6366f1")}>
-              <LayoutDashboard size={16} /> Dashboard
+
+            <button
+              onClick={handleGoToDashboard}
+              style={outlineBtnStyle()}
+              onMouseEnter={(e) => Object.assign(e.currentTarget.style, outlineBtnHoverStyle)}
+              onMouseLeave={(e) => Object.assign(e.currentTarget.style, { backgroundColor: '#fff', borderColor: '#d1d5db' })}
+            >
+              <LayoutDashboard size={15} /> Dashboard
             </button>
           </div>
         </div>
         
+        {/* Process status — plain-language explanation of where this quotation stands */}
+        {!isEditing && getProcessMessage() && (
+          <div style={{
+            margin: '0.75rem 0', padding: '0.75rem 1rem',
+            background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.6rem',
+            display: 'flex', alignItems: 'flex-start', gap: '0.65rem',
+          }}>
+            <Info size={16} color="#1d4ed8" style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ fontSize: '0.83rem', lineHeight: 1.5, color: '#1e3a8a' }}>
+              {getProcessMessage()}
+            </div>
+          </div>
+        )}
+
         {/* Rejection/Return Reason Banner */}
         <ReasonBanner quotation={originalQuotation} />
+
+        {/* Cancelled (revise path) / Amended (amend path) info banner */}
+        {(isCancelled || isAmended) && (
+          <div style={{
+            margin: '0.75rem 0', padding: '0.85rem 1.1rem',
+            background: isCancelled ? '#fdf2f8' : '#fff7ed',
+            border: `1px solid ${isCancelled ? '#f9a8d4' : '#fed7aa'}`,
+            borderRadius: '0.6rem',
+            display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
+          }}>
+            <XCircle size={18} color={isCancelled ? '#be185d' : '#c2410c'} style={{ flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: '0.85rem', lineHeight: 1.55 }}>
+              <span style={{ fontWeight: 700, color: isCancelled ? '#9d174d' : '#9a3412' }}>
+                {isCancelled ? 'Quotation Cancelled — Revision Path' : 'Quotation Amended — Awaiting Edit'}
+              </span>
+              {originalQuotation?.cancelledBySnapshot?.name && (
+                <span style={{ color: '#6b7280', marginLeft: 6 }}>
+                  by {originalQuotation.cancelledBySnapshot.name}
+                  {originalQuotation.cancelledAt && ` · ${new Date(originalQuotation.cancelledAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`}
+                </span>
+              )}
+              {originalQuotation?.cancelReason && (
+                <div style={{ color: isCancelled ? '#7f1d1d' : '#9a3412', marginTop: 3 }}>
+                  Reason: <em>{originalQuotation.cancelReason}</em>
+                </div>
+              )}
+              {isRevisePath && activeRevisionCheck.checked && activeRevisionCheck.revision ? (
+                <div style={{ color: '#7f1d1d', marginTop: 4, fontSize: '0.8rem' }}>
+                  Already revised as{' '}
+                  <a
+                    href={`/quotation/${activeRevisionCheck.revision._id}`}
+                    onClick={(e) => { e.preventDefault(); navigate(`/quotation/${activeRevisionCheck.revision._id}`); }}
+                    style={{ color: '#9d174d', fontWeight: 700, textDecoration: 'underline' }}
+                  >
+                    {activeRevisionCheck.revision.quotationNumber}
+                  </a>{' '}
+                  ({activeRevisionCheck.revision.status}). Cancel that revision first to create another one.
+                </div>
+              ) : (
+                <div style={{ color: '#6b7280', marginTop: 4, fontSize: '0.8rem' }}>
+                  {isCancelled
+                    ? 'Click "Edit & Revise" to update this quotation — it will receive a revision number (e.g. -R1) and restart the approval cycle.'
+                    : 'Click "Edit & Amend" to update this quotation — it will restart the approval cycle.'}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Wrong-account banner — shown when ?action=review but wrong role is logged in */}
         {isWrongAccount && (
@@ -867,7 +1176,7 @@ export default function ViewQuotationScreen() {
                 approveLabel="Approve & Forward to Admin"
                 rejectLabel="Return for Revision"
                 rejectPlaceholder="Reason for returning (required)…"
-                onApprove={handleOpsApprove}
+                onApprove={() => setApproveConfirm({ open: true, kind: 'ops' })}
                 onReject={handleOpsReject}
                 isApproving={isApproving}
                 isRejecting={isRejecting}
@@ -896,7 +1205,7 @@ export default function ViewQuotationScreen() {
                 approveLabel="Approve"
                 rejectLabel="Reject"
                 rejectPlaceholder="Reason for rejection (required)…"
-                onApprove={handleApprove}
+                onApprove={() => setApproveConfirm({ open: true, kind: 'admin' })}
                 onReject={handleReject}
                 isApproving={isApproving}
                 isRejecting={isRejecting}
@@ -917,6 +1226,26 @@ export default function ViewQuotationScreen() {
           }
           return null;
         })()}
+
+        <ConfirmModal
+          open={approveConfirm.open}
+          title="Approve Quotation"
+          message={
+            approveConfirm.kind === 'ops'
+              ? `Approve ${originalQuotation?.quotationNumber ? `quotation ${originalQuotation.quotationNumber}` : 'this quotation'} and forward it to Admin for final approval?`
+              : `Approve ${originalQuotation?.quotationNumber ? `quotation ${originalQuotation.quotationNumber}` : 'this quotation'}? This finalizes the approval.`
+          }
+          confirmLabel="Approve"
+          icon={CheckCircle}
+          loading={isApproving}
+          onConfirm={() => {
+            const kind = approveConfirm.kind;
+            setApproveConfirm({ open: false, kind: null });
+            if (kind === 'ops') handleOpsApprove();
+            else if (kind === 'admin') handleApprove();
+          }}
+          onCancel={() => setApproveConfirm({ open: false, kind: null })}
+        />
 
         {/* Edit Mode Banner */}
         {isEditing && (
@@ -950,6 +1279,13 @@ export default function ViewQuotationScreen() {
           tcSections={tcSections}
           onTcChange={setTcSections}
           fieldErrors={fieldErrors}
+          commentsByTarget={commentsByTarget}
+          canAddComments={canAddComments}
+          canManageComments={canManageComments}
+          canDeleteComment={canDeleteComment}
+          onAddComment={handleAddComment}
+          onResolveComment={handleResolveComment}
+          onDeleteComment={handleDeleteComment}
           actionBar={null}
           documents={allDocuments}
           onDocumentUpload={handleDocumentUpload}
@@ -964,6 +1300,7 @@ export default function ViewQuotationScreen() {
           onRemoveTermsImage={removeTermsImage}
           customerTaxTreatment={customerTaxTreatment}
           customerPlaceOfSupply={customerPlaceOfSupply}
+          customerContactPersons={customerContactPersons}
           companyName={originalQuotation?.companySnapshot?.name || originalQuotation?.customer || ''}
   companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
   companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
@@ -1003,11 +1340,115 @@ export default function ViewQuotationScreen() {
       
       {/* Snackbar */}
       {snackbar.show && (
-        <Snackbar 
-          message={snackbar.message} 
-          type={snackbar.type} 
-          onClose={handleSnackbarClose} 
+        <Snackbar
+          message={snackbar.message}
+          type={snackbar.type}
+          onClose={handleSnackbarClose}
         />
+      )}
+
+      {/* Cancel (approved → revise) / Amend (pre-approval) confirmation modal */}
+      {showCancelModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(2px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+        }} onClick={() => !isCancelling && setShowCancelModal(false)}>
+          <div style={{
+            background: '#fff', borderRadius: '1rem', padding: '2rem',
+            width: '100%', maxWidth: '480px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+          }} onClick={e => e.stopPropagation()}>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: '0.6rem',
+                background: originalQuotation?.status === 'approved' ? '#fee2e2' : '#ffedd5',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                {originalQuotation?.status === 'approved'
+                  ? <XCircle size={20} color="#dc2626" />
+                  : <Edit2 size={20} color="#c2410c" />}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#111827' }}>
+                  {originalQuotation?.status === 'approved' ? 'Cancel Approved Quotation' : 'Amend Quotation'}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '1px' }}>
+                  {originalQuotation?.quotationNumber}
+                </div>
+              </div>
+              <button
+                onClick={() => { if (!isCancelling) { setShowCancelModal(false); setCancelReason(''); } }}
+                disabled={isCancelling}
+                style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: isCancelling ? 'default' : 'pointer', padding: '4px', borderRadius: '6px', color: '#9ca3af' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{
+              background: originalQuotation?.status === 'approved' ? '#fff7ed' : '#fef2f2',
+              border: `1px solid ${originalQuotation?.status === 'approved' ? '#fed7aa' : '#fecaca'}`,
+              borderRadius: '0.6rem', padding: '0.85rem 1rem', marginBottom: '1.25rem',
+              fontSize: '0.85rem', color: originalQuotation?.status === 'approved' ? '#92400e' : '#991b1b', lineHeight: 1.55,
+            }}>
+              {originalQuotation?.status === 'approved'
+                ? <>This will cancel the <strong>approved</strong> quotation. The creator, ops manager, or admin can then open it and click <strong>"Edit &amp; Revise"</strong> — the system will apply a revision number (e.g. -R1) automatically.</>
+                : <>This will mark the quotation as <strong>Amended</strong> (not a final cancellation). Any of the authorised roles can then reopen it and click <strong>"Edit &amp; Amend"</strong> to update and resubmit it through the normal approval flow.</>}
+            </div>
+
+            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#374151', marginBottom: '0.4rem' }}>
+              Reason for {originalQuotation?.status === 'approved' ? 'cancellation' : 'amendment'} <span style={{ color: '#9ca3af', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <textarea
+              value={cancelReason}
+              onChange={e => setCancelReason(e.target.value)}
+              placeholder="e.g. Client requested major changes…"
+              rows={3}
+              autoFocus
+              disabled={isCancelling}
+              style={{
+                width: '100%', padding: '0.7rem 0.85rem', border: '1px solid #d1d5db',
+                borderRadius: '0.5rem', fontSize: '0.875rem', resize: 'vertical',
+                fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.55,
+                outline: 'none', opacity: isCancelling ? 0.6 : 1,
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: '0.65rem', marginTop: '1.25rem' }}>
+              <button
+                onClick={handleCancel}
+                disabled={isCancelling}
+                style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.45rem',
+                  padding: '0.7rem 1rem', border: 'none', borderRadius: '0.5rem',
+                  fontSize: '0.9rem', fontWeight: 700, cursor: isCancelling ? 'default' : 'pointer',
+                  background: isCancelling
+                    ? (originalQuotation?.status === 'approved' ? '#fca5a5' : '#fdba74')
+                    : (originalQuotation?.status === 'approved' ? '#dc2626' : '#c2410c'),
+                  color: '#fff',
+                }}
+              >
+                {isCancelling
+                  ? <><Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> {originalQuotation?.status === 'approved' ? 'Cancelling…' : 'Amending…'}</>
+                  : originalQuotation?.status === 'approved'
+                    ? <><XCircle size={16} /> Confirm Cancel</>
+                    : <><Edit2 size={16} /> Confirm Amend</>}
+              </button>
+              <button
+                onClick={() => { if (!isCancelling) { setShowCancelModal(false); setCancelReason(''); } }}
+                disabled={isCancelling}
+                style={{
+                  padding: '0.7rem 1.1rem', border: '1px solid #d1d5db', borderRadius: '0.5rem',
+                  fontSize: '0.875rem', fontWeight: 600, cursor: isCancelling ? 'default' : 'pointer',
+                  background: '#fff', color: '#374151', opacity: isCancelling ? 0.5 : 1,
+                }}
+              >
+                Keep Quotation
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1022,9 +1463,9 @@ const styles = {
   innerContainer: { maxWidth: "1280px", margin: "0 auto" },
   
   // Header
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", flexWrap: "wrap", gap: "1rem", position: "sticky", top: 0, zIndex: 100, backgroundColor: "#f0f9ff", paddingTop: "0.5rem", paddingBottom: "0.75rem" },
-  title: { fontSize: "2rem", fontWeight: "bold", color: "#1f2937", margin: 0 },
-  headerActions: { display: "flex", gap: "0.75rem", flexWrap: "wrap" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem", position: "sticky", top: 0, zIndex: 100, backgroundColor: "#f0f9ff", paddingTop: "0.5rem", paddingBottom: "0.75rem", borderBottom: "1px solid #e2e8f0" },
+  title: { fontSize: "1.375rem", fontWeight: "700", color: "#1f2937", margin: 0 },
+  headerActions: { display: "flex", gap: "0.5rem", flexWrap: "wrap" },
   
   // Status
   statusContainer: { marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" },

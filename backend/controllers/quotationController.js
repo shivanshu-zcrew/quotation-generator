@@ -13,6 +13,7 @@ const emailService = require('../utils/emailService');
 const User = require('../models/user');
 const logger = require('../config/logger');
 const redisService = require('../config/redisService');
+const { sanitizeTerms } = require('../utils/sanitizeTerms');
 
 // Escape regex metacharacters to prevent ReDoS
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -174,12 +175,17 @@ function releasePdfSlot() {
 }
 
 exports.getPDFMetrics = async (req, res) => {
-  const metrics = browserPool?.getMetrics() || {};
   const memory = process.memoryUsage();
-  
+
   res.json({
     success: true,
-    metrics,
+    metrics: {
+      activeSlots: _pdfActive,
+      maxSlots: PDF_MAX,
+      queuedRequests: _pdfQueue.length,
+      maxQueue: PDF_MAX_QUEUE,
+      browserConnected: !!_browser?.isConnected(),
+    },
     memory: {
       heapUsedMB: Math.round(memory.heapUsed / 1024 / 1024),
       heapTotalMB: Math.round(memory.heapTotal / 1024 / 1024),
@@ -357,11 +363,11 @@ const SORT_FIELDS = new Set([
 
 const fullPopulate = (q) =>
   q
-    .populate('customerId', 'name email phone address')
-    .populate('createdBy', 'name email')
-    .populate('opsApprovedBy', 'name email')
-    .populate('approvedBy', 'name email')
-    .populate('awardedBy', 'name email');
+    .populate('customerId', 'name email phone address taxTreatment placeOfSupply')
+    .populate('createdBy', 'name email designation')
+    .populate('opsApprovedBy', 'name email designation')
+    .populate('approvedBy', 'name email designation')
+    .populate('awardedBy', 'name email designation');
 
 // Lightweight populate for list endpoints — skips approval-chain refs not shown in tables.
 const listPopulate = (q) =>
@@ -479,7 +485,7 @@ exports.getCompanyStats = async (req, res) => {
       Quotation.find(matchStage).sort({ createdAt: -1 }).limit(5).populate('customerId', 'name').populate('createdBy', 'name').select('quotationNumber customerSnapshot.name total status createdAt currency.code').lean()
     ]);
 
-    const statusMap = { draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0, approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0 };
+    const statusMap = { draft: 0, pending: 0, ops_approved: 0, ops_rejected: 0, approved: 0, rejected: 0, awarded: 0, not_awarded: 0, sent: 0, cancelled: 0, amended: 0 };
     statusCounts.forEach(item => { statusMap[item._id] = item.count; });
 
     const payload = {
@@ -620,9 +626,9 @@ exports.getMyQuotationsStats = async (req, res) => {
     // All statuses
     const allStatuses = [
       'pending', 'pending_admin', 'ops_approved', 'ops_rejected',
-      'approved', 'rejected', 'awarded', 'not_awarded'
+      'approved', 'rejected', 'awarded', 'not_awarded', 'cancelled', 'amended'
     ];
-    
+
     // Get status counts
     const allStatusCounts = await Quotation.aggregate([
       { $match: { ...quotationMatchStage, status: { $in: allStatuses } } },
@@ -659,8 +665,10 @@ exports.getMyQuotationsStats = async (req, res) => {
     const rejectedCount = countsMap['rejected'] || 0;
     const awardedCount = countsMap['awarded'] || 0;
     const notAwardedCount = countsMap['not_awarded'] || 0;
-    
-    const conversionRate = totalQuotations > 0 
+    const cancelledCount = countsMap['cancelled'] || 0;
+    const amendedCount = countsMap['amended'] || 0;
+
+    const conversionRate = totalQuotations > 0
       ? ((awardedCount / totalQuotations) * 100).toFixed(1)
       : 0;
     
@@ -678,8 +686,10 @@ exports.getMyQuotationsStats = async (req, res) => {
       rejected: rejectedCount || 0,
       awarded: awardedCount || 0,
       notAwarded: notAwardedCount || 0,
-      totalValue: totalValue,  // ✅ Now correct AED value
-      awardedValue: awardedValue,  // ✅ Now correct AED value
+      cancelled: cancelledCount || 0,
+      amended: amendedCount || 0,
+      totalValue: totalValue,
+      awardedValue: awardedValue,
       conversionRate: parseFloat(conversionRate),
       actionRequired: opsApprovedCount || 0,
       totalCustomers: customersResult.length || 0,
@@ -693,9 +703,11 @@ exports.getMyQuotationsStats = async (req, res) => {
         rejected: rejectedCount || 0,
         awarded: awardedCount || 0,
         not_awarded: notAwardedCount || 0,
+        cancelled: cancelledCount || 0,
+        amended: amendedCount || 0,
       }
     };
-    
+
     const duration = Date.now() - startTime;
 
     logger.info(`User quotations stats fetched`, {
@@ -750,6 +762,27 @@ exports.getQuotation = async (req, res) => {
     if (!isAdmin && !isOps && !isCreator)
       return res.status(403).json({ message: 'Not authorized to view this quotation' });
 
+    // Admin-created quotations (skip ops review, created straight to
+    // 'pending_admin') are only visible to admins — ops managers and
+    // creators shouldn't see them at all, not even by guessing/bookmarking
+    // the URL. 404 (not 403) so it reads as "doesn't exist" rather than
+    // revealing that something is being withheld.
+    if (isOps && quotation.createdBySnapshot?.role === 'admin') {
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
+
+    // If this quotation is cancelled, tell the client whether it's already
+    // been revised, so the UI can hide/disable "Edit & Revise" instead of
+    // letting a second person start a competing revision that would only
+    // get rejected on save (see createQuotation's revisedFrom guard).
+    if (quotation.status === 'cancelled') {
+      const activeRevision = await Quotation.findOne({
+        revisedFrom: quotation._id,
+        status: { $ne: 'cancelled' },
+      }).select('quotationNumber status').lean();
+      quotation.activeRevision = activeRevision || null;
+    }
+
     res.status(200).json(quotation);
   } catch (err) {
     logger.error(`Get quotation error: ${err.message}`);
@@ -757,15 +790,237 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+// Collapses contact persons that share the same email+phone into one entry.
+// Zoho treats these as the same person and merges them silently on its side
+// regardless of what we send — this keeps our own copy from drifting out of
+// sync with that and stops us re-sending an already-dead duplicate on every
+// future save. Prefers the primary as the survivor, else whichever one is
+// already linked to Zoho, else the first.
+function dedupeContactPersonsByIdentity(list) {
+  const groups = new Map();
+  for (const cp of list) {
+    const email = (cp.email || '').trim().toLowerCase();
+    const phone = (cp.workPhone || '').trim();
+    if (!email || !phone) continue;
+    const key = `${email}|${phone}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(cp);
+  }
+  const toRemove = new Set();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const survivor = group.find(cp => cp.isPrimaryContact === true) || group.find(cp => cp.zohoContactPersonId) || group[0];
+    for (const cp of group) {
+      if (cp !== survivor) toRemove.add(cp);
+    }
+  }
+  if (toRemove.size === 0) return list;
+  return list.filter(cp => !toRemove.has(cp));
+}
+
+// Upserts the quotation's manually-entered contact (name/phone/email) onto
+// the Customer's contactPersons and saves it — the fast, local-only half of
+// the sync. Awaited by the caller (unlike the Zoho push below) specifically
+// so the create/update response can hand the frontend the up-to-date
+// contactPersons list immediately, instead of it going stale until the next
+// full page load.
+// Returns { customerDoc, nameOnlyUpdate, targetContact } or null if there
+// was nothing to do (no name / customer not found).
+async function upsertLocalContactPerson({ customerId, name, phone, email }) {
+  console.log('[contact-sync] START', { customerId: String(customerId), name, phone, email });
+
+  const trimmedName = (name || '').trim();
+  if (!trimmedName) {
+    console.log('[contact-sync] SKIPPED — no name provided');
+    logger.info('Contact-person sync skipped: no name provided', { customerId: String(customerId) });
+    return null;
+  }
+
+  const trimmedEmail = (email || '').trim().toLowerCase();
+  const trimmedPhone = (phone || '').trim();
+
+  const customerDoc = await Customer.findById(customerId);
+  if (!customerDoc) {
+    console.log('[contact-sync] SKIPPED — customer not found for id', String(customerId));
+    logger.warn('Contact-person sync skipped: customer not found', { customerId: String(customerId) });
+    return null;
+  }
+  console.log('[contact-sync] customer found', { customerName: customerDoc.name, zohoId: customerDoc.zohoId || null, existingContactPersons: customerDoc.contactPersons?.length || 0 });
+
+  const contactPersons = customerDoc.contactPersons || [];
+
+  // Same email AND phone as an existing contact (including the primary) means
+  // this is unambiguously the same real person — just fill in/correct their
+  // name in place rather than creating a duplicate. This is the only case
+  // allowed to touch the primary contact.
+  let sameIdentityIndex = -1;
+  if (trimmedEmail && trimmedPhone) {
+    sameIdentityIndex = contactPersons.findIndex(cp =>
+      (cp.email || '').trim().toLowerCase() === trimmedEmail &&
+      (cp.workPhone || '').trim() === trimmedPhone
+    );
+  }
+
+  let matchIndex = -1;
+  let nameOnlyUpdate = false;
+  let targetContact = null;
+
+  if (sameIdentityIndex !== -1) {
+    matchIndex = sameIdentityIndex;
+    nameOnlyUpdate = true;
+    contactPersons[matchIndex].firstName = trimmedName;
+    contactPersons[matchIndex].updatedAt = new Date();
+    targetContact = contactPersons[matchIndex];
+  } else {
+    // Otherwise, never match against (and so never overwrite) the primary —
+    // the quotation's contact is treated as a separate person unless the
+    // email+phone match above already proved it's the same one.
+    matchIndex = trimmedEmail
+      ? contactPersons.findIndex(cp => cp.isPrimaryContact !== true && (cp.email || '').trim().toLowerCase() === trimmedEmail)
+      : -1;
+    if (matchIndex === -1) {
+      matchIndex = contactPersons.findIndex(cp => cp.isPrimaryContact !== true && (cp.firstName || '').trim().toLowerCase() === trimmedName.toLowerCase());
+    }
+
+    if (matchIndex !== -1) {
+      contactPersons[matchIndex].firstName = trimmedName;
+      if (trimmedEmail) contactPersons[matchIndex].email = trimmedEmail;
+      if (trimmedPhone) contactPersons[matchIndex].workPhone = trimmedPhone;
+      contactPersons[matchIndex].updatedAt = new Date();
+      targetContact = contactPersons[matchIndex];
+    } else {
+      const newContact = {
+        salutation: '',
+        firstName: trimmedName,
+        lastName: '',
+        email: trimmedEmail,
+        workPhone: trimmedPhone,
+        mobile: '',
+        designation: '',
+        department: '',
+        isPrimaryContact: contactPersons.length === 0,
+        notes: '',
+      };
+      contactPersons.push(newContact);
+      targetContact = newContact;
+    }
+  }
+
+  // Clean up any pre-existing duplicates (same email+phone) sitting in the
+  // array from before this identity-matching logic existed — they'd
+  // otherwise keep getting pushed to Zoho and silently merged away there.
+  const dedupedContactPersons = dedupeContactPersonsByIdentity(contactPersons);
+  const droppedDuplicates = contactPersons.length - dedupedContactPersons.length;
+  if (droppedDuplicates > 0) {
+    console.log(`[contact-sync] removed ${droppedDuplicates} pre-existing duplicate contact(s) sharing the same email+phone`);
+  }
+
+  customerDoc.contactPersons = dedupedContactPersons;
+  await customerDoc.save();
+  console.log('[contact-sync] saved to MongoDB', { action: nameOnlyUpdate ? 'name-only update (matched existing identity)' : (matchIndex !== -1 ? 'updated existing' : 'created new'), totalContactPersons: customerDoc.contactPersons.length });
+  logger.info('Contact-person synced to customer record', {
+    customerId: String(customerId),
+    name: trimmedName,
+    action: nameOnlyUpdate ? 'name-only' : (matchIndex !== -1 ? 'updated' : 'created'),
+    totalContactPersons: customerDoc.contactPersons.length,
+  });
+
+  return { customerDoc, nameOnlyUpdate, targetContact };
+}
+
+// Best-effort push of the customer's contactPersons to Zoho Books. Never
+// awaited by the caller — a Zoho hiccup can't block saving the quotation,
+// and the frontend already has the up-to-date local data from
+// upsertLocalContactPerson without needing to wait on this.
+async function pushContactPersonsToZoho({ customerDoc, company, nameOnlyUpdate, targetContact }) {
+  const customerId = customerDoc._id;
+
+  if (!customerDoc.zohoId || !company?.zohoOrganizationId) {
+    console.log('[contact-sync] SKIPPING Zoho push — not Zoho-linked', { hasZohoId: !!customerDoc.zohoId, hasZohoOrg: !!company?.zohoOrganizationId });
+    logger.info('Skipping Zoho contact-person sync: customer or company not Zoho-linked', {
+      customerId: String(customerId),
+      hasZohoId: !!customerDoc.zohoId,
+      hasZohoOrg: !!company?.zohoOrganizationId,
+    });
+    return;
+  }
+
+  zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
+  const outgoingContactPersons = customerDoc.contactPersons.map(cp => ({ firstName: cp.firstName, email: cp.email, workPhone: cp.workPhone, isPrimaryContact: cp.isPrimaryContact, zohoContactPersonId: cp.zohoContactPersonId || null }));
+  console.log('[contact-sync] pushing to Zoho, contact_persons being sent:', JSON.stringify(outgoingContactPersons, null, 2));
+
+  const zohoResult = await zohoBooksService.updateContact(customerDoc.zohoId, {
+    name: customerDoc.name,
+    companyName: customerDoc.companyName || customerDoc.name,
+    email: customerDoc.email,
+    phone: customerDoc.phone,
+    address: customerDoc.address,
+    city: customerDoc.city,
+    state: customerDoc.state,
+    zipcode: customerDoc.zipcode,
+    taxTreatment: customerDoc.taxTreatment,
+    placeOfSupply: customerDoc.placeOfSupply,
+    taxRegistrationNumber: customerDoc.taxRegistrationNumber,
+    currencyCode: customerDoc.defaultCurrency?.code,
+    contactPersons: customerDoc.contactPersons,
+    // Same email+phone as an existing contact — only push the corrected
+    // name and primary flag for it, not email/phone (unchanged, and
+    // re-sending them risks Zoho's duplicate-email merge behavior again).
+    nameOnlyContactPersonId: nameOnlyUpdate ? targetContact?.zohoContactPersonId : null,
+  });
+
+  console.log('[contact-sync] Zoho updateContact result:', JSON.stringify({
+    success: zohoResult.success,
+    message: zohoResult.message,
+    error: zohoResult.error,
+    status: zohoResult.status,
+    details: zohoResult.details,
+    returnedContactPersonsCount: zohoResult.contact?.contact_persons?.length ?? null,
+  }, null, 2));
+
+  if (!zohoResult.success) {
+    console.log('[contact-sync] FAILED — Zoho rejected the update. message:', zohoResult.message, 'error:', zohoResult.error, 'details:', JSON.stringify(zohoResult.details));
+    logger.warn('Zoho contact-person sync failed during quotation save', { customerId: String(customerId), error: zohoResult.message, details: zohoResult.details });
+    return;
+  }
+
+  if (zohoResult.contact?.contact_persons) {
+    const zohoPersons = zohoResult.contact.contact_persons;
+    console.log('[contact-sync] Zoho returned contact_persons:', JSON.stringify(zohoPersons.map(zp => ({ first_name: zp.first_name, email: zp.email, is_primary_contact: zp.is_primary_contact, contact_person_id: zp.contact_person_id })), null, 2));
+    if (zohoPersons.length < outgoingContactPersons.length) {
+      console.log(`[contact-sync] WARNING — sent ${outgoingContactPersons.length} contact_persons but Zoho only returned ${zohoPersons.length}. Zoho likely merged/dropped one — commonly caused by two contacts sharing the same email or phone.`);
+      logger.warn('Zoho returned fewer contact_persons than sent — likely merged a duplicate', {
+        customerId: String(customerId),
+        sentCount: outgoingContactPersons.length,
+        returnedCount: zohoPersons.length,
+      });
+    }
+    customerDoc.contactPersons.forEach(cp => { cp.zohoContactPersonId = null; });
+    for (const zp of zohoPersons) {
+      const idx = customerDoc.contactPersons.findIndex(cp =>
+        (cp.email && zp.email && cp.email.toLowerCase() === zp.email.toLowerCase()) ||
+        (cp.firstName === zp.first_name)
+      );
+      if (idx !== -1) customerDoc.contactPersons[idx].zohoContactPersonId = zp.contact_person_id;
+    }
+    await customerDoc.save();
+  } else {
+    console.log('[contact-sync] WARNING — Zoho success response had no contact_persons array at all:', JSON.stringify(zohoResult.contact));
+  }
+  console.log('[contact-sync] DONE — synced to Zoho successfully');
+  logger.info('Contact-person synced to Zoho Books', { customerId: String(customerId), zohoId: customerDoc.zohoId });
+}
+
 exports.createQuotation = async (req, res) => {
   const {
     projectName, scopeOfWork, companyId, currencyCode, customerName, customerId, customer, contact, customerCountry,
-    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate, 
+    customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     tl, trn,  // ← Company's TL and TRN from payload
     customerTaxRegistrationNumber,  // ← Customer's TRN (different from company's trn)
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
-    quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber, 
+    quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber,
+    revisedFrom, revisionNote,
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
@@ -791,8 +1046,8 @@ exports.createQuotation = async (req, res) => {
   const validatedItems = [];
   for (const item of items) {
     if (!item.description && !item.name) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a name or description` });
-    if (!item.quantity || item.quantity < 1) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid quantity` });
-    if (!item.unitPrice || item.unitPrice < 0) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid unit price` });
+    if (!item.quantity || item.quantity <= 0) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid quantity` });
+    if (item.unitPrice === '' || item.unitPrice === null || item.unitPrice === undefined || isNaN(Number(item.unitPrice)) || Number(item.unitPrice) < 0) return res.status(400).json({ message: `Item ${validatedItems.length + 1} requires a valid unit price` });
     validatedItems.push(item);
   }
     
@@ -926,14 +1181,59 @@ exports.createQuotation = async (req, res) => {
 
   let processedInternalDocs = [];
   if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
-    processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(compressedInternalDocuments, quotationNumber, req.user.id, internalDocDescriptions || []);
+    processedInternalDocs = await uploadMultipleInternalDocumentsFromBase64(compressedInternalDocuments, quotationNumber || `draft-${Date.now()}`, req.user.id, internalDocDescriptions || []);
   }
 
   const userRole = req.user?.role;
   const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
 
+  // ── Revision: auto-suffix the number and link back to the original ──
+  let resolvedQuotationNumber = quotationNumber;
+  let resolvedRevisedFrom = null;
+  let resolvedRevisionNumber = 0;
+
+  if (revisedFrom) {
+    const originalDoc = await Quotation.findOne({ _id: revisedFrom, companyId: company._id }).lean();
+    if (!originalDoc) return res.status(404).json({ success: false, message: 'Original quotation not found for revision.' });
+    const revisionAllowed = originalDoc.status === 'approved' ||
+      (originalDoc.status === 'cancelled' && originalDoc.cancelledFromStatus === 'approved');
+    if (!revisionAllowed) return res.status(400).json({ success: false, message: 'Only approved quotations (or cancelled-approved ones) can be revised.' });
+
+    // Prevent two people independently creating competing revisions of the
+    // same original — e.g. the creator and the admin both open "Edit &
+    // Revise" on the same cancelled quotation before either one saves.
+    // Only one active (non-cancelled) revision is allowed at a time; cancel
+    // it first to be able to create another.
+    const existingActiveRevision = await Quotation.findOne({
+      revisedFrom: originalDoc._id,
+      status: { $ne: 'cancelled' },
+    }).select('quotationNumber status').lean();
+    if (existingActiveRevision) {
+      return res.status(409).json({
+        success: false,
+        message: `This quotation already has an active revision (${existingActiveRevision.quotationNumber}). Cancel that revision before creating another one.`,
+      });
+    }
+
+    resolvedRevisedFrom = originalDoc._id;
+
+    // Count existing revisions of this original to determine the next suffix (R1, R2, ...)
+    const baseNumber = (originalDoc.revisedFrom
+      ? await Quotation.findOne({ _id: originalDoc.revisedFrom }).lean().then(d => d?.quotationNumber || originalDoc.quotationNumber)
+      : originalDoc.quotationNumber);
+
+    // Strip any existing -RN suffix to get the root number
+    const rootNumber = baseNumber.replace(/-R\d+$/, '');
+    const existingRevisions = await Quotation.countDocuments({
+      companyId: company._id,
+      quotationNumber: { $regex: `^${rootNumber.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-R\\d+$` }
+    });
+    resolvedRevisionNumber = existingRevisions + 1;
+    resolvedQuotationNumber = `${rootNumber}-R${resolvedRevisionNumber}`;
+  }
+
   const quotation = new Quotation({
-    quotationNumber,
+    quotationNumber: resolvedQuotationNumber,
     projectName: projectName?.trim() || '',
     scopeOfWork: scopeOfWork?.trim() || '',
     companyId: company._id,
@@ -955,10 +1255,11 @@ exports.createQuotation = async (req, res) => {
     },
     customerId,
     customerSnapshot: {
-      name: customerName?.trim() || customerDoc.name,  
-      email: req.body.customerEmail?.trim() || customerDoc.email, 
-      phone: customerDoc.phone,
-      address: customerDoc.address, 
+      name: customer?.trim() || customerDoc.companyName || customerDoc.name,
+      contactPerson: customerName?.trim() || '',
+      email: req.body.customerEmail?.trim() || customerDoc.email,
+      phone: req.body.customerPhone?.trim() || customerDoc.phone,
+      address: customerDoc.address,
       country: customerCountry || 'UAE', 
       vatNumber: customerTaxRegistrationNumber?.trim() || customerDoc.vatNumber,  // ✅ Customer's TRN from payload
       designation: customerDesignation?.trim() || '', 
@@ -989,13 +1290,16 @@ exports.createQuotation = async (req, res) => {
     ...totals,
     notes: notes?.trim() || '', 
     remark: remark?.trim() || '',
-    termsAndConditions: termsAndConditions || '',
+    termsAndConditions: sanitizeTerms(termsAndConditions),
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
     createdBy: req.user.id,
     createdBySnapshot: { name: req.user.name, email: req.user.email, role: req.user.role },
     status: initialStatus,
-    storageProvider: 's3'
+    storageProvider: 's3',
+    revisedFrom: resolvedRevisedFrom,
+    revisionNote: revisionNote?.trim() || '',
+    revisionNumber: resolvedRevisionNumber,
   });
 
   await quotation.save();
@@ -1005,14 +1309,43 @@ exports.createQuotation = async (req, res) => {
   redisService.delPattern(`stats:user:${req.user.id}:*`);
   redisService.delPattern(`stats:company:${companyId}:*`);
 
+  // Sync the quotation's contact name/phone/email onto the customer's
+  // contact persons. The local DB half is awaited (fast) so the response
+  // below can hand the frontend the up-to-date list immediately; the Zoho
+  // push is still fire-and-forget so a Zoho hiccup can't slow this down.
+  let updatedCustomerContactPersons = null;
+  try {
+    const upsertResult = await upsertLocalContactPerson({
+      customerId: customerDoc._id,
+      name: customerName,
+      phone: req.body.customerPhone,
+      email: req.body.customerEmail,
+    });
+    if (upsertResult) {
+      updatedCustomerContactPersons = upsertResult.customerDoc.contactPersons;
+      pushContactPersonsToZoho({ ...upsertResult, company })
+        .catch(err => logger.warn('Zoho contact-person push failed after quotation create', { error: err.message }));
+    }
+  } catch (err) {
+    logger.warn('Contact-person sync failed after quotation create', { error: err.message });
+  }
+
   // Non-blocking: notify ops managers of new submission
   if (initialStatus === 'pending') {
-    User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
-      .then(ops => {
-        const emails = ops.map(o => o.email).filter(e => e);
-        if (emails.length) emailService.creatorSubmittedNotifyOps(emails, quotation, req.user.name, false);
-      })
-      .catch(err => logger.warn('[Email] Failed to notify ops of new quotation', { error: err.message }));
+    const requestedEmails = Array.isArray(req.body.notifyManagerEmails)
+      ? req.body.notifyManagerEmails.filter(e => typeof e === 'string' && e.includes('@'))
+      : [];
+
+    if (requestedEmails.length) {
+      emailService.creatorSubmittedNotifyOps(requestedEmails, quotation, req.user.name, false);
+    } else {
+      User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
+        .then(ops => {
+          const emails = ops.map(o => o.email).filter(e => e);
+          if (emails.length) emailService.creatorSubmittedNotifyOps(emails, quotation, req.user.name, false);
+        })
+        .catch(err => logger.warn('[Email] Failed to notify ops of new quotation', { error: err.message }));
+    }
   }
 
   res.status(201).json({
@@ -1021,7 +1354,8 @@ exports.createQuotation = async (req, res) => {
       itemsCount: processedItems.length,
       imagesUploaded: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
       termsImagesUploaded: processedTermsImages.length
-    }
+    },
+    ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons })
   });
 };
 
@@ -1076,11 +1410,31 @@ exports.updateQuotation = async (req, res) => {
     }
 
     if (!isAdmin && !isOpsManager && !isCreator) return res.status(403).json({ message: 'Not authorized to update this quotation' });
-    
-    let newStatus = existing.status;
+
     const currentStatus = existing.status;
-    
-    if (isAdmin) {
+
+    // Once a reviewer rejects/returns a quotation, only the creator (or admin)
+    // may revise it — the reviewer who rejected it doesn't get to edit it themselves.
+    if ((currentStatus === 'rejected' || currentStatus === 'ops_rejected') && !isAdmin && !isCreator) {
+      return res.status(403).json({ message: 'Only the quotation creator or an admin can revise a rejected quotation' });
+    }
+
+    let newStatus = existing.status;
+    let applyRevisionOnSave = false;
+    let applyAmendmentOnSave = false;
+
+    // Cancelled/amended quotation being edited — always restart from pending
+    // regardless of role. 'cancelled' only ever happens for the revise path
+    // (an approved quotation being retired); 'amended' only ever happens for
+    // the amend path (a pre-approval quotation paused for editing) — see
+    // cancelQuotation's status branching.
+    if (currentStatus === 'cancelled') {
+      newStatus = 'pending';
+      applyRevisionOnSave = true;
+    } else if (currentStatus === 'amended') {
+      newStatus = 'pending';
+      applyAmendmentOnSave = true;
+    } else if (isAdmin) {
       if (currentStatus === 'approved' || currentStatus === 'awarded' || currentStatus === 'not_awarded') {
         newStatus = currentStatus;
       } else if (['pending', 'ops_approved', 'ops_rejected', 'rejected', 'draft'].includes(currentStatus)) {
@@ -1102,7 +1456,8 @@ exports.updateQuotation = async (req, res) => {
       } else { newStatus = currentStatus; }
     }
 
-    const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft'];
+    // 'cancelled'/'amended' are editable by all three roles (creator/ops/admin) so include them here.
+    const editableStatuses = ['pending', 'ops_rejected', 'rejected', 'pending_admin', 'draft', 'cancelled', 'amended'];
     if (!isAdmin && !editableStatuses.includes(currentStatus)) {
       return res.status(400).json({ message: `Cannot edit quotation with status: ${currentStatus}` });
     }
@@ -1123,8 +1478,13 @@ exports.updateQuotation = async (req, res) => {
     let customerSnapshotDesignation = existing.customerSnapshot?.designation || '';
     let customerSnapshotTradeLicense = existing.customerSnapshot?.tradeLicenseNumber || '';
     
-    if (customerId && customerId !== existing.customerId?.toString()) {
-      const customerDoc = await Customer.findOne({ _id: customerId, companyId: existing.companyId }).lean();
+    // Always refresh from the live customer record (not just when the customer
+    // being assigned changes) — otherwise editing a quotation for the same
+    // customer keeps re-saving a stale taxTreatment/placeOfSupply snapshot even
+    // after the customer's own record has since been updated.
+    const resolvedCustomerId = customerId || existing.customerId?.toString();
+    if (resolvedCustomerId) {
+      const customerDoc = await Customer.findOne({ _id: resolvedCustomerId, companyId: existing.companyId }).lean();
       if (customerDoc) {
         customerTaxTreatment = customerDoc.taxTreatment || 'non_vat_registered';
         customerPlaceOfSupply = customerDoc.placeOfSupply || 'Dubai';
@@ -1171,7 +1531,13 @@ exports.updateQuotation = async (req, res) => {
       
       imageKeys = [...new Set(imageKeys)];
       
+      // Preserve the item's existing _id (if it has one) so Mongoose keeps the
+      // same subdocument identity across saves — otherwise every save would
+      // mint fresh _ids and orphan any review comments anchored to this item.
+      const existingItemId = item._id || item.id;
+
       processedItems.push({
+        ...(existingItemId && mongoose.Types.ObjectId.isValid(existingItemId) ? { _id: existingItemId } : {}),
         name: item.name || item.description?.substring(0, 50) || `Item ${idx + 1}`,
         description: item.description || '',
         unit: item.unit || '',
@@ -1303,9 +1669,13 @@ exports.updateQuotation = async (req, res) => {
       ...(customerId && { customerId }),
       ...(projectName !== undefined && { projectName: projectName?.trim() || '' }),
       ...(scopeOfWork !== undefined && { scopeOfWork: scopeOfWork?.trim() || '' }),
-      ...(customer && { customer: customer.trim() }),
-      ...(req.body.customerEmail !== undefined && { 
-        'customerSnapshot.email': req.body.customerEmail?.trim() || '' 
+      ...(customer && { 'customerSnapshot.name': customer.trim() }),
+      ...(customerName !== undefined && { 'customerSnapshot.contactPerson': customerName?.trim() || '' }),
+      ...(req.body.customerEmail !== undefined && {
+        'customerSnapshot.email': req.body.customerEmail?.trim() || ''
+      }),
+      ...(req.body.customerPhone !== undefined && {
+        'customerSnapshot.phone': req.body.customerPhone?.trim() || ''
       }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
@@ -1313,7 +1683,7 @@ exports.updateQuotation = async (req, res) => {
       ...(focalPointDesignation !== undefined && { 'companySnapshot.focalPointDesignation': focalPointDesignation?.trim() || existingCompanySnapshot.focalPointDesignation || '' }),
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
       ...(customerCountry && { 'customerSnapshot.country': customerCountry }),
-      ...(customerId && { 'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment, 'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply, customerTaxTreatment, customerPlaceOfSupply }),
+      ...(resolvedCustomerId && { 'customerSnapshot.taxTreatment': customerSnapshotTaxTreatment, 'customerSnapshot.placeOfSupply': customerSnapshotPlaceOfSupply, customerTaxTreatment, customerPlaceOfSupply }),
       ...(date && { date: new Date(date) }), 
       ...(expiryDate && { expiryDate: new Date(expiryDate) }),
       ...(queryDate !== undefined && { queryDate: queryDate ? new Date(queryDate) : null }),
@@ -1343,13 +1713,45 @@ exports.updateQuotation = async (req, res) => {
       total: totals.total, 
       totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
-      ...(termsAndConditions !== undefined && { termsAndConditions: termsAndConditions || '' }),
+      ...(termsAndConditions !== undefined && { termsAndConditions: sanitizeTerms(termsAndConditions) }),
       termsImages: finalTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
       storageProvider: 's3'
     };
     
+    // Revision: in-place update of a cancelled (post-approval) quotation.
+    // Auto-apply -R1/-R2 suffix to the quotation number and record revision metadata.
+    if (applyRevisionOnSave) {
+      const rootNumber = existing.quotationNumber.replace(/-R\d+$/, '');
+      const existingRevisions = await Quotation.countDocuments({
+        companyId,
+        quotationNumber: { $regex: `^${escapeRegex(rootNumber)}-R\\d+$` },
+        _id: { $ne: existing._id },
+      });
+      const revNum = existingRevisions + 1;
+      updateData.quotationNumber = `${rootNumber}-R${revNum}`;
+      updateData.revisionNumber = revNum;
+      updateData.isRevision = true;
+      updateData.revisionNote = req.body.revisionNote?.trim() || existing.revisionNote || '';
+      // Clear cancellation metadata
+      updateData.cancelledFromStatus = '';
+      updateData.cancelledAt = null;
+      updateData.cancelledBy = null;
+      updateData.cancelReason = '';
+    }
+
+    // Amendment: in-place update of a cancelled (pre-approval) quotation.
+    if (applyAmendmentOnSave) {
+      updateData.isAmendment = true;
+      updateData.amendmentNote = req.body.amendmentNote?.trim() || '';
+      // Clear cancellation metadata
+      updateData.cancelledFromStatus = '';
+      updateData.cancelledAt = null;
+      updateData.cancelledBy = null;
+      updateData.cancelReason = '';
+    }
+
     // Handle approval data clearing based on new status
     if (newStatus === 'pending' || newStatus === 'ops_rejected') {
       updateData.opsRejectionReason = '';
@@ -1398,22 +1800,53 @@ exports.updateQuotation = async (req, res) => {
 
     const populated = await Quotation.findById(updated._id)
       .populate('customerId', 'name email phone address taxTreatment placeOfSupply designation tradeLicenseNumber')
-      .populate('createdBy', 'name email').populate('opsApprovedBy', 'name email')
-      .populate('approvedBy', 'name email').populate('awardedBy', 'name email')
+      .populate('createdBy', 'name email designation').populate('opsApprovedBy', 'name email designation')
+      .populate('approvedBy', 'name email designation').populate('awardedBy', 'name email designation')
       .populate('companyId', 'name code baseCurrency logo focalPointDesignation').lean();
     
     // Invalidate stats caches — status may have changed
     redisService.delPattern(`stats:user:${req.user.id}:*`);
     redisService.delPattern(`stats:company:${companyId}:*`);
 
-    // Non-blocking: notify ops on resubmission after rejection
-    if (newStatus === 'pending' && ['ops_rejected', 'rejected'].includes(currentStatus)) {
-      User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
-        .then(ops => {
-          const emails = ops.map(o => o.email).filter(e => e);
-          if (emails.length) emailService.creatorSubmittedNotifyOps(emails, populated, req.user.name, true);
-        })
-        .catch(err => logger.warn('[Email] Failed to notify ops of resubmission', { error: err.message }));
+    // Sync the quotation's contact name/phone/email onto the customer's
+    // contact persons. The local DB half is awaited (fast) so the response
+    // below can hand the frontend the up-to-date list immediately; the Zoho
+    // push is still fire-and-forget so a Zoho hiccup can't slow this down.
+    let updatedCustomerContactPersons = null;
+    if (customerName !== undefined || req.body.customerPhone !== undefined || req.body.customerEmail !== undefined) {
+      try {
+        const upsertResult = await upsertLocalContactPerson({
+          customerId: updated.customerId,
+          name: customerName !== undefined ? customerName : existing.customerSnapshot?.contactPerson,
+          phone: req.body.customerPhone !== undefined ? req.body.customerPhone : existing.customerSnapshot?.phone,
+          email: req.body.customerEmail !== undefined ? req.body.customerEmail : existing.customerSnapshot?.email,
+        });
+        if (upsertResult) {
+          updatedCustomerContactPersons = upsertResult.customerDoc.contactPersons;
+          pushContactPersonsToZoho({ ...upsertResult, company })
+            .catch(err => logger.warn('Zoho contact-person push failed after quotation update', { error: err.message }));
+        }
+      } catch (err) {
+        logger.warn('Contact-person sync failed after quotation update', { error: err.message });
+      }
+    }
+
+    // Non-blocking: notify ops on resubmission (rejection resubmit, revision, amendment)
+    if (newStatus === 'pending' && ['ops_rejected', 'rejected', 'cancelled', 'amended'].includes(currentStatus)) {
+      const requestedEmails = Array.isArray(req.body.notifyManagerEmails)
+        ? req.body.notifyManagerEmails.filter(e => typeof e === 'string' && e.includes('@'))
+        : [];
+
+      if (requestedEmails.length) {
+        emailService.creatorSubmittedNotifyOps(requestedEmails, populated, req.user.name, true);
+      } else {
+        User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
+          .then(ops => {
+            const emails = ops.map(o => o.email).filter(e => e);
+            if (emails.length) emailService.creatorSubmittedNotifyOps(emails, populated, req.user.name, true);
+          })
+          .catch(err => logger.warn('[Email] Failed to notify ops of resubmission', { error: err.message }));
+      }
     }
 
     res.status(200).json({
@@ -1422,7 +1855,8 @@ exports.updateQuotation = async (req, res) => {
         itemsCount: processedItems.length,
         imagesCount: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
         termsImagesCount: finalTermsImages.length
-      }
+      },
+      ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons })
     });
 
   } catch (err) {
@@ -1612,6 +2046,15 @@ exports.awardQuotation = async (req, res) => {
     // reason (network, timeout, missing zohoId, API error) we return an error
     // and leave the quotation in its current 'approved' state untouched.
     if (awarded) {
+      const companyZohoOrgId = quotation.companyId?.zohoOrganizationId;
+      if (!companyZohoOrgId) {
+        return res.status(422).json({
+          success: false,
+          message: 'This company has no Zoho Organisation ID configured. Please add one before awarding quotations.',
+          code: 'COMPANY_NOT_SYNCED'
+        });
+      }
+
       const customerZohoId = customer?.zohoId;
       if (!customerZohoId) {
         return res.status(422).json({
@@ -2922,6 +3365,101 @@ exports.removeInternalDocument = async (req, res) => {
   }
 };
 
+// ===== REVIEW COMMENTS (highlight-and-comment annotations) =====
+
+exports.addReviewComment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { targetType, targetKey, quote, prefix, suffix, comment } = req.body;
+
+    if (!['item', 'terms', 'header'].includes(targetType)) {
+      return res.status(400).json({ success: false, message: 'Invalid targetType' });
+    }
+    if (!targetKey || !quote?.trim() || !comment?.trim()) {
+      return res.status(400).json({ success: false, message: 'targetKey, quote and comment are required' });
+    }
+
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    if (!isAdmin && !isOps) {
+      return res.status(403).json({ success: false, message: 'Only ops manager or admin can add review comments' });
+    }
+
+    quotation.reviewComments.push({
+      targetType,
+      targetKey: String(targetKey),
+      quote: quote.trim(),
+      prefix: prefix || '',
+      suffix: suffix || '',
+      comment: comment.trim(),
+      createdBy: req.user.id,
+      createdBySnapshot: { name: req.user.name, email: req.user.email, role: req.user.role },
+    });
+    await quotation.save();
+
+    const created = quotation.reviewComments[quotation.reviewComments.length - 1];
+    res.status(201).json({ success: true, message: 'Comment added', comment: created });
+  } catch (err) {
+    logger.error(`Add review comment error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error adding review comment', error: err.message });
+  }
+};
+
+exports.resolveReviewComment = async (req, res) => {
+  try {
+    const { id, commentId } = req.params;
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isCreator = quotation.createdBy && quotation.createdBy.toString() === req.user.id;
+    if (!isAdmin && !isCreator) {
+      return res.status(403).json({ success: false, message: 'Only the creator or admin can resolve review comments' });
+    }
+
+    const comment = quotation.reviewComments.id(commentId);
+    if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
+
+    comment.resolved = true;
+    comment.resolvedBy = req.user.id;
+    comment.resolvedAt = new Date();
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: 'Comment resolved', comment });
+  } catch (err) {
+    logger.error(`Resolve review comment error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error resolving review comment', error: err.message });
+  }
+};
+
+exports.deleteReviewComment = async (req, res) => {
+  try {
+    const { id, commentId } = req.params;
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const comment = quotation.reviewComments.id(commentId);
+    if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isAuthor = comment.createdBy && comment.createdBy.toString() === req.user.id;
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({ success: false, message: 'Only the comment author or admin can delete this comment' });
+    }
+
+    quotation.reviewComments.pull(commentId);
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: 'Comment deleted' });
+  } catch (err) {
+    logger.error(`Delete review comment error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error deleting review comment', error: err.message });
+  }
+};
+
 exports.getInternalDocumentDownloadUrl = async (req, res) => {
   try {
     const { id, docId } = req.params;
@@ -3010,5 +3548,73 @@ exports.getBatchSignedUrls = async (req, res) => {
   } catch (err) {
     logger.error(`Batch get signed URLs error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error generating signed URLs', error: err.message });
+  }
+};
+
+// ============================================================
+// CANCEL QUOTATION
+// Admin can cancel any non-final quotation.
+// Ops manager can cancel pre-approval quotations only.
+// Stores the pre-cancel status so updateQuotation can determine
+// whether a subsequent edit is a Revision or an Amendment.
+//
+// The resulting status differs by what's being cancelled:
+//  - An APPROVED quotation is being retired to make way for a brand-new
+//    revision document (see createQuotation's revisedFrom path) — that's a
+//    real, final cancellation of this specific document, so status becomes
+//    'cancelled'.
+//  - Anything pre-approval (pending/ops_approved/rejected/ops_rejected/
+//    pending_admin) is just being paused so the SAME document can be edited
+//    and resubmitted in place — not a real cancellation, so status becomes
+//    'amended' instead, to avoid it reading as dead/final in lists and
+//    dashboards while it's actually just awaiting an edit.
+// ============================================================
+exports.cancelQuotation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cancelReason = '' } = req.body;
+    const companyId = req.companyId || req.headers['x-company-id'];
+
+    if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
+
+    const quotation = await Quotation.findOne({ _id: id, companyId });
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+    if (quotation.status === 'cancelled' || quotation.status === 'amended') {
+      return res.status(400).json({ success: false, message: 'Quotation is already cancelled' });
+    }
+    if (['awarded', 'not_awarded'].includes(quotation.status)) {
+      return res.status(400).json({ success: false, message: 'Awarded or not-awarded quotations cannot be cancelled' });
+    }
+
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+
+    // Only admin can cancel an approved quotation; ops can cancel pre-approval ones
+    if (!isAdmin && !isOps) {
+      return res.status(403).json({ success: false, message: 'Only admin or ops manager can cancel quotations' });
+    }
+    if (!isAdmin && quotation.status === 'approved') {
+      return res.status(403).json({ success: false, message: 'Only admin can cancel an approved quotation' });
+    }
+
+    const isRevisePath = quotation.status === 'approved';
+
+    quotation.cancelledFromStatus = quotation.status;
+    quotation.cancelledAt = new Date();
+    quotation.cancelledBy = req.user.id;
+    quotation.cancelledBySnapshot = { name: req.user.name, email: req.user.email, role: req.user.role };
+    quotation.cancelReason = cancelReason.trim();
+    quotation.status = isRevisePath ? 'cancelled' : 'amended';
+
+    await quotation.save();
+
+    redisService.delPattern(`stats:user:${quotation.createdBy}:*`);
+    redisService.delPattern(`stats:user:${req.user.id}:*`);
+    redisService.delPattern(`stats:company:${companyId}:*`);
+
+    res.json({ success: true, message: 'Quotation cancelled successfully', quotation });
+  } catch (err) {
+    logger.error(`cancelQuotation error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Failed to cancel quotation', error: err.message });
   }
 };

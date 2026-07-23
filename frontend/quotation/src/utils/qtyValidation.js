@@ -3,7 +3,7 @@ export const validateQuantity = (value) => {
   const num = Number(value);
   if (isNaN(num)) return { isValid: false, error: 'Quantity must be a number' };
   if (num <= 0) return { isValid: false, error: 'Quantity must be greater than 0' };
-  if (!Number.isInteger(num)) return { isValid: false, error: 'Quantity must be a whole number' };
+  if (Math.round(num * 1000) / 1000 !== num) return { isValid: false, error: 'Quantity can have up to 3 decimal places' };
   return { isValid: true, error: null };
 };
 

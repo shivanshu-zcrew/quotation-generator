@@ -501,9 +501,10 @@ class ZohoContactsService {
   }
 
   async updateContact(contactId, customerData) {
-    const { 
-      taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber, 
-      currencyCode, contactPersons = [], address, city, state, zipcode, phone, street2, attention
+    const {
+      taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber,
+      currencyCode, contactPersons = [], address, city, state, zipcode, phone, street2, attention,
+      nameOnlyContactPersonId
     } = customerData;
   
     let effectivePlaceOfSupply = placeOfSupply;
@@ -535,6 +536,17 @@ class ZohoContactsService {
       country_code: countryCode,
       place_of_contact: placeOfSupplyCode,
       contact_persons: uniqueContacts.map((p) => {
+        // Same email+phone as an already-known Zoho contact — only correct
+        // the name and confirm primary status; leave everything else (email,
+        // phone) out of the payload rather than re-sending unchanged values.
+        if (p.zohoContactPersonId && nameOnlyContactPersonId && p.zohoContactPersonId === nameOnlyContactPersonId) {
+          return {
+            contact_person_id: p.zohoContactPersonId,
+            first_name: (p.firstName || "").trim(),
+            is_primary_contact: p.isPrimaryContact === true
+          };
+        }
+
         const obj = {
           salutation: (p.salutation || "Mr.").trim(),
           first_name: (p.firstName || "").trim(),
@@ -545,7 +557,10 @@ class ZohoContactsService {
           department: (p.department || "").trim()
         };
         if (p.email && p.email.trim()) obj.email = p.email.trim().toLowerCase();
-        if (p.isPrimaryContact === true) obj.is_primary_contact = true;
+        // Always send explicitly (not just when true) — omitting it for
+        // non-primary contacts left Zoho to pick its own default, which
+        // caused newly-added non-primary contacts to come back as primary.
+        obj.is_primary_contact = p.isPrimaryContact === true;
         if (p.zohoContactPersonId) obj.contact_person_id = p.zohoContactPersonId;
         return obj;
       })
@@ -566,10 +581,13 @@ class ZohoContactsService {
     }
   
     const result = await this._request('PUT', `/contacts/${contactId}`, this._cleanPayload(contactPayload));
-  
+
     return {
       success: result.success,
       message: result.success ? 'Contact updated successfully' : (result.error || 'Zoho update failed'),
+      error: result.error,
+      details: result.details,
+      status: result.status,
       contact: result.data?.contact || result.contact
     };
   }

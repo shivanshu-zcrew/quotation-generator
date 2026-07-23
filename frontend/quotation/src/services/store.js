@@ -408,10 +408,12 @@ export const useAppStore = create(
               hasNextPage: false,
               hasPreviousPage: false
             };
+            const counts = result?.data?.counts || {};
 
             batchUpdate(set, [
               ['quotations', quotationsData],
               ['quotationsPagination', pagination],
+              ['quotationCounts', counts],
               ['quotationsInitialized', true],
               ['quotationsLoading', false],
               ['lastError', null],
@@ -509,6 +511,8 @@ export const useAppStore = create(
                 hasPreviousPage: false
               },
               quotationCounts: counts,
+              quotationsInitialized: true,
+              quotationsLoading: false,
               quotationsVersion: state.quotationsVersion + 1,
               loading: false,
               lastError: null
@@ -564,7 +568,7 @@ export const useAppStore = create(
               }
               await get().refetchQuotations();
               await get().refreshDashboardStats();
-              return { success: true, quotation: newQuotation, message: response.data.message };
+              return { success: true, quotation: newQuotation, message: response.data.message, customerContactPersons: response.data.customerContactPersons };
             }
             throw new Error(response?.data?.message || 'Failed to create quotation');
           } catch (error) {
@@ -588,7 +592,7 @@ export const useAppStore = create(
               }));
               await get().refetchQuotations();
               await get().refreshDashboardStats();
-              return { success: true, quotation: updatedQuotation };
+              return { success: true, quotation: updatedQuotation, customerContactPersons: result.data.customerContactPersons };
             }
             throw new Error(result?.data?.message || 'Failed to update quotation');
           } catch (error) {
@@ -1099,6 +1103,8 @@ export const useAppStore = create(
             _currentSwitchId: switchId,
             statsLoading: true,
             quotationsLoading: true,
+            quotationCounts: {},
+            quotationsInitialized: false,
             _abortController: abortController
           });
 
@@ -1124,7 +1130,6 @@ export const useAppStore = create(
           const companyIdForApi = (companyId === 'all' || companyId === 'ALL') ? null : companyId;
 
           const fetchPromises = [
-            get().fetchQuotationsForCompany(companyId, 1, 20, { signal: abortController.signal }),
             get().fetchDashboardStats(companyIdForApi, { forceRefresh: true }),
             get().refreshStats(),
             get().fetchCustomerStats()
@@ -1957,8 +1962,7 @@ export const useCompanyQuotations = () => {
     if (resetQuotationsFilters) {
       resetQuotationsFilters();
     }
-    refresh({ page: 1, limit, forceRefresh: true });
-  }, [refresh, limit, resetQuotationsFilters]);
+  }, [resetQuotationsFilters]);
 
   const clearCache = useCallback(async () => {
     const clearQuotationsCache = useAppStore.getState().clearQuotationsCache;

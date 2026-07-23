@@ -1420,8 +1420,13 @@ class ZohoBooksService {
 
   _mapContactPersons(zohoContactPersons) {
     if (!Array.isArray(zohoContactPersons)) return [];
-    return zohoContactPersons.filter(cp => cp.first_name && cp.first_name.trim()).map(cp => ({
-      salutation: cp.salutation || '', firstName: cp.first_name.trim(), lastName: (cp.last_name || '').trim(),
+    // Don't drop contacts just because Zoho has no first_name for them (e.g.
+    // an auto-generated "main contact" derived from the company name) —
+    // this fed into _mergeContactPersons, which replaces the whole local
+    // array, so filtering here was silently deleting real contacts
+    // (including the primary) from our own database on every pull-sync.
+    return zohoContactPersons.map(cp => ({
+      salutation: cp.salutation || '', firstName: (cp.first_name || '').trim(), lastName: (cp.last_name || '').trim(),
       email: (cp.email || '').trim().toLowerCase(), workPhone: (cp.phone || '').trim(), mobile: (cp.mobile || '').trim(),
       designation: cp.designation || '', department: cp.department || '', isPrimaryContact: cp.is_primary_contact === true,
       notes: cp.notes || '', zohoContactPersonId: cp.contact_person_id || null, createdAt: new Date(), updatedAt: new Date()

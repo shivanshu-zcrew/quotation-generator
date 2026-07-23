@@ -40,16 +40,43 @@ export const validateFile = (file) => {
 export const btnStyle = (bg, disabled = false) => ({
   backgroundColor: disabled ? "#d1d5db" : bg,
   color: disabled ? "#9ca3af" : "white",
-  padding: "0.625rem 1rem",
+  padding: "0.55rem 0.9rem",
   borderRadius: "0.5rem",
   border: "none",
   display: "inline-flex",
   alignItems: "center",
-  gap: "0.5rem",
+  gap: "0.4rem",
   cursor: disabled ? "not-allowed" : "pointer",
-  fontSize: "0.875rem",
-  fontWeight: "500",
+  fontSize: "0.8125rem",
+  fontWeight: "600",
+  transition: "background-color 0.15s ease, border-color 0.15s ease",
 });
+
+// Neutral/secondary action button — white with a subtle border, for actions
+// that don't need to compete visually with the primary/destructive ones
+// (e.g. Download PDF, Duplicate, Dashboard). Pair with onMouseEnter/Leave
+// to toggle between the base/hover style objects below, matching the
+// inline-hover-handler pattern already used elsewhere in this app (see
+// QuotationLayout.jsx's pdfOptionButton).
+export const outlineBtnStyle = (disabled = false) => ({
+  backgroundColor: "#fff",
+  color: disabled ? "#9ca3af" : "#374151",
+  padding: "0.55rem 0.9rem",
+  borderRadius: "0.5rem",
+  border: `1px solid ${disabled ? "#e5e7eb" : "#d1d5db"}`,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.4rem",
+  cursor: disabled ? "not-allowed" : "pointer",
+  fontSize: "0.8125rem",
+  fontWeight: "600",
+  transition: "background-color 0.15s ease, border-color 0.15s ease",
+});
+
+export const outlineBtnHoverStyle = {
+  backgroundColor: "#f8fafc",
+  borderColor: "#9ca3af",
+};
 
 export const parseQuotationData = (q) => ({
   projectName: q.projectName || "",

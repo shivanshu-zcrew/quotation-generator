@@ -65,7 +65,9 @@ const UAE_EMIRATES = [
     REJECTED: 'rejected',
     AWARDED: 'awarded',
     NOT_AWARDED: 'not_awarded',
-    SENT: 'sent'
+    SENT: 'sent',
+    CANCELLED: 'cancelled',
+    AMENDED: 'amended',
   };
   
   const QUOTATION_STATUS_LIST = Object.values(QUOTATION_STATUSES);

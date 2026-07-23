@@ -44,7 +44,6 @@ function CompanyModal({ company, onClose, onSaved }) {
     const e = {};
     if (!form.name.trim()) e.name = 'Company name is required';
     if (!form.code.trim()) e.code = 'Company code is required';
-    if (!form.zohoOrganizationId.trim()) e.zohoOrganizationId = 'Zoho Organisation ID is required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -117,7 +116,7 @@ function CompanyModal({ company, onClose, onSaved }) {
                 <label style={s.label}>Default Tax Rate (%)</label>
                 <input type="number" min="0" max="100" value={form.taxRate} onChange={e => set('taxRate', Number(e.target.value))} style={s.input} />
               </div>
-              {inp('Zoho Organisation ID', 'zohoOrganizationId', 'e.g. 916255903', true)}
+              {inp('Zoho Organisation ID', 'zohoOrganizationId', 'e.g. 916255903 (optional — required to mark quotations as awarded)', false)}
             </div>
           </Section>
 

@@ -79,17 +79,45 @@ router.delete('/:id/internal-documents/:docId', quotationController.removeIntern
 router.get('/:id/internal-documents/:docId/download', quotationController.getInternalDocumentDownloadUrl);
 
 // =============================================================
+// REVIEW COMMENT ROUTES (highlight-and-comment annotations)
+// =============================================================
+
+/**
+ * @route   POST /api/quotations/:id/comments
+ * @desc    Add a review comment anchored to a highlighted quote
+ * @access  Private (Ops, Admin)
+ */
+router.post('/:id/comments', quotationController.addReviewComment);
+
+/**
+ * @route   PATCH /api/quotations/:id/comments/:commentId/resolve
+ * @desc    Mark a review comment as resolved
+ * @access  Private (Creator, Admin)
+ */
+router.patch('/:id/comments/:commentId/resolve', quotationController.resolveReviewComment);
+
+/**
+ * @route   DELETE /api/quotations/:id/comments/:commentId
+ * @desc    Delete a review comment
+ * @access  Private (Comment author, Admin)
+ */
+router.delete('/:id/comments/:commentId', quotationController.deleteReviewComment);
+
+// =============================================================
 // USER QUOTATION ROUTES
 // =============================================================
 router.post('/', quotationController.createQuotation);
 router.get('/my-quotations', quotationController.getMyQuotations);
 router.get('/my-quotations/stats', quotationController.getMyQuotationsStats);
+// Must stay before '/:id' — otherwise Express would match "pdf-metrics" as an :id value.
+router.get('/pdf-metrics', adminOnly, quotationController.getPDFMetrics);
 router.get('/:id', quotationController.getQuotation);
 router.put('/:id', quotationController.updateQuotation);
 router.delete('/:id', quotationController.deleteQuotation);
 router.post('/generate-pdf', quotationController.generatePDF);
 router.patch('/:id/query-date', quotationController.updateQueryDate);
 router.patch('/:id/award', quotationController.awardQuotation);
+router.patch('/:id/cancel', quotationController.cancelQuotation);
 router.post('/presign-image', quotationController.presignItemImageUpload);
 
 // =============================================================

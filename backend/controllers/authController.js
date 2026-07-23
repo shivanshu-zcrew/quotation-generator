@@ -35,7 +35,7 @@ const checkPhoneExists = async (phone, excludeUserId = null) => {
 // @route   POST /api/auth/register
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone, password, role: requestedRole } = req.body;
+    const { name, email, phone, password, designation, role: requestedRole } = req.body;
 
     // Role assignment during registration is disabled for security.
     // Use the admin panel to update user roles after creation.
@@ -53,6 +53,7 @@ exports.register = async (req, res) => {
       name,
       email,
       phone: phone || '',
+      designation: designation || '',
       password,
       role: assignedRole
     });
@@ -69,6 +70,7 @@ exports.register = async (req, res) => {
       name: user.name,
       email: user.email,
       phone: user.phone,
+      designation: user.designation,
       role: user.role,
       token: generateToken(user._id)
     });
@@ -326,8 +328,8 @@ exports.getUserById = async (req, res) => {
 // @route   PUT /api/auth/users/:id
 exports.adminUpdateUser = async (req, res) => {
   try {
-    const { name, email, phone, role, isActive } = req.body;
-    
+    const { name, email, phone, designation, role, isActive } = req.body;
+
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -350,6 +352,7 @@ exports.adminUpdateUser = async (req, res) => {
     if (name) user.name = name;
     if (email) user.email = email;
     if (phone !== undefined) user.phone = phone;
+    if (designation !== undefined) user.designation = designation;
     if (role) user.role = role;
     if (isActive !== undefined) user.isActive = isActive;
 
@@ -372,6 +375,7 @@ exports.adminUpdateUser = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        designation: user.designation,
         role: user.role,
         isActive: user.isActive
       }
@@ -602,6 +606,19 @@ exports.setUserPassword = async (req, res) => {
 
 // @desc    Generate temporary password
 // @route   POST /api/auth/users/:id/generate-temp-password
+exports.getOpsManagers = async (req, res) => {
+  try {
+    const managers = await User.find({ role: 'ops_manager', isActive: true })
+      .select('_id name email')
+      .sort({ name: 1 })
+      .lean();
+    res.json({ success: true, managers });
+  } catch (error) {
+    logger.error('Failed to fetch ops managers', { error: error.message });
+    res.status(500).json({ success: false, message: 'Failed to fetch managers' });
+  }
+};
+
 exports.generateTemporaryPassword = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);

@@ -179,8 +179,10 @@ function RegisterRoute() {
 
 function QuotationNewRoute() {
   const navigate = useNavigate();
+  const location = useLocation();
   const user = useAppStore((s) => s.user);
-  return <QuotationScreenWithBack onBack={() => navigate(getHomePath(user?.role))} />;
+  const prefillFrom = location.state?.prefillFrom || null;
+  return <QuotationScreenWithBack onBack={() => navigate(getHomePath(user?.role))} prefillFrom={prefillFrom} />;
 }
 
 function CustomersRoute() { return <CustomersScreenWithBack />; }

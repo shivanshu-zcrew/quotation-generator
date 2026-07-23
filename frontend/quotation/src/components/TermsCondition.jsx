@@ -1,5 +1,52 @@
-import React, { useState } from "react";
-import { Plus, Trash2, Upload, AlertCircle } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Upload, AlertCircle } from "lucide-react";
+import ReactQuill from "react-quill-new";
+import "react-quill-new/dist/quill.snow.css";
+import { CommentableHtml, CommentBadge } from "./ReviewComments";
+import { sanitizeTermsHtml } from "../utils/sanitizeTermsHtml";
+import {
+  TERMS_TOOLBAR_MODULE,
+  TERMS_EDITOR_FORMATS,
+  TERMS_PICKER_LABEL_CSS,
+  TERMS_CONTENT_CSS,
+  TERMS_STICKY_TOOLBAR_CSS,
+  TERMS_TOOLBAR_THEME_CSS,
+} from "../utils/richTextConfig";
+
+// The Terms editor's toolbar sticks to the top of the page while scrolling
+// (see TERMS_STICKY_TOOLBAR_CSS). Some pages that host this editor (e.g.
+// ViewQuotationScreen) have their own sticky page header above it, which
+// would otherwise overlap at the same top:0 position. Measure any such
+// sticky content once on mount (and on resize) so the toolbar sticks just
+// below it instead, without every host page needing to know about /
+// configure this editor's internals.
+function useStickyToolbarOffset(ref) {
+  const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    const compute = () => {
+      const el = ref.current;
+      if (!el) return;
+      let total = 0;
+      document.querySelectorAll('[style*="sticky"]').forEach((node) => {
+        if (node === el || el.contains(node) || node.contains(el)) return;
+        const style = window.getComputedStyle(node);
+        if (style.position !== 'sticky') return;
+        const top = parseFloat(style.top);
+        if (Number.isNaN(top) || top > 4) return; // only headers pinned at the very top
+        if (node.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+          total += node.getBoundingClientRect().height;
+        }
+      });
+      setOffset(total);
+    };
+    compute();
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, [ref]);
+
+  return offset;
+}
 
 // Simple Section Structure
 export const newSection = () => ({
@@ -10,7 +57,29 @@ export const newSection = () => ({
 });
 
 // ============================================================
-// For PDF Export only
+// HTML content helpers
+// ============================================================
+// Old records stored plain text (with literal "\n" line breaks); new records
+// store real HTML produced by the Quill editor below. Both are kept in
+// `content` — this heuristic tells them apart wherever `content` is
+// consumed (viewer, PDF export, persistence).
+const HTML_TAG_RE = /<[a-z][\s\S]*>/i;
+export const isHtmlContent = (str) => HTML_TAG_RE.test(str || "");
+
+// Legacy plain text needs "\n" converted to "<br>" before being treated as
+// HTML — otherwise browsers/Quill collapse raw newlines to spaces.
+const toHtmlContent = (content) => {
+  if (!content) return "";
+  return isHtmlContent(content) ? content : content.replace(/\n/g, "<br>");
+};
+
+// Quill's empty-editor output is "<p><br></p>" — not an empty string, so a
+// plain truthiness/`.trim()` check treats it as "has content". Strip tags to
+// check for real visible text.
+const stripTags = (html) => (html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+
+// ============================================================
+// For PDF Export and for persistence (the payload sent to the backend)
 // ============================================================
 export const sectionsToHTML = (sections) => {
   const safeSections = Array.isArray(sections) ? sections : [];
@@ -18,17 +87,22 @@ export const sectionsToHTML = (sections) => {
   return safeSections.map((sec, idx) => {
     if (!sec) return "";
 
+    const contentHtml = toHtmlContent(sec.content);
+    const hasContent = stripTags(contentHtml).length > 0;
+    const hasHeading = !!sec.heading?.trim();
+
+    if (!hasHeading && !hasContent) return "";
+
+    // The common case (no heading) — persist/export the content directly.
+    // Wrapping it in a decorative div here and never unwrapping it on load
+    // would nest one more wrapper on every edit/save cycle.
+    if (!hasHeading) return contentHtml;
+
     let html = `<div style="margin-bottom:28px;">`;
-
-    if (sec.heading?.trim()) {
-      html += `<h4 style="font-weight:700;color:#0f172a;margin-bottom:12px;">${idx + 1}. ${sec.heading}</h4>`;
+    html += `<h4 style="font-weight:700;color:#0f172a;margin-bottom:12px;">${idx + 1}. ${sec.heading}</h4>`;
+    if (hasContent) {
+      html += `<div style="line-height:1.85;color:#374151;">${contentHtml}</div>`;
     }
-
-    if (sec.content?.trim()) {
-      const formatted = sec.content.replace(/\n/g, '<br>');
-      html += `<div style="line-height:1.85;color:#374151;white-space:pre-wrap;">${formatted}</div>`;
-    }
-
     html += `</div>`;
     return html;
   }).join("");
@@ -37,7 +111,7 @@ export const sectionsToHTML = (sections) => {
 export const sectionsToHTMLWithoutImages = sectionsToHTML;
 
 // ============================================================
-// htmlToSections - converts raw text to section format
+// htmlToSections - converts the persisted string back into section format
 // ============================================================
 export const htmlToSections = (rawText = "", existingImages = []) => {
   if (!rawText || typeof rawText !== 'string' || rawText.trim() === "") {
@@ -47,7 +121,7 @@ export const htmlToSections = (rawText = "", existingImages = []) => {
   return [{
     id: `sec-${Date.now()}`,
     heading: "",
-    content: rawText.trim(),
+    content: toHtmlContent(rawText.trim()),
     images: existingImages || []
   }];
 };
@@ -62,23 +136,18 @@ export default function TermsEditor({
   onTermsImagesUpload,
   onRemoveTermsImage,
   onError, // optional: parent can surface this via its snackbar/toast
+  commentProps,
 }) {
   const safeSections = Array.isArray(sections) && sections.length > 0 ? sections : [newSection()];
+
+  const rootRef = useRef(null);
+  const toolbarOffset = useStickyToolbarOffset(rootRef);
 
   // Inline error so the component gives feedback even with no parent handler.
   const [uploadError, setUploadError] = useState("");
 
   const updateSection = (id, patch) => {
     onChange(prev => prev.map(s => s?.id === id ? { ...s, ...patch } : s));
-  };
-
-  const addSection = () => {
-    onChange(prev => [...prev, newSection()]);
-  };
-
-  const deleteSection = (id) => {
-    if (safeSections.length === 1) return;
-    onChange(prev => prev.filter(s => s?.id !== id));
   };
 
   const raiseError = (msg) => {
@@ -113,8 +182,9 @@ export default function TermsEditor({
   };
 
   return (
-    <div>
-      {safeSections.map((sec, idx) => (
+    <div ref={rootRef} style={{ '--terms-toolbar-top': `${toolbarOffset}px` }}>
+      <style>{TERMS_PICKER_LABEL_CSS}{TERMS_TOOLBAR_THEME_CSS}{TERMS_STICKY_TOOLBAR_CSS}</style>
+      {safeSections.map((sec) => (
         <div key={sec.id} style={{
           background: "#fff",
           border: "1.5px solid #e2e8f0",
@@ -122,25 +192,18 @@ export default function TermsEditor({
           padding: "1.5rem",
           marginBottom: "1rem"
         }}>
-          {/* Main Textarea */}
-          <textarea
-            value={sec.content || ""}
-            onChange={(e) => updateSection(sec.id, { content: e.target.value })}
-            placeholder="Write your terms and conditions here...&#10;&#10;1. Main Point&#10;    a. Sub point with indentation"
-            rows={14}
-            style={{
-              width: "100%",
-              padding: "1rem",
-              border: "1px solid #e2e8f0",
-              borderRadius: "8px",
-              fontSize: "0.96rem",
-              lineHeight: "1.85",
-              resize: "vertical",
-              fontFamily: "inherit",
-              whiteSpace: "pre-wrap",
-              marginBottom: "1rem"
-            }}
-          />
+          {/* Rich text editor */}
+          {commentProps && <CommentBadge {...commentProps} />}
+          <div className="terms-quill-wrapper" style={{ marginBottom: "1rem" }}>
+            <ReactQuill
+              theme="snow"
+              defaultValue={sec.content || ""}
+              onChange={(html) => updateSection(sec.id, { content: html })}
+              placeholder="Write your terms and conditions here..."
+              modules={{ toolbar: TERMS_TOOLBAR_MODULE }}
+              formats={TERMS_EDITOR_FORMATS}
+            />
+          </div>
 
           {/* Add Image Button */}
           <div style={{ marginTop: "1rem" }}>
@@ -269,9 +332,9 @@ export default function TermsEditor({
 }
 
 // ============================================================
-// TermsViewer - displays images correctly
+// TermsViewer - displays formatted content and images
 // ============================================================
-export function TermsViewer({ sections = [], termsImages = [] }) {
+export function TermsViewer({ sections = [], termsImages = [], commentProps }) {
   const safeSections = Array.isArray(sections) ? sections : [];
 
   let allImages = [...termsImages];
@@ -287,7 +350,7 @@ export function TermsViewer({ sections = [], termsImages = [] }) {
   });
 
   const hasTextContent = safeSections.some(sec =>
-    (sec.heading?.trim()) || (sec.content?.trim())
+    (sec.heading?.trim()) || stripTags(toHtmlContent(sec.content)).length > 0
   );
 
   const hasImages = allImages.length > 0;
@@ -313,35 +376,45 @@ export function TermsViewer({ sections = [], termsImages = [] }) {
       border: "1px solid #e2e8f0",
       borderRadius: "12px",
       padding: "2.5rem",
-      lineHeight: "1.9",
       fontSize: "0.97rem",
       color: "#1f2937"
     }}>
-      {safeSections.map((sec, idx) => (
-        <div key={sec.id} style={{ marginBottom: "2.8rem" }}>
-          {sec.heading?.trim() && (
-            <h4 style={{
-              fontWeight: 700,
-              color: "#0f172a",
-              marginBottom: "1.25rem",
-              fontSize: "1.1rem"
-            }}>
-              {idx + 1}. {sec.heading}
-            </h4>
-          )}
+      <style>{TERMS_CONTENT_CSS}</style>
+      {safeSections.map((sec, idx) => {
+        const contentHtml = toHtmlContent(sec.content);
+        const hasContent = stripTags(contentHtml).length > 0;
+        return (
+          <div key={sec.id} style={{ marginBottom: "2.8rem" }}>
+            {sec.heading?.trim() && (
+              <h4 style={{
+                fontWeight: 700,
+                color: "#0f172a",
+                marginBottom: "1.25rem",
+                fontSize: "1.1rem"
+              }}>
+                {idx + 1}. {sec.heading}
+              </h4>
+            )}
 
-          {sec.content?.trim() && (
-            <div style={{
-              whiteSpace: "pre-wrap",
-              color: "#374151",
-              lineHeight: "1.85",
-              fontSize: "0.96rem"
-            }}>
-              {sec.content}
-            </div>
-          )}
-        </div>
-      ))}
+            {hasContent && (
+              commentProps ? (
+                <CommentableHtml
+                  {...commentProps}
+                  html={sanitizeTermsHtml(contentHtml)}
+                />
+              ) : (
+                <div className="ql-snow">
+                  <div
+                    className="ql-editor"
+                    style={{ padding: 0, color: "#374151" }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeTermsHtml(contentHtml) }}
+                  />
+                </div>
+              )
+            )}
+          </div>
+        );
+      })}
 
       {allImages.length > 0 && (
         <div style={{ marginTop: "2rem", display: "flex", flexWrap: "wrap", gap: "16px" }}>

@@ -2,7 +2,8 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
-  Building2, Mail, Phone, AlertCircle, CheckCircle, MapPin, Clock, Loader2, Calendar, Edit2, X
+  Building2, Mail, Phone, AlertCircle, CheckCircle, MapPin, Clock, Loader2, Calendar, Edit2, X,
+  History, Copy
 } from "lucide-react";
 import QuotationTemplate from "./QuotationTemplate";
 import { CompanyCurrencySelector, useCompanyCurrency } from "../components/CompanyCurrencySelector";
@@ -790,36 +791,70 @@ const LoadErrorBanner = ({ error, onRetry }) => (
 // ============================================================================
 // Main Component
 // ============================================================================
-export default function QuotationScreen({ onBack }) {
+export default function QuotationScreen({ onBack, prefillFrom }) {
   // --------------------------------------------------------------------------
   // Hooks & Store
   // --------------------------------------------------------------------------
   const { addQuotation } = useQuotations();
   const { selectedCompany, selectedCurrency, currency, exchangeRates } = useCompanyCurrency();
-  const { 
-    customers, 
-    isLoading: isCustomersLoading, 
-    isLoaded: isCustomersLoaded, 
-    loadAllCustomers, 
-    refreshCustomers, 
-    resetCustomers, 
-    syncCustomers 
+  const {
+    customers,
+    isLoading: isCustomersLoading,
+    isLoaded: isCustomersLoaded,
+    loadAllCustomers,
+    refreshCustomers,
+    resetCustomers,
+    syncCustomers
   } = useCustomerStore();
   const { loading: storeLoading, loadError, fetchAllData, initialized } = useAppStore();
 
   // --------------------------------------------------------------------------
   // State
   // --------------------------------------------------------------------------
-  const [step, setStep] = useState(STEP.SELECTION);
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [selectedItems, setSelectedItems] = useState([]);
+  // When prefillFrom is provided jump straight to the template step
+  const [step, setStep] = useState(prefillFrom ? STEP.TEMPLATE : STEP.SELECTION);
+  const [selectedCustomer, setSelectedCustomer] = useState(() => {
+    if (!prefillFrom) return null;
+    const snapshot = prefillFrom.customerSnapshot || {};
+    // customerId may be a populated object { _id, name, ... } or a raw ID string
+    const rawId = typeof prefillFrom.customerId === 'object'
+      ? prefillFrom.customerId?._id
+      : prefillFrom.customerId;
+    return { ...snapshot, _id: rawId || snapshot._id || null };
+  });
+  const [selectedItems, setSelectedItems] = useState(
+    prefillFrom
+      ? (prefillFrom.items || []).map((it, idx) => ({
+          id: `prefill-${idx}`,
+          itemId: it.itemId || `prefill-item-${idx}`,
+          name: it.name || it.description || '',
+          description: it.description || it.name || '',
+          quantity: it.quantity || 1,
+          unit: it.unit || '',
+          unitPrice: it.unitPrice || 0,
+          zohoItemId: it.zohoItemId || null,
+          imageUrls: it.imageUrls || [],
+          imagePaths: it.imagePaths || [],
+        }))
+      : []
+  );
   const [toast, setToast] = useState(null);
-  const [manualQueryDate, setManualQueryDate] = useState(getDefaultQueryDate());
+  const [manualQueryDate, setManualQueryDate] = useState(
+    prefillFrom?.queryDate
+      ? new Date(prefillFrom.queryDate).toISOString().split('T')[0]
+      : getDefaultQueryDate()
+  );
   const [isMobile, setIsMobile] = useState(false);
   const [isAddItemModalOpen, setIsAddItemModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
-  const [localCurrency, setLocalCurrency] = useState('AED');
+  const [localCurrency, setLocalCurrency] = useState(prefillFrom?.currency?.code || 'AED');
   const [localCompany, setLocalCompany] = useState(null);
+  // Tracks the last company value seen by the company-change effect.
+  // undefined = effect hasn't fired yet (distinguish from an explicit null/empty selection).
+  // React 18 StrictMode fires effects twice (mount → cleanup → remount → fire again);
+  // using the actual value (not a boolean flag) means the second fire with the same
+  // company is a no-op and doesn't wipe prefill state.
+  const prevCompanyRef = useRef(undefined);
   // --------------------------------------------------------------------------
   // Responsive Detection
   // --------------------------------------------------------------------------
@@ -856,16 +891,25 @@ export default function QuotationScreen({ onBack }) {
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (!selectedCompany) return;
-    
-    console.log('🏢 Company changed to:', selectedCompany);
-    
+
+    // First call ever: record the company and bail. This handles both the real
+    // initial mount and React 18 StrictMode's second fire (which re-uses the same
+    // ref value, so the `=== selectedCompany` guard below catches it too).
+    if (prevCompanyRef.current === undefined) {
+      prevCompanyRef.current = selectedCompany;
+      return;
+    }
+
+    // StrictMode fires the effect twice with the same deps — skip if nothing changed.
+    if (prevCompanyRef.current === selectedCompany) return;
+
+    // Genuine company switch — clear everything and reload.
+    prevCompanyRef.current = selectedCompany;
     resetCustomers();
     setSelectedCustomer(null);
-    loadAllCustomers(selectedCompany);
-    
     setSelectedItems([]);
     setManualQueryDate(getDefaultQueryDate());
-    
+    loadAllCustomers(selectedCompany);
   }, [selectedCompany, resetCustomers, loadAllCustomers]);
 
   useEffect(() => {
@@ -987,20 +1031,58 @@ export default function QuotationScreen({ onBack }) {
       customer: selectedCustomer?.name,
       contact: selectedCustomer?.phone || "",
       date: getTodayDate(),
-      expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-      queryDate: manualQueryDate, 
-      projectName: "", tl: "", trn: "", ourRef: "", ourContact: "", salesManagerEmail: "",
-      paymentTerms: "", deliveryTerms: "", tax: 0, discount: 0, notes: "", termsAndConditions: "", termsImage: null,
+      expiryDate: getDefaultQueryDate(),
+      queryDate: manualQueryDate,
+      projectName: prefillFrom?.projectName || "",
+      tl: "", trn: "", ourRef: "", ourContact: "", salesManagerEmail: "",
+      paymentTerms: prefillFrom?.paymentTerms || "",
+      deliveryTerms: prefillFrom?.deliveryTerms || "",
+      tax: prefillFrom?.taxPercent ?? (prefillFrom?.tax ?? 0),
+      discount: prefillFrom?.discountPercent ?? (prefillFrom?.discount ?? 0),
+      notes: prefillFrom?.notes || "",
+      termsAndConditions: prefillFrom?.termsAndConditions || "",
+      termsImage: null,
+      revisedFrom: prefillFrom?.revisedFrom || null,
+      revisionNote: prefillFrom?.revisionNote || "",
+      originalQuotationNumber: prefillFrom?.quotationNumber || null,
     };
     return (
-      <QuotationTemplate 
-        customer={selectedCustomer} 
-        selectedItems={selectedItems} 
-        selectedCurrency={localCurrency}   
-  selectedCompany={selectedCompany}     
-        quotationData={quotationData} 
-        onBack={handleBack} 
-      />
+      <>
+        {prefillFrom?.revisedFrom && (
+          <div style={{ padding: '1rem 1.5rem 0' }}>
+            <div style={{
+              maxWidth: 1280, margin: '0 auto',
+              background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: '0.5rem',
+              padding: '0.75rem 1rem', fontSize: '0.8125rem', fontWeight: 500, color: '#5b21b6',
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+            }}>
+              <History size={15} style={{ flexShrink: 0 }} />
+              <span>Revising <strong>{prefillFrom.quotationNumber}</strong> — the original will be kept. A new revision number (e.g. -R1) will be applied on save.</span>
+            </div>
+          </div>
+        )}
+        {prefillFrom?.duplicatedFrom && (
+          <div style={{ padding: '1rem 1.5rem 0' }}>
+            <div style={{
+              maxWidth: 1280, margin: '0 auto',
+              background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '0.5rem',
+              padding: '0.75rem 1rem', fontSize: '0.8125rem', fontWeight: 500, color: '#065f46',
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+            }}>
+              <Copy size={15} style={{ flexShrink: 0 }} />
+              <span>Duplicated from <strong>{prefillFrom.quotationNumber}</strong> — review and save to create a new independent quotation.</span>
+            </div>
+          </div>
+        )}
+        <QuotationTemplate
+          customer={selectedCustomer}
+          selectedItems={selectedItems}
+          selectedCurrency={localCurrency}
+          selectedCompany={selectedCompany}
+          quotationData={quotationData}
+          onBack={handleBack}
+        />
+      </>
     );
   }
 

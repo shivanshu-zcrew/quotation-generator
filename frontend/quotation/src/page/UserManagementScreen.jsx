@@ -228,7 +228,7 @@ const shimmerStyle = {
 
 const SkeletonRow = () => (
   <tr>
-    {[140, 180, 100, 80, 70, 110, 110, 80].map((w, i) => (
+    {[140, 180, 100, 100, 80, 70, 110, 110, 80].map((w, i) => (
       <td key={i} style={{ padding: "1rem", borderBottom: `1px solid ${T.lineSoft}` }}>
         <div style={{ ...shimmerStyle, width: w, height: 14 }} />
       </td>
@@ -327,6 +327,7 @@ function UserCard({ user, onEdit, onResetPassword, onDelete, actionLoading, form
         >
           {[
             { label: "Phone", value: user.phone || "—" },
+            { label: "Designation", value: user.designation || "—" },
             { label: "Last Login", value: formatDate(user.lastLogin) },
             { label: "Joined", value: formatDate(user.createdAt) },
           ].map(({ label, value }) => (
@@ -733,6 +734,7 @@ function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
     name: user?.name || "",
     email: user?.email || "",
     phone: user?.phone || "",
+    designation: user?.designation || "",
     role: user?.role || "user",
     isActive: user?.isActive ?? true,
   });
@@ -766,7 +768,8 @@ function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
     try {
       await authAPI.updateUser(user._id, {
         name: form.name.trim(), email: form.email.trim(),
-        phone: form.phone.trim(), role: form.role, isActive: form.isActive,
+        phone: form.phone.trim(), designation: form.designation.trim(),
+        role: form.role, isActive: form.isActive,
       });
       onSuccess("User updated successfully");
     } catch (err) {
@@ -802,6 +805,9 @@ function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
       <FieldGroup label="Phone (Optional)" error={errors.phone}>
         <input type="tel" name="edit-user-phone" autoComplete="off" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={busy} />
       </FieldGroup>
+      <FieldGroup label="Designation (Optional)" error={errors.designation}>
+        <input type="text" name="edit-user-designation" autoComplete="off" value={form.designation} onChange={(e) => set("designation", e.target.value)} placeholder="e.g. Sales Manager" style={inputStyle(errors.designation)} disabled={busy} />
+      </FieldGroup>
       <FieldGroup label="Role">
         <RolePicker value={form.role} onChange={(v) => set("role", v)} disabled={busy} />
       </FieldGroup>
@@ -815,7 +821,7 @@ function EditUserModal({ user, onClose, onSuccess, loading: parentLoading }) {
 // ─── Add User Modal ───────────────────────────────────────────────────────
 function AddUserForm({ onSuccess, onCancel }) {
   const [form, setForm] = useState({
-    name: "", email: "", phone: "", password: "", confirmPassword: "", role: "user",
+    name: "", email: "", phone: "", designation: "", password: "", confirmPassword: "", role: "user",
   });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
@@ -851,7 +857,8 @@ function AddUserForm({ onSuccess, onCancel }) {
     try {
       await authAPI.register({
         name: form.name.trim(), email: form.email.trim(),
-        phone: form.phone.trim(), password: form.password, role: form.role,
+        phone: form.phone.trim(), designation: form.designation.trim(),
+        password: form.password, role: form.role,
       });
       onSuccess(`User "${form.name}" created successfully`);
     } catch (err) {
@@ -884,6 +891,9 @@ function AddUserForm({ onSuccess, onCancel }) {
       </FieldGroup>
       <FieldGroup label="Phone (Optional)" error={errors.phone}>
         <input type="tel" name="new-user-phone" autoComplete="off" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="+971 XX XXX XXXX" style={inputStyle(errors.phone)} disabled={loading} />
+      </FieldGroup>
+      <FieldGroup label="Designation (Optional)" error={errors.designation}>
+        <input type="text" name="new-user-designation" autoComplete="off" value={form.designation} onChange={(e) => set("designation", e.target.value)} placeholder="e.g. Sales Manager" style={inputStyle(errors.designation)} disabled={loading} />
       </FieldGroup>
       <div style={{ display: "flex", gap: "0.75rem" }}>
         <FieldGroup label="Password" error={errors.password}>
@@ -1332,7 +1342,7 @@ export default function UserManagementScreen({ onBack }) {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["User", "Email", "Phone", "Role", "Status", "Last Login", "Joined", "Actions"].map((h) => (
+                    {["User", "Email", "Phone", "Designation", "Role", "Status", "Last Login", "Joined", "Actions"].map((h) => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1367,7 +1377,7 @@ export default function UserManagementScreen({ onBack }) {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["User", "Email", "Phone", "Role", "Status", "Last Login", "Joined", "Actions"].map((h) => (
+                    {["User", "Email", "Phone", "Designation", "Role", "Status", "Last Login", "Joined", "Actions"].map((h) => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1375,7 +1385,7 @@ export default function UserManagementScreen({ onBack }) {
                 <tbody>
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <EmptyState />
                       </td>
                     </tr>
@@ -1421,6 +1431,10 @@ export default function UserManagementScreen({ onBack }) {
                             ) : (
                               <span style={{ color: T.inkFaint, fontSize: "0.78rem" }}>—</span>
                             )}
+                          </td>
+                          {/* Designation */}
+                          <td style={{ padding: "1rem", fontSize: "0.8rem", color: T.inkSoft, verticalAlign: "middle" }}>
+                            {u.designation || <span style={{ color: T.inkFaint }}>—</span>}
                           </td>
                           {/* Role */}
                           <td style={{ padding: "1rem", verticalAlign: "middle" }}>

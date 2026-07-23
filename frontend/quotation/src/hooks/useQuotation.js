@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { quotationAPI } from '../services/api';
+import { quotationAPI, customerAPI } from '../services/api';
 import { useAppStore } from '../services/store';
+import useCustomerStore from '../services/customerStore';
 import { useItems } from './customHooks';
 import {
   parseQuotationData,
@@ -41,12 +42,14 @@ export function useQuotation() {
   const [quotationItems, setQuotationItems] = useState([]);
   const [tcSections, setTcSections] = useState([newSection()]);
   const [internalDocuments, setInternalDocuments] = useState([]);
+  const [reviewComments, setReviewComments] = useState([]);
   const [newDocuments, setNewDocuments] = useState([]);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
   const [fieldErrors, setFieldErrors] = useState({});
   const [previewDoc, setPreviewDoc] = useState(null);
   const [customerTaxTreatment, setCustomerTaxTreatment] = useState('non_vat_registered');
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
+  const [customerContactPersons, setCustomerContactPersons] = useState([]);
   const [termsImages, setTermsImages] = useState([]);
   const [signedUrls, setSignedUrls] = useState({});
   const [signedUrlsLoaded, setSignedUrlsLoaded] = useState(false);
@@ -67,6 +70,27 @@ export function useQuotation() {
   const originalQuotation = useMemo(() => {
     return (quotations || []).find((q) => q._id === id) || fetchedQ;
   }, [quotations, id, fetchedQ]);
+
+  // The populated customerId on a quotation doesn't carry contactPersons —
+  // fetch the full customer record so the Name field's dropdown can offer
+  // their existing contact persons.
+  const customerIdForContacts = originalQuotation?.customerId?._id || originalQuotation?.customerId || null;
+
+  useEffect(() => {
+    if (!customerIdForContacts) {
+      setCustomerContactPersons([]);
+      return;
+    }
+    let cancelled = false;
+    customerAPI.getById(customerIdForContacts)
+      .then((res) => {
+        if (!cancelled) setCustomerContactPersons(res.data?.data?.contactPersons || []);
+      })
+      .catch(() => {
+        if (!cancelled) setCustomerContactPersons([]);
+      });
+    return () => { cancelled = true; };
+  }, [customerIdForContacts]);
 
   // Load signed URLs for S3 images when quotation loads
   useEffect(() => {
@@ -159,8 +183,8 @@ export function useQuotation() {
       projectName: originalQuotation.projectName || "",
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
-      customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
-      customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
+      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
+      customerName: originalQuotation.customerSnapshot?.contactPerson || "",
       customerPhone: originalQuotation.customerPhone || originalQuotation.contact || originalQuotation.customerSnapshot?.phone || "",
       customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
@@ -223,6 +247,21 @@ export function useQuotation() {
       fileUrl: doc.s3Key ? signedUrls[doc.s3Key] : doc.fileUrl
     }));
     setInternalDocuments(docsWithUrls);
+
+    setReviewComments(originalQuotation.reviewComments || []);
+
+    const taxTreatment = originalQuotation.customerId?.taxTreatment ||
+      originalQuotation.customerTaxTreatment ||
+      originalQuotation.taxTreatment ||
+      'non_vat_registered';
+
+    const placeOfSupply = originalQuotation.customerId?.placeOfSupply ||
+      originalQuotation.customerPlaceOfSupply ||
+      originalQuotation.placeOfSupply ||
+      'Dubai';
+
+    setCustomerTaxTreatment(taxTreatment);
+    setCustomerPlaceOfSupply(placeOfSupply);
 
   }, [originalQuotation, signedUrls, signedUrlsLoaded, isEditing]);
 
@@ -342,6 +381,51 @@ export function useQuotation() {
     }
   }, [id, newDocuments, showSnack]);
 
+  const handleAddComment = useCallback(async (payload) => {
+    try {
+      const res = await quotationAPI.addComment(id, payload);
+      if (res?.data?.success) {
+        setReviewComments(prev => [...prev, res.data.comment]);
+        return { success: true };
+      }
+      throw new Error(res?.data?.message || 'Failed to add comment');
+    } catch (error) {
+      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to add comment';
+      showSnack(errorMessage, 'error');
+      return { success: false, error: errorMessage };
+    }
+  }, [id, showSnack]);
+
+  const handleResolveComment = useCallback(async (commentId) => {
+    try {
+      const res = await quotationAPI.resolveComment(id, commentId);
+      if (res?.data?.success) {
+        setReviewComments(prev => prev.map(c => c._id === commentId ? res.data.comment : c));
+        return { success: true };
+      }
+      throw new Error(res?.data?.message || 'Failed to resolve comment');
+    } catch (error) {
+      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to resolve comment';
+      showSnack(errorMessage, 'error');
+      return { success: false, error: errorMessage };
+    }
+  }, [id, showSnack]);
+
+  const handleDeleteComment = useCallback(async (commentId) => {
+    try {
+      const res = await quotationAPI.deleteComment(id, commentId);
+      if (res?.data?.success) {
+        setReviewComments(prev => prev.filter(c => c._id !== commentId));
+        return { success: true };
+      }
+      throw new Error(res?.data?.message || 'Failed to delete comment');
+    } catch (error) {
+      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to delete comment';
+      showSnack(errorMessage, 'error');
+      return { success: false, error: errorMessage };
+    }
+  }, [id, showSnack]);
+
   const handleDocumentDownload = useCallback((docId) => {
     const doc = [...internalDocuments, ...newDocuments].find(d =>
       (d._id === docId || d.id === docId)
@@ -446,7 +530,7 @@ export function useQuotation() {
           return newErrors;
         });
       }
-      value = parseInt(value, 10);
+      value = parseFloat(value);
     }
 
     if (field === 'unitPrice') {
@@ -725,8 +809,8 @@ export function useQuotation() {
       projectName: originalQuotation.projectName || "",
       scopeOfWork: originalQuotation.scopeOfWork || "",
       remark: originalQuotation.remark || "",
-      customer: originalQuotation.customer || originalQuotation.companySnapshot?.name || "",
-      customerName: originalQuotation.customerName || originalQuotation.customerId?.name || "",
+      customer: originalQuotation.customer || originalQuotation.customerSnapshot?.name || "",
+      customerName: originalQuotation.customerSnapshot?.contactPerson || "",
       customerPhone: originalQuotation.customerPhone || originalQuotation.contact || originalQuotation.customerSnapshot?.phone || "",
       customerEmail: originalQuotation.customerEmail || originalQuotation.customerSnapshot?.email || "",
       customerDesignation: originalQuotation.customerSnapshot?.designation || "",
@@ -902,6 +986,12 @@ const handleSave = useCallback(async () => {
     // Images are uploaded directly to S3 now — send keys only. Legacy
     // imagePaths (old Cloudinary) are preserved if present.
     const formattedItems = quotationItems.map((qi) => ({
+      // Preserve the item's existing id (parseQuotationItems sets qi.id to
+      // item._id when the item was already saved) so review comments stay
+      // anchored to it across this save — see reviewCommentSchema. The
+      // backend ignores this if it isn't a real ObjectId (e.g. a brand-new
+      // item's client-side fallback id).
+      ...(qi.id ? { _id: qi.id } : {}),
       itemId: qi.itemId || null,
       name: qi.name || "",
       description: qi.description || "",
@@ -983,6 +1073,20 @@ const handleSave = useCallback(async () => {
     if (result?.success) {
       const updatedQuotation = result.quotation;
 
+      // The backend echoes back the customer's up-to-date contactPersons
+      // (after the quotation's contact was added/merged into it) so the Name
+      // field's dropdown reflects the change immediately, without waiting
+      // for a fresh page load.
+      if (result.customerContactPersons) {
+        setCustomerContactPersons(result.customerContactPersons);
+        // Also patch the customer picker's cache (used by "create new
+        // quotation") so it doesn't keep serving a stale contact list until
+        // a full page reload.
+        if (customerIdForContacts) {
+          useCustomerStore.getState().updateCustomerContactPersons(customerIdForContacts, result.customerContactPersons);
+        }
+      }
+
       if (updatedQuotation) {
         setFetchedQ(updatedQuotation);
 
@@ -990,8 +1094,8 @@ const handleSave = useCallback(async () => {
           projectName: updatedQuotation.projectName || "",
           scopeOfWork: updatedQuotation.scopeOfWork || "",
           remark: updatedQuotation.remark || "",
-          customer: updatedQuotation.companySnapshot?.name || updatedQuotation.customer || "",
-          customerName: updatedQuotation.customerName || updatedQuotation.customerId?.name || "",
+          customer: updatedQuotation.customer || updatedQuotation.customerSnapshot?.name || "",
+          customerName: updatedQuotation.customerSnapshot?.contactPerson || "",
           customerPhone: updatedQuotation.customerPhone || updatedQuotation.contact || updatedQuotation.customerSnapshot?.phone || "",
           customerEmail: updatedQuotation.customerEmail || updatedQuotation.customerSnapshot?.email || "",
           customerDesignation: updatedQuotation.customerDesignation || updatedQuotation.customerSnapshot?.designation || "",
@@ -1070,7 +1174,8 @@ const handleSave = useCallback(async () => {
     setIsSaving(false);
   }
 }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
-    internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages]);
+    internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages,
+    customerIdForContacts]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
@@ -1178,6 +1283,10 @@ const handleSave = useCallback(async () => {
     setTcSections,
     internalDocuments,
     newDocuments,
+    reviewComments,
+    handleAddComment,
+    handleResolveComment,
+    handleDeleteComment,
     snackbar,
     setSnackbar,
     fieldErrors,
@@ -1192,6 +1301,7 @@ const handleSave = useCallback(async () => {
     setPreviewDoc,
     customerTaxTreatment,
     customerPlaceOfSupply,
+    customerContactPersons,
     termsImages,
     handleDocumentPreview,
     generatePDF,

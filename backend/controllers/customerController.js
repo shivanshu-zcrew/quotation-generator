@@ -170,40 +170,39 @@ const validateTaxData = (taxTreatment, taxRegistrationNumber, placeOfSupply) => 
   return errors;
 };
 
-const buildContactPersons = (name, email, phone, notes, contactPersons = [], mainContactSalutation = 'Mr.') => {
-  const allContactPersons = [];
+// Builds the contactPersons array from only what's explicitly provided —
+// it no longer synthesizes a default "primary contact" out of the
+// customer's own name/email/phone. If the customer already has a primary
+// (existingPrimary), it's preserved as-is (only salutation refreshed). If
+// not, the first explicitly-added contact becomes primary. If there's
+// nothing at all — no existing primary, no contacts added — the result is
+// simply empty; we don't invent one.
+const buildContactPersons = (contactPersons = [], existingPrimary = null, mainContactSalutation = 'Mr.') => {
+  const extras = contactPersons
+    .filter(cp => cp.firstName?.trim())
+    .map(cp => ({
+      salutation: cp.salutation || '',
+      firstName: cp.firstName.trim(),
+      lastName: cp.lastName?.trim() || '',
+      email: cp.email ? cp.email.trim().toLowerCase() : '',
+      workPhone: cp.workPhone?.trim() || cp.phone?.trim() || '',
+      mobile: cp.mobile?.trim() || '',
+      designation: cp.designation?.trim() || '',
+      department: cp.department?.trim() || '',
+      isPrimaryContact: false,
+      notes: cp.notes?.trim() || ''
+    }));
 
-  allContactPersons.push({
-    salutation: mainContactSalutation,
-    firstName: name.trim(),
-    lastName: '',
-    email: email ? email.trim().toLowerCase() : '',
-    workPhone: phone ? phone.trim() : '',
-    mobile: '',
-    designation: '',
-    department: '',
-    isPrimaryContact: true,
-    notes: notes ? notes.trim() : ''
-  });
-
-  for (const cp of contactPersons) {
-    if (cp.firstName?.trim()) {
-      allContactPersons.push({
-        salutation: cp.salutation || '',
-        firstName: cp.firstName.trim(),
-        lastName: cp.lastName?.trim() || '',
-        email: cp.email ? cp.email.trim().toLowerCase() : '',
-        workPhone: cp.workPhone?.trim() || cp.phone?.trim() || '',
-        mobile: cp.mobile?.trim() || '',
-        designation: cp.designation?.trim() || '',
-        department: cp.department?.trim() || '',
-        isPrimaryContact: false,
-        notes: cp.notes?.trim() || ''
-      });
-    }
+  if (existingPrimary) {
+    return [{ ...existingPrimary, salutation: mainContactSalutation }, ...extras];
   }
 
-  return allContactPersons;
+  if (extras.length > 0) {
+    extras[0].isPrimaryContact = true;
+    extras[0].salutation = mainContactSalutation;
+  }
+
+  return extras;
 };
 
 const buildUpdateData = (body, existingCustomer) => {
@@ -246,18 +245,19 @@ const buildUpdateData = (body, existingCustomer) => {
   }
 
   if (contactPersons !== undefined && Array.isArray(contactPersons)) {
-    updateData.contactPersons = buildContactPersons(
-      name || existingCustomer.name,
-      email || existingCustomer.email,
-      phone || existingCustomer.phone,
-      notes || existingCustomer.notes,
-      contactPersons,
-      mainContactSalutation
-    );
+    const existingPrimary = existingCustomer.contactPersons?.find(cp => cp.isPrimaryContact === true)
+      || existingCustomer.contactPersons?.[0]
+      || null;
+    updateData.contactPersons = buildContactPersons(contactPersons, existingPrimary, mainContactSalutation);
   } else if (mainContactSalutation !== undefined && existingCustomer.contactPersons?.length > 0) {
     updateData.contactPersons = [...existingCustomer.contactPersons];
-    updateData.contactPersons[0].salutation = mainContactSalutation;
-    updateData.contactPersons[0].updatedAt = new Date();
+    const primaryIdx = updateData.contactPersons.findIndex(cp => cp.isPrimaryContact === true);
+    const targetIdx = primaryIdx !== -1 ? primaryIdx : 0;
+    updateData.contactPersons[targetIdx] = {
+      ...updateData.contactPersons[targetIdx],
+      salutation: mainContactSalutation,
+      updatedAt: new Date()
+    };
   }
 
   return updateData;
@@ -344,7 +344,7 @@ exports.createCustomer = async (req, res) => {
       }
     }
 
-    const allContactPersons = buildContactPersons(name, email, phone, notes, contactPersons, mainContactSalutation);
+    const allContactPersons = buildContactPersons(contactPersons, null, mainContactSalutation);
 
     const isVatRegistered = taxTreatment.includes('vat_registered');
 

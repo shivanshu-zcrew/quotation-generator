@@ -29,7 +29,7 @@ const ConfirmModal = ({
     >
       <div style={styles.modal}>
         <div style={styles.header}>
-          <div style={styles.iconContainer}>
+          <div style={{ ...styles.iconContainer, backgroundColor: danger ? '#fee2e2' : '#e0e7ff' }}>
             <Icon size={20} color={danger ? '#dc2626' : '#4f46e5'} />
           </div>
           <h3 style={styles.title}>{title}</h3>

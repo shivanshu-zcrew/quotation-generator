@@ -289,6 +289,7 @@ export const authAPI = {
   getUserById: (id) => api.get(`/auth/users/${id}`), 
   deleteUser: (id) => api.delete(`/auth/users/${id}`),
   getAllUsers: () => api.get("/auth/users"),
+  getOpsManagers: () => api.get("/auth/ops-managers"),
   toggleUserStatus: (id) => api.put(`/auth/users/${id}/toggle-status`),
   changeUserRole: (id, data) => api.put(`/auth/users/${id}/role`, data),
   sendPasswordResetEmail: (userId) => api.post(`/auth/users/${userId}/send-reset-password`),
@@ -672,6 +673,24 @@ export const quotationAPI = {
   
   presignItemImage: (contentType, fileName, itemIndex, size) =>
     api.post('/quotations/presign-image', { contentType, fileName, itemIndex, size }),
+
+  addComment: async (id, data) => {
+    const response = await api.post(`/quotations/${id}/comments`, data);
+    deduplicator.clear(`/quotations/${id}`);
+    return response;
+  },
+
+  resolveComment: async (id, commentId) => {
+    const response = await api.patch(`/quotations/${id}/comments/${commentId}/resolve`);
+    deduplicator.clear(`/quotations/${id}`);
+    return response;
+  },
+
+  deleteComment: async (id, commentId) => {
+    const response = await api.delete(`/quotations/${id}/comments/${commentId}`);
+    deduplicator.clear(`/quotations/${id}`);
+    return response;
+  },
     
   delete: async (id) => {
     const response = await api.delete(`/quotations/${id}`);
@@ -683,6 +702,14 @@ export const quotationAPI = {
   },
   
   updateQueryDate: (id, date) => api.patch(`/quotations/${id}/query-date`, { queryDate: date }),
+
+  cancel: async (id, data) => {
+    const response = await api.patch(`/quotations/${id}/cancel`, data);
+    quotationCache.clearEndpoint('/quotations/my-quotations');
+    quotationCache.clearEndpoint('/quotations');
+    adminQuotationCache.clear();
+    return response;
+  },
   
   awardQuotation: async (id, awarded, awardNote = "") => {
     const response = await api.patch(`/quotations/${id}/award`, { awarded, awardNote });
@@ -717,24 +744,28 @@ export const quotationAPI = {
       return { success: true };
     } catch (error) {
       console.error('PDF generation error:', error);
-      throw error;
+      // responseType:'blob' applies to error responses too, so a JSON error
+      // body from the backend (e.g. "PDF generation queue is full") arrives
+      // as a Blob instead of parsed JSON — surface its real message instead
+      // of the generic "Request failed with status code 503" Axios default.
+      let errorToThrow = error;
+      const errorBlob = error.response?.data;
+      if (errorBlob instanceof Blob && errorBlob.type?.includes('json')) {
+        try {
+          const parsed = JSON.parse(await errorBlob.text());
+          if (parsed?.message) {
+            errorToThrow = new Error(parsed.message);
+            errorToThrow.status = error.response.status;
+          }
+        } catch {
+          // couldn't parse the blob — fall through with the original error
+        }
+      }
+      throw errorToThrow;
     }
   },
   
-  testPDF: async () => {
-    const response = await api.post("/quotations/test-pdf", {}, { responseType: "blob", timeout: 30000 });
-    const url = URL.createObjectURL(response.data);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = "test.pdf";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    return { success: true };
-  },
-  
-  getSignedUrl: (s3Key, expiresIn = 3600) => 
+  getSignedUrl: (s3Key, expiresIn = 3600) =>
     api.get(`/quotations/signed-url/${encodeURIComponent(s3Key)}`, { params: { expiresIn } }),
   
   getBatchSignedUrls: (s3Keys, expiresIn = 3600) => 

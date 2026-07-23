@@ -176,16 +176,14 @@ exports.getAllOpsQuotations = async (req, res) => {
     }
 
     query.status = {
-      $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded']
+      $in: ['pending', 'pending_admin', 'ops_approved', 'ops_rejected', 'rejected', 'approved', 'awarded', 'not_awarded', 'cancelled', 'amended']
     };
 
-    if (status && status !== 'all') {
-      if (status === 'pending') {
-        query.status = { $in: ['pending', 'pending_admin'] };
-      } else {
-        query.status = status;
-      }
-    }
+    // Quotations created BY an admin skip ops review entirely and are only
+    // that admin's business — ops managers shouldn't see them in any tab.
+    // (Doesn't affect quotations merely *edited* by an admin — those keep
+    // their original creator's role in createdBySnapshot.)
+    query['createdBySnapshot.role'] = { $ne: 'admin' };
 
     if (search && search.trim()) {
       query.$text = { $search: search.trim() };
@@ -195,6 +193,14 @@ exports.getAllOpsQuotations = async (req, res) => {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
       if (toDate) query.createdAt.$lte = new Date(toDate);
+    }
+
+    // baseQuery: all filters EXCEPT status narrowing — used for accurate tab counts
+    const baseQuery = { ...query };
+
+    // Narrow status for the paginated results
+    if (status && status !== 'all') {
+      query.status = status === 'pending' ? { $in: ['pending', 'pending_admin'] } : status;
     }
 
     // Build sort object (with _id tiebreaker for stable pagination on
@@ -228,15 +234,11 @@ exports.getAllOpsQuotations = async (req, res) => {
         break;
     }
 
-    // Fetch page, total count, and per-status counts — all computed in the DB.
-    // The status counts use an aggregation instead of loading every matching
-    // document into memory (the old `Quotation.find(query).lean()` approach
-    // allocated the whole filtered collection on every request).
     const effectiveSort = search && search.trim()
       ? { score: { $meta: 'textScore' }, ...sortObject }
       : sortObject;
 
-    const [quotations, totalCount, statusAgg] = await Promise.all([
+    const [quotations, totalCount, statusAgg, totalAll] = await Promise.all([
       listPopulate(
         Quotation.find(query)
           .sort(effectiveSort)
@@ -244,10 +246,12 @@ exports.getAllOpsQuotations = async (req, res) => {
           .limit(parsedLimit)
       ).lean(),
       Quotation.countDocuments(query),
+      // Aggregation uses baseQuery so counts are not affected by the active tab
       Quotation.aggregate([
-        { $match: query },
+        { $match: baseQuery },
         { $group: { _id: '$status', count: { $sum: 1 } } }
-      ])
+      ]),
+      Quotation.countDocuments(baseQuery),
     ]);
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
@@ -257,13 +261,16 @@ exports.getAllOpsQuotations = async (req, res) => {
     statusAgg.forEach((s) => { cmap[s._id] = s.count; });
 
     const counts = {
-      all: totalCount,
+      all: totalAll,
       pending: (cmap['pending'] || 0) + (cmap['pending_admin'] || 0),
       ops_approved: cmap['ops_approved'] || 0,
       ops_rejected: cmap['ops_rejected'] || 0,
       rejected: cmap['rejected'] || 0,
       approved: cmap['approved'] || 0,
       awarded: cmap['awarded'] || 0,
+      not_awarded: cmap['not_awarded'] || 0,
+      cancelled: cmap['cancelled'] || 0,
+      amended: cmap['amended'] || 0,
     };
 
     const duration = Date.now() - startTime;
@@ -799,33 +806,35 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     const skip = (parsedPage - 1) * parsedLimit;
     
     let query = {};
-    
+
     // Handle company filter - if no companyId or 'all', don't filter by company
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
-        query.companyId = companyId;
+        // Cast to ObjectId so aggregate() $match works (aggregate bypasses Mongoose auto-cast)
+        query.companyId = new mongoose.Types.ObjectId(companyId);
       }
     }
-    
-    if (status && status !== 'all') query.status = status;
+
     if (userId) query.createdBy = userId;
-    
+
     if (fromDate || toDate) {
       query.createdAt = {};
       if (fromDate) query.createdAt.$gte = new Date(fromDate);
       if (toDate) query.createdAt.$lte = new Date(toDate);
     }
-    
+
     if (search && search.trim()) {
       query.$text = { $search: search.trim() };
     }
 
-    // Get total count for pagination
-    const totalCount = await Quotation.countDocuments(query);
-    
+    // baseQuery: all filters EXCEPT status — used for accurate tab counts
+    const baseQuery = { ...query };
+
+    // Narrow to specific status for paginated results
+    if (status && status !== 'all') query.status = status;
+
     // Build sort object
     let sortObject = {};
-    // Map frontend field names to database field names
     switch (sortBy) {
       case 'quotationNumber':
         sortObject = { quotationNumber: sortDir === 'asc' ? 1 : -1 };
@@ -858,24 +867,48 @@ exports.getAllQuotationsAdmin = async (req, res) => {
         sortObject = { createdAt: sortDir === 'asc' ? 1 : -1 };
         break;
     }
-    
+
     logger.debug('Admin sort query', { sortBy, sortDir, sortObject });
-    
+
     const effectiveSortAdmin = search && search.trim()
       ? { score: { $meta: 'textScore' }, ...sortObject }
       : sortObject;
 
-    const quotations = await listPopulate(
-      Quotation.find(query)
-        .sort(effectiveSortAdmin)
-        .skip(skip)
-        .limit(parsedLimit)
-    ).lean();
+    const [quotations, totalCount, statusAgg, totalAll] = await Promise.all([
+      listPopulate(
+        Quotation.find(query)
+          .sort(effectiveSortAdmin)
+          .skip(skip)
+          .limit(parsedLimit)
+      ).lean(),
+      Quotation.countDocuments(query),
+      // Aggregation on baseQuery so tab counts are independent of the active tab filter
+      Quotation.aggregate([
+        { $match: baseQuery },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Quotation.countDocuments(baseQuery),
+    ]);
+
+    const acmap = {};
+    statusAgg.forEach(s => { acmap[s._id] = s.count; });
+    const counts = {
+      all:          totalAll,
+      pending:      (acmap['pending'] || 0) + (acmap['pending_admin'] || 0),
+      ops_approved: acmap['ops_approved'] || 0,
+      ops_rejected: acmap['ops_rejected'] || 0,
+      rejected:     acmap['rejected']     || 0,
+      approved:     acmap['approved']     || 0,
+      awarded:      acmap['awarded']      || 0,
+      not_awarded:  acmap['not_awarded']  || 0,
+      cancelled:    acmap['cancelled']    || 0,
+      amended:      acmap['amended']      || 0,
+    };
 
     const sanitizedQuotations = quotations.map(sanitizeQuotation);
     const totalPages = Math.ceil(totalCount / parsedLimit);
     const duration = Date.now() - startTime;
-    
+
     LoggerHelper.logDBQuery('Quotation', 'admin find with pagination', query, duration);
     logger.info(`Admin fetched ${sanitizedQuotations.length} quotations (page ${parsedPage}/${totalPages})`, {
       totalCount,
@@ -888,10 +921,11 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       duration: `${duration}ms`,
       adminId: req.user?.id
     });
-    
+
     res.json({
       success: true,
       quotations: sanitizedQuotations,
+      counts,
       pagination: {
         page: parsedPage,
         limit: parsedLimit,
@@ -952,14 +986,16 @@ exports.getAdminDashboardStats = async (req, res) => {
 
     // ✅ Define all statuses that admin can see
     const adminVisibleStatuses = [
-      'pending', 
+      'pending',
       'pending_admin',
-      'ops_approved', 
-      'ops_rejected', 
-      'rejected', 
-      'approved', 
-      'awarded', 
+      'ops_approved',
+      'ops_rejected',
+      'rejected',
+      'approved',
+      'awarded',
       'not_awarded',
+      'cancelled',
+      'amended',
       'draft',
       'sent'
     ];
@@ -988,6 +1024,8 @@ exports.getAdminDashboardStats = async (req, res) => {
     const approvedCount = countsMap['approved'] || 0;
     const awardedCount = countsMap['awarded'] || 0;
     const notAwardedCount = countsMap['not_awarded'] || 0;
+    const cancelledCount = countsMap['cancelled'] || 0;
+    const amendedCount = countsMap['amended'] || 0;
     const draftCount = countsMap['draft'] || 0;
     const sentCount = countsMap['sent'] || 0;
     
@@ -1088,6 +1126,8 @@ exports.getAdminDashboardStats = async (req, res) => {
           rejected: rejectedCount || 0,
           awarded: awardedCount || 0,
           not_awarded: notAwardedCount || 0,
+          cancelled: cancelledCount || 0,
+          amended: amendedCount || 0,
           sent: sentCount || 0,
         },
         conversionDetails: conversionRateData,
@@ -1102,6 +1142,8 @@ exports.getAdminDashboardStats = async (req, res) => {
           approved: approvedCount || 0,
           awarded: awardedCount || 0,
           not_awarded: notAwardedCount || 0,
+          cancelled: cancelledCount || 0,
+          amended: amendedCount || 0,
         }
       }
     });
@@ -1143,16 +1185,23 @@ exports.getOpsDashboardStats = async (req, res) => {
       }
     }
 
+    // Admin-created quotations aren't shown to ops anywhere (see
+    // getAllOpsQuotations) — exclude them from these stats too so tab
+    // counts match what's actually in the list.
+    matchStage = { ...matchStage, 'createdBySnapshot.role': { $ne: 'admin' } };
+
     // ✅ Include ALL statuses that Ops can see
     const opsVisibleStatuses = [
-      'pending', 
+      'pending',
       'pending_admin',
-      'ops_approved', 
-      'ops_rejected', 
-      'rejected', 
-      'approved', 
-      'awarded', 
-      'not_awarded'
+      'ops_approved',
+      'ops_rejected',
+      'rejected',
+      'approved',
+      'awarded',
+      'not_awarded',
+      'cancelled',
+      'amended',
     ];
     
     // Run all aggregations in parallel for better performance
@@ -1262,6 +1311,8 @@ exports.getOpsDashboardStats = async (req, res) => {
     const approvedCount = countsMap['approved'] || 0;
     const awardedCount = countsMap['awarded'] || 0;
     const notAwardedCount = countsMap['not_awarded'] || 0;
+    const cancelledCount = countsMap['cancelled'] || 0;
+    const amendedCount = countsMap['amended'] || 0;
 
     // Extract customer stats from facet result
     const customerStatsData = customerStats[0] || {};
@@ -1315,6 +1366,8 @@ exports.getOpsDashboardStats = async (req, res) => {
         approved: approvedCount || 0,
         awarded: awardedCount || 0,
         not_awarded: notAwardedCount || 0,
+        cancelled: cancelledCount || 0,
+        amended: amendedCount || 0,
       }
     };
 

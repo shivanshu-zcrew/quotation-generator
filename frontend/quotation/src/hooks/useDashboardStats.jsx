@@ -53,6 +53,8 @@ export const useDashboardStats = () => {
     rejected: dashboardStats?.rejected || 0,
     awarded: dashboardStats?.awarded || 0,
     notAwarded: dashboardStats?.notAwarded || 0,
+    cancelled: dashboardStats?.cancelled || 0,
+    amended: dashboardStats?.amended || 0,
     totalValue: dashboardStats?.totalValue || 0,
     awardedValue: dashboardStats?.awardedValue || 0,
     totalCustomers: dashboardStats?.totalCustomers || 0,

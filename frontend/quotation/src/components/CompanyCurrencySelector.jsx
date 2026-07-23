@@ -60,7 +60,6 @@ export const CompanyCurrencySelector = memo(({
   const setSelectedCompany = useAppStore(s => s.setSelectedCompany);
   const setSelectedCurrency = useAppStore(s => s.setSelectedCurrency);
   const fetchExchangeRates = useAppStore(s => s.fetchExchangeRates);
-  const fetchQuotationsForCompany = useAppStore(s => s.fetchQuotationsForCompany);
   const refetchQuotations = useAppStore(s => s.refetchQuotations);
   const user = useAppStore(s => s.user);
   const isAdmin = user?.role === 'admin';
@@ -152,7 +151,7 @@ export const CompanyCurrencySelector = memo(({
               await fetchExchangeRates(company.baseCurrency);
             }
           }
-          await fetchQuotationsForCompany(company._id);
+          await refetchQuotations({ companyId: company._id, forceRefresh: true });
           onCompanyChange?.(company._id, { isAllCompanies: false });
         }
       }
@@ -161,8 +160,8 @@ export const CompanyCurrencySelector = memo(({
     } finally {
       setIsChanging(false);
     }
-  }, [companies, setSelectedCompany, setSelectedCurrency, onCompanyChange, onCurrencyChange, 
-      fetchExchangeRates, fetchQuotationsForCompany, refetchQuotations, isChanging, 
+  }, [companies, setSelectedCompany, setSelectedCurrency, onCompanyChange, onCurrencyChange,
+      fetchExchangeRates, refetchQuotations, isChanging,
       localCurrencyMode, localFetchExchangeRates]);
 
   // Create debounced version
