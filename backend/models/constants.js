@@ -16,7 +16,8 @@ const UAE_EMIRATES = [
     { name: 'Kuwait', code: 'KW' },
     { name: 'Qatar', code: 'QA' },
     { name: 'Bahrain', code: 'BH' },
-    { name: 'Oman', code: 'OM' }
+    { name: 'Oman', code: 'OM' },
+    { name: 'United Arab Emirates', code: 'AE' }
   ];
   
   const GCC_COUNTRY_NAMES = GCC_COUNTRIES.map(c => c.name);
@@ -33,6 +34,11 @@ const UAE_EMIRATES = [
   const TAX_TREATMENT_VALUES = TAX_TREATMENTS.map(t => t.value);
   
   // Currencies
+  // No Zoho currency_id here on purpose — each Zoho org assigns its own
+  // currency_id per currency code (verified: AED's id differs across all 3
+  // orgs), so a single hardcoded id per code would be wrong for 2 of the 3
+  // companies. The actual id is looked up live, per company, in
+  // customerServices.js's _getCurrencyId.
   const CURRENCY_OPTIONS = {
     'AED': { code: 'AED', symbol: 'د.إ', name: 'United Arab Emirates Dirham', decimalPlaces: 2, flag: '🇦🇪' },
     'SAR': { code: 'SAR', symbol: 'ر.س', name: 'Saudi Riyal', decimalPlaces: 2, flag: '🇸🇦' },

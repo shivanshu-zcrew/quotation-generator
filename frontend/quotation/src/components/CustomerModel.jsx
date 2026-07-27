@@ -7,6 +7,18 @@ import { COUNTRY_CODES } from '../utils/constants';
 import { useAppStore } from '../services/store';
 import PhoneInput from './PhoneInput';
 
+// Companies under this Zoho org are Saudi-based — their customers are always
+// GCC-country contacts (never a UAE emirate), so the tax/place-of-supply UI
+// is restricted accordingly (see isSaudiCompany below).
+const SAUDI_COMPANY_ZOHO_ORG_ID = '932531766';
+
+const ADDRESS_FIELD_LABELS = {
+  address: 'Street address',
+  city: 'City',
+  state: 'State',
+  zipcode: 'Zip code',
+};
+
 // ─────────────────────────────────────────────────────────────────────────
 // Responsive Hook
 // ─────────────────────────────────────────────────────────────────────────
@@ -45,7 +57,11 @@ const ErrorSummary = ({ errors, onTabChange, setActiveTab }) => {
     email: { tab: 'basic', message: 'Valid Email is required' },
     companyName: { tab: 'basic', message: 'Company Name is required' },
     taxRegistrationNumber: { tab: 'tax', message: 'TRN is required for VAT registered customers' },
-    company: { tab: 'company', message: 'Please select a company' }
+    company: { tab: 'company', message: 'Please select a company' },
+    address: { tab: 'basic', message: 'Street address is required for this tax treatment' },
+    city: { tab: 'basic', message: 'City is required for this tax treatment' },
+    state: { tab: 'basic', message: 'State is required for this tax treatment' },
+    zipcode: { tab: 'basic', message: 'Zip code is required for this tax treatment' },
   };
   
   Object.keys(errors).forEach(field => {
@@ -137,6 +153,15 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [showCompanyError, setShowCompanyError] = useState(false);
 
+  // The company whose customer is actually being created/edited right now —
+  // either the one picked in the "All Companies" selector, or the app's
+  // currently active company.
+  const activeCompanyId = needsCompanySelection ? selectedCompanyId : selectedCompany;
+  const isSaudiCompany = useMemo(
+    () => companies.find(c => c._id === activeCompanyId)?.zohoOrganizationId === SAUDI_COMPANY_ZOHO_ORG_ID,
+    [companies, activeCompanyId]
+  );
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -149,8 +174,10 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     website: '',
     notes: '',
     taxTreatment: 'non_vat_registered',
-    trnExpiryDate: '',     
+    trnExpiryDate: '',
     taxRegistrationNumber: '',
+    tradeLicenseNumber: '',
+    tradeLicenseExpiryDate: '',
     placeOfSupply: 'Dubai',
     defaultCurrency: 'AED',
     contactPersons: [],
@@ -176,7 +203,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
 
   const SALUTATIONS = ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Prof.', 'Miss', 'Master'];
   const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
-  const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
+  const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman', 'United Arab Emirates'];
 
   const CURRENCY_OPTIONS = [
     { code: 'AED', label: '🇦🇪 AED', symbol: 'د.إ' },
@@ -228,6 +255,10 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
           trnExpiryDate: initialData.trnExpiryDate
             ? new Date(initialData.trnExpiryDate).toISOString().split('T')[0]
             : '',
+          tradeLicenseNumber: initialData.tradeLicenseNumber || '',
+          tradeLicenseExpiryDate: initialData.tradeLicenseExpiryDate
+            ? new Date(initialData.tradeLicenseExpiryDate).toISOString().split('T')[0]
+            : '',
           placeOfSupply: initialData.placeOfSupply || 'Dubai',
           defaultCurrency: initialData.defaultCurrency?.code || 'AED',
           contactPersons: contactPersonsList.filter((_, idx) => idx !== resolvedMainIndex),
@@ -238,8 +269,12 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         setMainContactInfo(null);
         setFormData({
           name: '', email: '', phone: '', address: '', city: '', state: '', zipcode: '',
-          companyName: '', website: '', notes: '', taxTreatment: 'non_vat_registered',
-          taxRegistrationNumber: '',trnExpiryDate: '', placeOfSupply: 'Dubai', defaultCurrency: 'AED',
+          companyName: '', website: '', notes: '',
+          taxTreatment: isSaudiCompany ? 'gcc_non_vat_registered' : 'non_vat_registered',
+          taxRegistrationNumber: '', trnExpiryDate: '',
+          tradeLicenseNumber: '', tradeLicenseExpiryDate: '',
+          placeOfSupply: isSaudiCompany ? 'Saudi Arabia' : 'Dubai',
+          defaultCurrency: 'AED',
           contactPersons: [], mainContactSalutation: 'Mr.'
         });
       }
@@ -249,22 +284,43 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
       setEditingContactIndex(null);
       setActiveTab('basic');
     }
-  }, [initialData, isOpen, needsCompanySelection, selectedCompany]);
+  }, [initialData, isOpen, needsCompanySelection, selectedCompany, isSaudiCompany]);
 
   const isVatRegistered = useMemo(() =>
     formData.taxTreatment === 'vat_registered' || formData.taxTreatment === 'gcc_vat_registered',
     [formData.taxTreatment]
   );
 
+  // All treatments except plain "Non-VAT Registered" require a full
+  // billing address — VAT Registered and GCC VAT Registered per Zoho's VAT
+  // invoicing requirement, and GCC Non-VAT Registered since a GCC contact's
+  // address is needed to establish their place of supply outside the UAE.
+  const isAddressRequired = formData.taxTreatment !== 'non_vat_registered';
+
+  // Saudi companies only ever deal with GCC-country customers — never show
+  // the UAE Emirates picker for them, regardless of taxTreatment.
   const showUaeEmirates = useMemo(() =>
-    formData.taxTreatment === 'vat_registered' || formData.taxTreatment === 'non_vat_registered',
-    [formData.taxTreatment]
+    !isSaudiCompany && (formData.taxTreatment === 'vat_registered' || formData.taxTreatment === 'non_vat_registered'),
+    [formData.taxTreatment, isSaudiCompany]
   );
 
-  const placeOfSupplyOptions = useMemo(() =>
-    showUaeEmirates ? UAE_EMIRATES : GCC_COUNTRIES,
-    [showUaeEmirates]
-  );
+  const isGccTreatment = formData.taxTreatment === 'gcc_vat_registered' || formData.taxTreatment === 'gcc_non_vat_registered';
+
+  // Saudi companies keep all 4 tax treatments, but the country list per
+  // treatment differs from a regular UAE company: VAT Reg/Non-VAT are locked
+  // to Saudi Arabia only (never a UAE emirate), while both GCC treatments
+  // offer the full GCC country list — same as a UAE company's GCC options.
+  const placeOfSupplyOptions = useMemo(() => {
+    if (isSaudiCompany) return isGccTreatment ? GCC_COUNTRIES : ['Saudi Arabia'];
+    return showUaeEmirates ? UAE_EMIRATES : GCC_COUNTRIES;
+  }, [isSaudiCompany, isGccTreatment, showUaeEmirates]);
+
+  const taxTreatmentOptions = useMemo(() => ([
+    { value: 'vat_registered', label: isMobile ? 'VAT' : 'VAT Reg', desc: 'UAE VAT' },
+    { value: 'non_vat_registered', label: isMobile ? 'Non-VAT' : 'Non-VAT', desc: 'UAE' },
+    { value: 'gcc_vat_registered', label: isMobile ? 'GCC VAT' : 'GCC VAT', desc: 'GCC VAT' },
+    { value: 'gcc_non_vat_registered', label: isMobile ? 'GCC Non' : 'GCC Non', desc: 'GCC' }
+  ]), [isMobile]);
 
   const getTaxTreatmentColor = (treatment) => {
     const colors = {
@@ -283,7 +339,8 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
       setFormData(prev => ({ ...prev, [name]: cleaned }));
       if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }));
     } else if (name === 'taxTreatment') {
-      const defaultPlace = (value === 'vat_registered' || value === 'non_vat_registered') ? 'Dubai' : 'Saudi Arabia';
+      const isUaeTreatment = value === 'vat_registered' || value === 'non_vat_registered';
+      const defaultPlace = (isSaudiCompany || !isUaeTreatment) ? 'Saudi Arabia' : 'Dubai';
       setFormData(prev => ({
         ...prev,
         [name]: value,
@@ -314,6 +371,13 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         newErrors.email = 'Invalid email';
       } else {
         delete newErrors.email;
+      }
+    }
+    if (['address', 'city', 'state', 'zipcode'].includes(field)) {
+      if (isAddressRequired && !formData[field]?.trim()) {
+        newErrors[field] = `${ADDRESS_FIELD_LABELS[field]} required`;
+      } else {
+        delete newErrors[field];
       }
     }
     setErrors(newErrors);
@@ -386,6 +450,13 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     if (isVatRegistered && !formData.taxRegistrationNumber?.trim()) {
       newErrors.taxRegistrationNumber = 'TRN required';
     }
+
+    // VAT-registered customers need a full billing address
+    if (isAddressRequired) {
+      ['address', 'city', 'state', 'zipcode'].forEach((field) => {
+        if (!formData[field]?.trim()) newErrors[field] = `${ADDRESS_FIELD_LABELS[field]} required`;
+      });
+    }
     
     // Company validation
     if (needsCompanySelection && !selectedCompanyId) {
@@ -402,7 +473,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     setValidationAttempted(true);
     
     // Mark all fields as touched to show inline errors
-    const allFields = ['name', 'email'];
+    const allFields = ['name', 'email', 'address', 'city', 'state', 'zipcode'];
     const touchedFields = {};
     allFields.forEach(field => { touchedFields[field] = true; });
     setTouched(touchedFields);
@@ -741,26 +812,71 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                         marginBottom: isMobile ? '1rem' : '1.5rem'
                       }}>
                         <h4 style={{ margin: '0 0 1rem 0', fontSize: isMobile ? '0.75rem' : '0.875rem', fontWeight: '600', color: '#0f172a' }}>
-                          📍 Address
+                          📍 Address{isAddressRequired && <span style={{ color: '#ef4444' }}> *</span>}
                         </h4>
                         <div style={{ marginBottom: '0.75rem' }}>
+                          <label style={labelStyle}>
+                            Street Address {isAddressRequired && <span style={{ color: '#ef4444' }}>*</span>}
+                          </label>
                           <input
                             type="text"
                             name="address"
                             value={formData.address}
                             onChange={handleChange}
+                            onBlur={() => handleBlur('address')}
                             placeholder="Street address"
+                            className={getFieldStatus('address') === 'error' ? 'error-field' : ''}
                             style={{ ...inputStyle }}
                           />
+                          {errors.address && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.address}</p>}
                         </div>
                         <div style={{
                           display: 'grid',
                           gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(3, 1fr)',
                           gap: isMobile ? '0.5rem' : '1rem'
                         }}>
-                          <input type="text" name="city" value={formData.city || ''} onChange={handleChange} placeholder="City" style={{ ...inputStyle }} />
-                          <input type="text" name="state" value={formData.state || ''} onChange={handleChange} placeholder="State" style={{ ...inputStyle }} />
-                          <input type="text" name="zipcode" value={formData.zipcode || ''} onChange={handleChange} placeholder="Zip" style={{ ...inputStyle }} />
+                          <div>
+                            <label style={labelStyle}>City {isAddressRequired && <span style={{ color: '#ef4444' }}>*</span>}</label>
+                            <input
+                              type="text"
+                              name="city"
+                              value={formData.city || ''}
+                              onChange={handleChange}
+                              onBlur={() => handleBlur('city')}
+                              placeholder="City"
+                              className={getFieldStatus('city') === 'error' ? 'error-field' : ''}
+                              style={{ ...inputStyle }}
+                            />
+                            {errors.city && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.city}</p>}
+                          </div>
+                          <div>
+                            <label style={labelStyle}>State {isAddressRequired && <span style={{ color: '#ef4444' }}>*</span>}</label>
+                            <input
+                              type="text"
+                              name="state"
+                              value={formData.state || ''}
+                              onChange={handleChange}
+                              onBlur={() => handleBlur('state')}
+                              placeholder="State"
+                              className={getFieldStatus('state') === 'error' ? 'error-field' : ''}
+                              style={{ ...inputStyle }}
+                            />
+                            {errors.state && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.state}</p>}
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Zip Code {isAddressRequired && <span style={{ color: '#ef4444' }}>*</span>}</label>
+                            <input
+                              type="text"
+                              name="zipcode"
+                              value={formData.zipcode || ''}
+                              onChange={handleChange}
+                              onBlur={() => handleBlur('zipcode')}
+                              placeholder="Zip"
+                              className={getFieldStatus('zipcode') === 'error' ? 'error-field' : ''}
+                              style={{ ...inputStyle }}
+                            />
+                            {errors.zipcode && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.zipcode}</p>}
+                          </div>
                         </div>
                       </div>
 
@@ -797,20 +913,28 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                         <label style={labelStyle}>Tax Treatment <span style={{ color: '#ef4444' }}>*</span></label>
                         <div style={{
                           display: 'grid',
-                          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)',
+                          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : `repeat(${taxTreatmentOptions.length}, 1fr)`,
                           gap: isMobile ? '0.5rem' : '0.75rem'
                         }}>
-                          {[
-                            { value: 'vat_registered', label: isMobile ? 'VAT' : 'VAT Reg', desc: 'UAE VAT' },
-                            { value: 'non_vat_registered', label: isMobile ? 'Non-VAT' : 'Non-VAT', desc: 'UAE' },
-                            { value: 'gcc_vat_registered', label: isMobile ? 'GCC VAT' : 'GCC VAT', desc: 'GCC VAT' },
-                            { value: 'gcc_non_vat_registered', label: isMobile ? 'GCC Non' : 'GCC Non', desc: 'GCC' }
-                          ].map(treatment => {
+                          {taxTreatmentOptions.map(treatment => {
                             const color = getTaxTreatmentColor(treatment.value);
                             return (
                               <div
                                 key={treatment.value}
-                                onClick={() => setFormData(prev => ({ ...prev, taxTreatment: treatment.value, taxRegistrationNumber: '', trnExpiryDate: '' }))}
+                                onClick={() => {
+                                  const isUaeTreatment = treatment.value === 'vat_registered' || treatment.value === 'non_vat_registered';
+                                  // Saudi companies are always locked to Saudi Arabia regardless
+                                  // of treatment; a regular UAE company defaults to Dubai for its
+                                  // UAE treatments and Saudi Arabia for its GCC treatments.
+                                  const defaultPlace = (isSaudiCompany || !isUaeTreatment) ? 'Saudi Arabia' : 'Dubai';
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    taxTreatment: treatment.value,
+                                    taxRegistrationNumber: '',
+                                    trnExpiryDate: '',
+                                    placeOfSupply: defaultPlace
+                                  }));
+                                }}
                                 style={{
                                   padding: isMobile ? '0.75rem 0.5rem' : '1rem',
                                   borderRadius: '12px',
@@ -880,6 +1004,41 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                           </motion.div>
                         )}
                       </AnimatePresence>
+
+                      {/* Trade License */}
+                      <div style={{ marginBottom: isMobile ? '1rem' : '1.5rem' }}>
+                        <div style={{ padding: isMobile ? '0.75rem' : '1.25rem', background: 'linear-gradient(135deg, #fefce8 0%, #fef9c3 100%)', borderRadius: '16px', border: '1px solid #fde68a' }}>
+                          <label style={{ ...labelStyle, color: '#78350f' }}>Trade License Number</label>
+                          <input
+                            type="text"
+                            name="tradeLicenseNumber"
+                            placeholder="e.g. CN-1234567"
+                            value={formData.tradeLicenseNumber}
+                            onChange={handleChange}
+                            maxLength={30}
+                            style={{ ...inputStyle, background: 'white' }}
+                          />
+
+                          <div style={{ marginTop: isMobile ? '0.75rem' : '1rem' }}>
+                            <label style={{ ...labelStyle, color: '#78350f' }}>Trade License Expiry Date</label>
+                            <input
+                              type="date"
+                              name="tradeLicenseExpiryDate"
+                              value={formData.tradeLicenseExpiryDate}
+                              onChange={handleChange}
+                              onClick={(e) => e.target.showPicker()}
+                              style={{
+                                ...inputStyle,
+                                background: 'white',
+                                cursor: 'pointer'
+                              }}
+                            />
+                            <p style={{ color: '#64748b', fontSize: '0.65rem', marginTop: '0.25rem', margin: '0.25rem 0 0' }}>
+                              Leave blank if unknown. Helps track upcoming trade license renewals.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
 
                       {/* Place & Currency */}
                       <div style={{

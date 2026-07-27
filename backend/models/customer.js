@@ -197,6 +197,16 @@ const customerSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    tradeLicenseNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: ''
+    },
+    tradeLicenseExpiryDate: {
+      type: Date,
+      default: null,
+    },
     isActive: { 
       type: Boolean, 
       default: true,
@@ -221,6 +231,17 @@ customerSchema.index({ companyId: 1, taxTreatment: 1, isActive: 1 });
 customerSchema.index({ companyId: 1, placeOfSupply: 1, isActive: 1 });
 customerSchema.index({ companyId: 1, createdAt: -1, isActive: 1 });
 customerSchema.index({ companyId: 1, email: 1 }, { sparse: true });
+
+// Prevent the same Zoho contact from being linked to two customers within the
+// same company. A plain `sparse: true` compound index wouldn't help here —
+// sparse only excludes a document when ALL indexed fields are missing, and
+// companyId is always present, so two zohoId-less customers would still
+// collide. The partial filter instead excludes any document without a real
+// (string) zohoId, which is what actually avoids the null/null collision.
+customerSchema.index(
+  { companyId: 1, zohoId: 1 },
+  { unique: true, partialFilterExpression: { zohoId: { $type: 'string' } } }
+);
 
 // Text search index with company filter
 customerSchema.index({ 

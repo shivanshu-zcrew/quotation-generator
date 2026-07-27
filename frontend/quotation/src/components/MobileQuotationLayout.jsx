@@ -721,6 +721,7 @@ const MobileQuotationLayout = ({
   canManageComments = false,
   canDeleteComment,
   onAddComment,
+  onEditComment,
   onResolveComment,
   onDeleteComment,
 }) => {
@@ -735,6 +736,7 @@ const MobileQuotationLayout = ({
     comments: commentsByTarget[`${targetType}:${targetKey}`] || [],
     canAdd: canAddComments,
     onAdd: onAddComment,
+    onEdit: onEditComment,
     canManage: canManageComments,
     onResolve: onResolveComment,
     canDeleteComment,

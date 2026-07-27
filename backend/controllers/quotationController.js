@@ -759,14 +759,29 @@ exports.getQuotation = async (req, res) => {
 
     const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
 
-    if (!isAdmin && !isOps && !isCreator)
+    // A revision's own createdBy may not be this viewer (e.g. an admin
+    // cancelled the original and created the revision on the creator's
+    // behalf) — the original creator should still be able to open it
+    // read-only rather than hit a hard "not authorized" wall, since it's
+    // still fundamentally their quotation's chain. Ops managers are
+    // deliberately NOT included here — the admin-created-quotation
+    // visibility rule below still applies to them.
+    let isOriginalCreator = false;
+    if (!isAdmin && !isOps && !isCreator && quotation.revisedFrom) {
+      const original = await Quotation.findById(quotation.revisedFrom).select('createdBy').lean();
+      isOriginalCreator = !!(original?.createdBy && original.createdBy.toString() === req.user.id);
+    }
+
+    if (!isAdmin && !isOps && !isCreator && !isOriginalCreator)
       return res.status(403).json({ message: 'Not authorized to view this quotation' });
 
     // Admin-created quotations (skip ops review, created straight to
     // 'pending_admin') are only visible to admins — ops managers and
     // creators shouldn't see them at all, not even by guessing/bookmarking
     // the URL. 404 (not 403) so it reads as "doesn't exist" rather than
-    // revealing that something is being withheld.
+    // revealing that something is being withheld. This does NOT apply to
+    // the original creator viewing a revision admin made on their behalf
+    // (isOriginalCreator) — that visibility is intentional, see above.
     if (isOps && quotation.createdBySnapshot?.role === 'admin') {
       return res.status(404).json({ message: 'Quotation not found' });
     }
@@ -779,7 +794,7 @@ exports.getQuotation = async (req, res) => {
       const activeRevision = await Quotation.findOne({
         revisedFrom: quotation._id,
         status: { $ne: 'cancelled' },
-      }).select('quotationNumber status').lean();
+      }).select('quotationNumber status createdBySnapshot').lean();
       quotation.activeRevision = activeRevision || null;
     }
 
@@ -1987,10 +2002,26 @@ exports.awardQuotation = async (req, res) => {
     const customerTaxTreatment = customer?.taxTreatment || 'non_vat_registered';
     const customerPlaceOfSupply = customer?.placeOfSupply || 'Dubai';
 
+    // Kuwait/Qatar have not implemented VAT — Zoho rejects gcc_vat_registered/
+    // gcc_non_vat_registered outright for these two countries and requires
+    // 'non_gcc' instead. Our own Customer.taxTreatment never stores 'non_gcc'
+    // (the form keeps offering the same GCC country list, incl. Kuwait/Qatar,
+    // under the regular GCC tiles) — this reclassification is purely an
+    // outbound-to-Zoho detail, mirroring customerServices.js's
+    // _normalizeTaxTreatmentForZoho.
+    const isNonVatGccPlace = customerPlaceOfSupply === 'Kuwait' || customerPlaceOfSupply === 'Qatar';
+    const effectiveCustomerTaxTreatment = (isNonVatGccPlace && (customerTaxTreatment === 'gcc_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered'))
+      ? 'non_gcc'
+      : customerTaxTreatment;
+
     const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
     const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
 
-    const isPlaceOfSupplyUAE = UAE_EMIRATES.includes(customerPlaceOfSupply);
+    // A GCC-treatment customer can now have "United Arab Emirates" (the bare
+    // country, not a specific emirate) as their place of supply — treat that
+    // the same as any UAE emirate; the emirateCodeMap lookups below already
+    // fall back to 'DU' when the exact string isn't a map key.
+    const isPlaceOfSupplyUAE = UAE_EMIRATES.includes(customerPlaceOfSupply) || customerPlaceOfSupply === 'United Arab Emirates';
     const isPlaceOfSupplyGCC = GCC_COUNTRIES.includes(customerPlaceOfSupply);
 
     const companyZohoId = quotation.companyId?.zohoOrganizationId;
@@ -2000,37 +2031,60 @@ exports.awardQuotation = async (req, res) => {
       TAX_IDS = { '0%': '5723933000000089262', '5%': '5723933000000089256' };
     } else if (companyZohoId === '886656701') {
       TAX_IDS = { '0%': '6201431000000108033', '5%': '6201431000000108025' };
-    } else if (companyZohoId === '916255903') {
-      TAX_IDS = { '0%': '8731317000000093294', '5%': '8731317000000093290' };
+    } else if (companyZohoId === '932531766') {
+      TAX_IDS = { '0%': '1088677000000094134', '15%': '1088677000000094132' };
     } else {
       TAX_IDS = { '0%': '8731317000000093294', '5%': '8731317000000093290' };
     }
 
+    // Org 932531766 is the Saudi-registered company — its "home" jurisdiction
+    // is Saudi Arabia, not the UAE, so its domestic sales (eligible for the
+    // actual selected rate, incl. 15%) are the ones placed in Saudi Arabia.
+    // Every other company is UAE-based, so domestic means a UAE emirate.
+    // Without this split, a Saudi company's sale to a Saudi customer fell
+    // into the "GCC" branch below and had its tax rate silently zeroed out.
+    const isSaudiCompany = companyZohoId === '932531766';
+    const isPlaceOfSupplySA = customerPlaceOfSupply === 'Saudi Arabia';
+    const isDomesticSupply = isSaudiCompany ? isPlaceOfSupplySA : isPlaceOfSupplyUAE;
+    const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
+    const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
+
     let taxRate = 0, taxId = TAX_IDS['0%'], taxTreatment = 'vat_not_registered', placeOfSupplyCode = 'AE';
 
-    if (customerTaxTreatment === 'vat_registered') {
-      if (isPlaceOfSupplyUAE) {
-        taxRate = quotation.taxPercent || 5;
-        taxId = taxRate === 0 ? TAX_IDS['0%'] : TAX_IDS['5%'];
+    if (effectiveCustomerTaxTreatment === 'vat_registered') {
+      if (isDomesticSupply) {
+        // `?? 0` (not `|| 0`) — a legitimate 0% selection must not get
+        // silently coerced into some other rate just because 0 is falsy.
+        taxRate = quotation.taxPercent ?? 0;
+        taxId = TAX_IDS[`${taxRate}%`];
         taxTreatment = 'vat_registered';
-        const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
-        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
-      } else if (isPlaceOfSupplyGCC) {
+        placeOfSupplyCode = isSaudiCompany ? 'SA' : (emirateCodeMap[customerPlaceOfSupply] || 'DU');
+      } else if (isPlaceOfSupplyUAE || isPlaceOfSupplyGCC) {
         taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'vat_registered';
-        const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
-        placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || countryCodeMap[customerPlaceOfSupply] || 'AE';
       }
-    } else if (customerTaxTreatment === 'gcc_vat_registered') {
-      if (isPlaceOfSupplyUAE) {
-        taxRate = 5; taxId = TAX_IDS['5%']; taxTreatment = 'gcc_vat_registered';
-        const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
-        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || 'DU';
-      } else if (isPlaceOfSupplyGCC) {
+    } else if (effectiveCustomerTaxTreatment === 'gcc_vat_registered') {
+      if (isDomesticSupply) {
+        // Use whatever rate the quotation actually has (0/5/15%), same as the
+        // vat_registered+domestic branch above — this used to hardcode 5%
+        // regardless of the quotation's own tax selection, which broke any
+        // company whose Zoho org has no 5% tax ID configured (e.g. a company
+        // set up with only 0%/15%).
+        taxRate = quotation.taxPercent ?? 0;
+        taxId = TAX_IDS[`${taxRate}%`];
+        taxTreatment = 'gcc_vat_registered';
+        placeOfSupplyCode = isSaudiCompany ? 'SA' : (emirateCodeMap[customerPlaceOfSupply] || 'DU');
+      } else if (isPlaceOfSupplyUAE || isPlaceOfSupplyGCC) {
         taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'gcc_vat_registered';
-        const countryCodeMap = { 'Saudi Arabia': 'SA', 'Kuwait': 'KW', 'Qatar': 'QA', 'Bahrain': 'BH', 'Oman': 'OM' };
-        placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+        placeOfSupplyCode = emirateCodeMap[customerPlaceOfSupply] || countryCodeMap[customerPlaceOfSupply] || 'AE';
       }
-    } else if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') {
+    } else if (effectiveCustomerTaxTreatment === 'non_gcc') {
+      // Kuwait/Qatar — no VAT implemented, always zero-rated. See
+      // effectiveCustomerTaxTreatment's derivation above.
+      taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'non_gcc';
+      const countryCodeMap = { 'Kuwait': 'KW', 'Qatar': 'QA' };
+      placeOfSupplyCode = countryCodeMap[customerPlaceOfSupply] || 'AE';
+    } else if (effectiveCustomerTaxTreatment === 'non_vat_registered' || effectiveCustomerTaxTreatment === 'gcc_non_vat_registered') {
       taxRate = 0; taxId = TAX_IDS['0%']; taxTreatment = 'vat_not_registered';
       if (isPlaceOfSupplyUAE) {
         const emirateCodeMap = { 'Abu Dhabi': 'AB', 'Ajman': 'AJ', 'Dubai': 'DU', 'Fujairah': 'FU', 'Ras al-Khaimah': 'RA', 'Sharjah': 'SH', 'Umm al-Quwain': 'UM' };
@@ -2064,32 +2118,38 @@ exports.awardQuotation = async (req, res) => {
         });
       }
 
+      // The selected rate has no corresponding Zoho tax ID configured for
+      // this company's org (e.g. a company whose TAX_IDS map only has
+      // 0%/15% but the quotation is at 5%) — fail clearly now instead of
+      // sending an undefined tax_id to Zoho and getting back an opaque error.
+      if (taxRate > 0 && !taxId) {
+        return res.status(422).json({
+          success: false,
+          message: `This company's Zoho organization has no ${taxRate}% tax rate configured. Please choose a different tax rate on the quotation or contact an administrator.`,
+          code: 'TAX_RATE_NOT_CONFIGURED'
+        });
+      }
+
+      // Sent to Zoho as a single entity-level discount, applied BEFORE tax
+      // (is_discount_before_tax: true below) — matches exactly what Zoho's
+      // own web client sends for a VAT-registered customer's estimate. The
+      // earlier "Entity level discount ... VAT" rejection turned out to be
+      // caused by two payload mismatches, not by discount_type itself:
+      // is_discount_before_tax was hardcoded false (Zoho's client sends
+      // true), and discount was sent as a bare number instead of a
+      // percentage-formatted string (see customerServices.js's
+      // _createEstimate) — a bare number is read as a flat currency amount,
+      // not a percentage, which is a different discount mode entirely.
       const originalDiscountPercent = quotation.discountPercent || 0;
-      let effectiveDiscountPercent = 0;
-      let lineItemsWithDiscount = [];
-      const subtotal = quotation.subtotal || 0;
 
-      for (let i = 0; i < quotation.items.length; i++) {
-        const item = quotation.items[i];
-        const originalRate = item.unitPrice;
-        let finalRate = originalRate;
-        let itemDiscountPercent = 0;
-
-        if (taxRate > 0 && originalDiscountPercent > 0) {
-          finalRate = Math.round((originalRate * (1 - originalDiscountPercent / 100)) * 100) / 100;
-          itemDiscountPercent = 0;
-        } else if (!(taxRate > 0) && originalDiscountPercent > 0) {
-          effectiveDiscountPercent = originalDiscountPercent;
-        }
-
-        const itemTotal = item.quantity * finalRate;
+      const lineItemsWithDiscount = quotation.items.map((item, i) => {
         const lineItem = {
           description: item.description || '',
           quantity: item.quantity,
-          rate: finalRate,
-          discount: itemDiscountPercent,
+          rate: item.unitPrice,
+          discount: 0,
           discount_amount: 0,
-          item_total: itemTotal,
+          item_total: item.quantity * item.unitPrice,
           item_order: i + 1
         };
 
@@ -2100,13 +2160,16 @@ exports.awardQuotation = async (req, res) => {
           lineItem.tax_type = 'tax';
         }
 
-        lineItemsWithDiscount.push(lineItem);
-      }
+        return lineItem;
+      });
 
+      // Discount-before-tax, matching is_discount_before_tax: true — tax is
+      // computed on the subtotal AFTER the discount is taken off, same order
+      // as the app's own local calculateTotals().
       const recalculatedSubtotal = lineItemsWithDiscount.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
-      const recalculatedTaxAmount = (recalculatedSubtotal * taxRate) / 100;
-      const recalculatedDiscountAmount = (taxRate > 0) ? 0 : (subtotal * originalDiscountPercent / 100);
-      const recalculatedGrandTotal = recalculatedSubtotal + recalculatedTaxAmount - recalculatedDiscountAmount;
+      const recalculatedDiscountAmount = (recalculatedSubtotal * originalDiscountPercent) / 100;
+      const recalculatedTaxAmount = ((recalculatedSubtotal - recalculatedDiscountAmount) * taxRate) / 100;
+      const recalculatedGrandTotal = recalculatedSubtotal - recalculatedDiscountAmount + recalculatedTaxAmount;
 
       const estimateData = {
         customer_id: customerZohoId,
@@ -2114,9 +2177,10 @@ exports.awardQuotation = async (req, res) => {
         date: new Date(quotation.date).toISOString().split('T')[0],
         expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
         exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
-        discount: effectiveDiscountPercent,
-        is_discount_before_tax: false,
+        discount: originalDiscountPercent,
+        is_discount_before_tax: true,
         discount_type: 'entity_level',
+        tax_reg_no: customer.taxRegistrationNumber || undefined,
         is_inclusive_tax: false,
         custom_body: quotation.notes || '',
         custom_subject: `Quotation: ${quotation.quotationNumber} - ${quotation.projectName || ''}`,
@@ -3405,6 +3469,36 @@ exports.addReviewComment = async (req, res) => {
   } catch (err) {
     logger.error(`Add review comment error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error adding review comment', error: err.message });
+  }
+};
+
+exports.updateReviewComment = async (req, res) => {
+  try {
+    const { id, commentId } = req.params;
+    const { comment: newText } = req.body;
+    if (!newText?.trim()) {
+      return res.status(400).json({ success: false, message: 'Comment text is required' });
+    }
+
+    const quotation = await Quotation.findById(id);
+    if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const comment = quotation.reviewComments.id(commentId);
+    if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
+
+    const isAdmin = req.user.role === 'admin';
+    const isAuthor = comment.createdBy && comment.createdBy.toString() === req.user.id;
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({ success: false, message: 'Only the comment author or admin can edit this comment' });
+    }
+
+    comment.comment = newText.trim();
+    await quotation.save();
+
+    res.status(200).json({ success: true, message: 'Comment updated', comment });
+  } catch (err) {
+    logger.error(`Update review comment error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error updating review comment', error: err.message });
   }
 };
 

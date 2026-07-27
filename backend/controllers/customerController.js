@@ -21,6 +21,13 @@ const {
 // ─────────────────────────────────────────────────────────────────────────
 // CONFIGURATION CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────
+// Companies under this Zoho org are Saudi-based — their VAT-registered/
+// non-VAT-registered customers are locked to Saudi Arabia (not a UAE
+// emirate), while their GCC-treatment customers still get the full GCC
+// country list, same as any other company. See CustomerModel.jsx (frontend)
+// for the matching UI behavior.
+const SAUDI_COMPANY_ZOHO_ORG_ID = '932531766';
+
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
 const MIN_PAGE_SIZE = 1;
@@ -148,7 +155,7 @@ const validateCustomerData = (customer) => {
   return { valid: true };
 };
 
-const validateTaxData = (taxTreatment, taxRegistrationNumber, placeOfSupply) => {
+const validateTaxData = (taxTreatment, taxRegistrationNumber, placeOfSupply, isSaudiCompany = false) => {
   const errors = [];
 
   if (taxTreatment && !TAX_TREATMENT_VALUES.includes(taxTreatment)) {
@@ -158,7 +165,11 @@ const validateTaxData = (taxTreatment, taxRegistrationNumber, placeOfSupply) => 
   if (!placeOfSupply) {
     errors.push('Place of supply is required');
   } else if (taxTreatment === 'vat_registered' || taxTreatment === 'non_vat_registered') {
-    if (!UAE_EMIRATES.includes(placeOfSupply)) {
+    if (isSaudiCompany) {
+      if (placeOfSupply !== 'Saudi Arabia') {
+        errors.push('Place of supply must be Saudi Arabia');
+      }
+    } else if (!UAE_EMIRATES.includes(placeOfSupply)) {
       errors.push(`Place of supply must be a UAE emirate: ${UAE_EMIRATES.join(', ')}`);
     }
   } else if (taxTreatment === 'gcc_vat_registered' || taxTreatment === 'gcc_non_vat_registered') {
@@ -210,7 +221,8 @@ const buildUpdateData = (body, existingCustomer) => {
   const {
     name, email, phone, address, city, state, zipcode,
     companyName, website, notes, taxTreatment, taxRegistrationNumber,
-    placeOfSupply, defaultCurrency, contactPersons, mainContactSalutation,trnExpiryDate
+    placeOfSupply, defaultCurrency, contactPersons, mainContactSalutation, trnExpiryDate,
+    tradeLicenseNumber, tradeLicenseExpiryDate
   } = body;
 
   if (name !== undefined) updateData.name = name.trim().toUpperCase();
@@ -238,6 +250,11 @@ const buildUpdateData = (body, existingCustomer) => {
 
   if (trnExpiryDate !== undefined) {
     updateData.trnExpiryDate = trnExpiryDate ? new Date(trnExpiryDate) : null;
+  }
+
+  if (tradeLicenseNumber !== undefined) updateData.tradeLicenseNumber = tradeLicenseNumber?.trim() || '';
+  if (tradeLicenseExpiryDate !== undefined) {
+    updateData.tradeLicenseExpiryDate = tradeLicenseExpiryDate ? new Date(tradeLicenseExpiryDate) : null;
   }
 
   if (defaultCurrency !== undefined) {
@@ -317,7 +334,7 @@ exports.createCustomer = async (req, res) => {
       companyName, website, notes, taxTreatment = 'non_vat_registered',
       taxRegistrationNumber = '', placeOfSupply = 'Dubai',
       defaultCurrency = 'AED', contactPersons = [], mainContactSalutation = 'Mr.',
-      trnExpiryDate = null
+      trnExpiryDate = null, tradeLicenseNumber = '', tradeLicenseExpiryDate = null
     } = req.body;
 
     const { companyId, company } = await getCompanyFromRequest(req);
@@ -328,7 +345,7 @@ exports.createCustomer = async (req, res) => {
       return sendErrorResponse(res, 400, 'Customer name must be at least 3 characters');
     }
 
-    const taxErrors = validateTaxData(taxTreatment, taxRegistrationNumber, placeOfSupply);
+    const taxErrors = validateTaxData(taxTreatment, taxRegistrationNumber, placeOfSupply, company.zohoOrganizationId === SAUDI_COMPANY_ZOHO_ORG_ID);
     if (taxErrors.length > 0) {
       return sendErrorResponse(res, 400, taxErrors[0]);
     }
@@ -365,6 +382,8 @@ exports.createCustomer = async (req, res) => {
       // Only keep an expiry date for VAT-registered customers (the only ones
       // with a TRN). Blank/null means "never expires".
       trnExpiryDate: (isVatRegistered && trnExpiryDate) ? new Date(trnExpiryDate) : null,
+      tradeLicenseNumber: tradeLicenseNumber?.trim() || '',
+      tradeLicenseExpiryDate: tradeLicenseExpiryDate ? new Date(tradeLicenseExpiryDate) : null,
       placeOfSupply,
       defaultCurrency: buildCurrencyObject(defaultCurrency),
       contactPersons: allContactPersons
@@ -404,24 +423,26 @@ exports.createCustomer = async (req, res) => {
       }
     }
 
-    const customer = new Customer(customerData);
-    const savedCustomer = await customer.save();
-
+    // Attach the Zoho contact id (if any) before the one-and-only insert —
+    // inserting first and patching zohoId in afterward left a brief window
+    // where the document existed with zohoId unset, colliding with any other
+    // zohoId-less customer in the same company under the unique index.
     if (zohoResult && zohoResult.success && zohoResult.zohoId) {
-      savedCustomer.zohoId = zohoResult.zohoId;
-      savedCustomer.zohoSynced = true;
-      savedCustomer.zohoSyncDate = new Date();
+      customerData.zohoId = zohoResult.zohoId;
+      customerData.zohoSynced = true;
+      customerData.zohoSyncDate = new Date();
 
       if (zohoResult.contact?.contact_persons) {
         zohoResult.contact.contact_persons.forEach((zp, i) => {
-          if (savedCustomer.contactPersons[i]) {
-            savedCustomer.contactPersons[i].zohoContactPersonId = zp.contact_person_id;
+          if (customerData.contactPersons[i]) {
+            customerData.contactPersons[i].zohoContactPersonId = zp.contact_person_id;
           }
         });
       }
-
-      await savedCustomer.save();
     }
+
+    const customer = new Customer(customerData);
+    const savedCustomer = await customer.save();
 
     let customerObj = savedCustomer.getFormattedData?.() || savedCustomer.toObject();
     await clearCustomerCache(company._id);
@@ -483,7 +504,8 @@ exports.updateCustomer = async (req, res) => {
       const taxErrors = validateTaxData(
         updateData.taxTreatment || customer.taxTreatment,
         updateData.taxRegistrationNumber || customer.taxRegistrationNumber,
-        updateData.placeOfSupply || customer.placeOfSupply
+        updateData.placeOfSupply || customer.placeOfSupply,
+        company.zohoOrganizationId === SAUDI_COMPANY_ZOHO_ORG_ID
       );
       if (taxErrors.length > 0) {
         return sendErrorResponse(res, 400, taxErrors[0]);
@@ -1485,6 +1507,8 @@ exports.exportCustomers = async (req, res) => {
       'Place of Supply': customer.placeOfSupply || '',
       'Tax Treatment': getTaxTreatmentLabel(customer.taxTreatment),
       'Tax Registration Number (TRN)': customer.taxRegistrationNumber || '',
+      'Trade License Number': customer.tradeLicenseNumber || '',
+      'Trade License Expiry': customer.tradeLicenseExpiryDate ? new Date(customer.tradeLicenseExpiryDate).toLocaleDateString() : '',
       'Default Currency': customer.defaultCurrency?.code || 'AED',
       'Website': customer.website || '',
       'Notes': customer.notes || '',

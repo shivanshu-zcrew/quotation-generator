@@ -3,7 +3,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from "react"
 import {
   Plus, Trash2, ArrowLeft, ArrowRight, Users, Package, Tag,
   Building2, Mail, Phone, AlertCircle, CheckCircle, MapPin, Clock, Loader2, Calendar, Edit2, X,
-  History, Copy
+  History, Copy, FileText
 } from "lucide-react";
 import QuotationTemplate from "./QuotationTemplate";
 import { CompanyCurrencySelector, useCompanyCurrency } from "../components/CompanyCurrencySelector";
@@ -89,50 +89,175 @@ const Toast = ({ message, type = "success", onClose }) => {
   );
 };
 
-const SectionHeader = ({ icon: Icon, title, required, count, loading }) => {
+const SectionHeader = ({ icon: Icon, title, required, count, loading, complete, optional }) => {
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   return (
-    <div style={{ 
-      display: "flex", 
-      alignItems: "center", 
-      justifyContent: "space-between", 
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
       marginBottom: "1rem",
       flexWrap: "wrap",
       gap: "0.5rem"
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-        <div style={{ 
-          width: 36, 
-          height: 36, 
-          borderRadius: 12, 
-          background: `${PRIMARY}10`, 
-          display: "flex", 
-          alignItems: "center", 
-          justifyContent: "center" 
+        <div style={{
+          position: "relative",
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          background: complete ? "#ecfdf5" : `${PRIMARY}10`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          transition: "background 0.25s ease"
         }}>
-          {loading ? <Loader2 size={18} color={PRIMARY} style={{ animation: "qs-spin 0.9s linear infinite" }} /> : <Icon size={18} color={PRIMARY} />}
+          {loading ? <Loader2 size={18} color={PRIMARY} style={{ animation: "qs-spin 0.9s linear infinite" }} /> : <Icon size={18} color={complete ? "#10b981" : PRIMARY} />}
+          {complete && !loading && (
+            <div style={{
+              position: "absolute",
+              top: -4,
+              right: -4,
+              width: 15,
+              height: 15,
+              borderRadius: "50%",
+              background: "#10b981",
+              border: "2px solid white",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              animation: "qs-popIn 0.25s ease"
+            }}>
+              <CheckCircle size={9} color="white" strokeWidth={3} />
+            </div>
+          )}
         </div>
-        <h2 style={{ 
-          margin: 0, 
-          fontSize: "clamp(0.875rem, 4vw, 1rem)", 
-          fontWeight: 700, 
-          color: PRIMARY 
+        <h2 style={{
+          margin: 0,
+          fontSize: "clamp(0.875rem, 4vw, 1rem)",
+          fontWeight: 700,
+          color: PRIMARY
         }}>
           {title} {required && <span style={{ color: "#ef4444" }}>*</span>}
+          {optional && (
+            <span style={{
+              marginLeft: "0.5rem",
+              padding: "1px 8px",
+              borderRadius: 20,
+              background: "#f1f5f9",
+              color: "#94a3b8",
+              fontSize: "0.65rem",
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: "0.3px",
+              verticalAlign: "middle"
+            }}>
+              Optional
+            </span>
+          )}
         </h2>
       </div>
       {count > 0 && (
-        <span style={{ 
-          padding: "2px 10px", 
-          borderRadius: 20, 
-          background: "#f1f5f9", 
-          color: "#64748b", 
-          fontSize: "0.75rem", 
-          fontWeight: 600 
+        <span style={{
+          padding: "2px 10px",
+          borderRadius: 20,
+          background: "#f1f5f9",
+          color: "#64748b",
+          fontSize: "0.75rem",
+          fontWeight: 600
         }}>
           {count} item{count !== 1 ? "s" : ""}
         </span>
       )}
+    </div>
+  );
+};
+
+// A single step in the top-of-page progress indicator (Details → Preview & Send)
+const StepProgress = ({ current }) => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const steps = [
+    { n: 1, label: "Details" },
+    { n: 2, label: "Preview & Send" }
+  ];
+  return (
+    <div style={{ display: "flex", alignItems: "center", marginBottom: isMobile ? "1.25rem" : "1.5rem" }}>
+      {steps.map((s, i) => {
+        const isActive = s.n === current;
+        const isDone = s.n < current;
+        return (
+          <React.Fragment key={s.n}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", flexShrink: 0 }}>
+              <div style={{
+                width: 26,
+                height: 26,
+                borderRadius: "50%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "0.7rem",
+                fontWeight: 700,
+                background: isActive || isDone ? `linear-gradient(135deg,${PRIMARY},#1e293b)` : "#e2e8f0",
+                color: isActive || isDone ? "white" : "#94a3b8",
+                boxShadow: isActive ? `0 0 0 4px ${PRIMARY}14` : "none",
+                transition: "all 0.3s ease"
+              }}>
+                {isDone ? <CheckCircle size={13} /> : s.n}
+              </div>
+              <span style={{
+                fontSize: "clamp(0.7rem, 3vw, 0.8rem)",
+                fontWeight: isActive ? 700 : 500,
+                color: isActive ? PRIMARY : "#94a3b8",
+                whiteSpace: "nowrap"
+              }}>
+                {s.label}
+              </span>
+            </div>
+            {i < steps.length - 1 && (
+              <div style={{
+                flex: 1,
+                height: 2,
+                background: isDone ? PRIMARY : "#e2e8f0",
+                margin: "0 0.75rem",
+                borderRadius: 2,
+                transition: "background 0.3s ease"
+              }} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+};
+
+// Wraps a form section in its own card so Step 1 reads as a set of distinct,
+// spaced steps rather than one dense block with hairline dividers.
+const SectionCard = ({ children, delay = 0 }) => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  return (
+    <div
+      style={{
+        background: "white",
+        borderRadius: 20,
+        boxShadow: "0 1px 3px rgba(15,23,42,0.04), 0 8px 20px -8px rgba(15,23,42,0.06)",
+        border: "1px solid #f1f5f9",
+        padding: isMobile ? "1rem" : "1.5rem",
+        marginBottom: isMobile ? "0.875rem" : "1.125rem",
+        animation: "qs-fadeInUp 0.4s ease both",
+        animationDelay: `${delay}s`
+      }}
+      onAnimationEnd={(e) => {
+        // The entrance animation's final keyframe leaves `transform:
+        // translateY(0)` applied via fill-mode. Any non-"none" transform
+        // creates a new CSS stacking context, which traps dropdowns
+        // rendered inside this card (e.g. the customer selector) behind
+        // later sibling cards. Clear it once the animation is done so the
+        // card goes back to being a plain, non-positioned box.
+        e.currentTarget.style.animation = "none";
+        e.currentTarget.style.transform = "none";
+      }}
+    >
+      {children}
     </div>
   );
 };
@@ -410,7 +535,7 @@ const CustomerCard = ({ customer, onEdit, onViewDetails }) => {
                   color: '#475569',
                 }}>
                   <FileText size={isMobile ? 8 : 10} />
-                  <span>TRN: {customer.tradeLicenseNumber}</span>
+                  <span>Trade License: {customer.tradeLicenseNumber}</span>
                 </div>
               )}
 
@@ -1009,6 +1134,8 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
       @keyframes qs-shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
       @keyframes qs-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
       @keyframes qs-slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+      @keyframes qs-fadeInUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+      @keyframes qs-popIn { 0%{transform:scale(0);opacity:0} 70%{transform:scale(1.15)} 100%{transform:scale(1);opacity:1} }
       
       @media (max-width: 768px) {
         .quotation-container {
@@ -1103,17 +1230,8 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
         
         {/* Header */}
         <div style={{ marginBottom: isMobile ? "1.5rem" : "2rem" }}>
-          <p style={{ 
-            margin: "0 0 0.35rem", 
-            color: "#94a3b8", 
-            fontSize: "clamp(0.688rem, 3vw, 0.75rem)", 
-            fontWeight: 600, 
-            textTransform: "uppercase", 
-            letterSpacing: "0.5px" 
-          }}>
-            Step 1 of 2
-          </p>
-          <h1 style={{ 
+          <StepProgress current={1} />
+          <h1 style={{
             margin: 0, 
             fontSize: "clamp(1.5rem, 6vw, 2rem)", 
             fontWeight: 800, 
@@ -1130,6 +1248,101 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
           }}>
             Select company, customer and add items to generate a quotation
           </p>
+        </div>
+
+        {/* Sticky Actions Bar — pinned to the top of the viewport the whole time
+            you're on this page, so Back/Continue are always reachable while
+            scrolling through the form below (kept outside the Main Card since
+            that card's overflow:hidden would otherwise clip/unstick it). */}
+        <div style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 30,
+          background: "white",
+          borderRadius: 16,
+          boxShadow: "0 4px 12px -2px rgba(0,0,0,0.08)",
+          border: "1px solid #eef0f7",
+          padding: isMobile ? "0.75rem 1rem" : "1rem 1.5rem",
+          marginBottom: isMobile ? "1rem" : "1.5rem",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexDirection: isMobile ? "column-reverse" : "row",
+          gap: isMobile ? "0.75rem" : "0"
+        }}>
+
+          {isCustomersActuallyLoading && (
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              width: isMobile ? "100%" : "auto",
+              justifyContent: "center"
+            }}>
+              <Loader2 size={14} color="#6366f1" style={{ animation: "qs-spin 0.9s linear infinite" }} />
+              <span style={{ fontSize: "0.78rem", color: "#6366f1", fontWeight: 500 }}>
+                Loading customers…
+              </span>
+            </div>
+          )}
+
+          <div style={{
+            display: "flex",
+            gap: "0.75rem",
+            width: isMobile ? "100%" : "auto",
+            justifyContent: "center"
+          }}>
+            <button
+              onClick={handleBack}
+              style={{
+                padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
+                background: "white",
+                color: "#475569",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 14,
+                fontSize: "clamp(0.813rem, 4vw, 0.875rem)",
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                flex: isMobile ? 1 : "auto",
+                justifyContent: "center"
+              }}
+            >
+              <ArrowLeft size={17} /> Back
+            </button>
+
+            <button
+              onClick={handleProceedToTemplate}
+              disabled={!canProceed}
+              style={{
+                padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
+                background: canProceed ? `linear-gradient(135deg,${PRIMARY},#1e293b)` : "#e2e8f0",
+                color: canProceed ? "white" : "#94a3b8",
+                border: "none",
+                borderRadius: 14,
+                fontSize: "clamp(0.813rem, 4vw, 0.875rem)",
+                fontWeight: 600,
+                cursor: canProceed ? "pointer" : "not-allowed",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                boxShadow: canProceed ? `0 4px 12px ${PRIMARY}30` : "none",
+                opacity: canProceed ? 1 : 0.7,
+                flex: isMobile ? 1 : "auto",
+                justifyContent: "center"
+              }}
+            >
+              {isCustomersActuallyLoading ? (
+                <><Loader2 size={15} style={{ animation: "qs-spin 0.9s linear infinite" }} /> Loading…</>
+              ) : isAllCompaniesSelected ? (
+                <>Select a Company <ArrowRight size={17} /></>
+              ) : (
+                <>Continue <ArrowRight size={17} /></>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Warning Banner for All Companies Selection */}
@@ -1151,36 +1364,27 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
           </div>
         )}
 
-        {/* Main Card */}
-        <div style={{ 
-          background: "white", 
-          borderRadius: 24, 
-          boxShadow: "0 4px 6px -1px rgba(0,0,0,0.05)", 
-          overflow: "hidden" 
-        }}>
-          
-          {/* Company Section */}
-          <div style={{ padding: isMobile ? "1rem 1rem 0" : "1.5rem 1.5rem 0" }}>
-            <SectionHeader icon={Building2} title="Company" required />
-            <CompanyCurrencySelector 
-  variant="full" 
-  showLabels={true}
-  localCurrencyMode={true}  
-  localCurrencyValue={localCurrency}
-  onCurrencyChange={(currency) => {
-    setLocalCurrency(currency);
-    console.log('Currency changed locally:', currency);
-   }}
-  onCompanyChange={(companyId, meta) => {
-    console.log('Company changed (global):', companyId);
-   }}
-/>
-          </div>
-          <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
+        {/* Company Section */}
+        <SectionCard delay={0}>
+          <SectionHeader icon={Building2} title="Company" required complete={!!selectedCompany && !isAllCompaniesSelected} />
+          <CompanyCurrencySelector
+            variant="full"
+            showLabels={true}
+            localCurrencyMode={true}
+            localCurrencyValue={localCurrency}
+            onCurrencyChange={(currency) => {
+              setLocalCurrency(currency);
+              console.log('Currency changed locally:', currency);
+            }}
+            onCompanyChange={(companyId, meta) => {
+              console.log('Company changed (global):', companyId);
+            }}
+          />
+        </SectionCard>
 
-          {/* Customer Section */}
-          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem" }}>
-            <SectionHeader icon={Users} title="Customer" required loading={isCustomersActuallyLoading} />
+        {/* Customer Section */}
+        <SectionCard delay={0.05}>
+          <SectionHeader icon={Users} title="Customer" required loading={isCustomersActuallyLoading} complete={!!selectedCustomer && !isAllCompaniesSelected} />
             
             {loadError && !isCustomersLoading && (
               <LoadErrorBanner error={`Failed to load data: ${loadError}`} onRetry={fetchAllData} />
@@ -1190,7 +1394,16 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
               <CustomerSelector
                 key={selectedCompany}
                 value={selectedCustomer?._id || ''}
-                onChange={(_, customer) => setSelectedCustomer(customer)}
+                onChange={(_, customer) => {
+                  setSelectedCustomer(customer);
+                  // Pre-select the currency selector with this customer's own
+                  // billing currency, same field CustomersScreen shows as
+                  // their default currency — carries through to pricing/
+                  // totals via localCurrency below, same as a manual pick.
+                  if (customer?.defaultCurrency?.code) {
+                    setLocalCurrency(customer.defaultCurrency.code);
+                  }
+                }}
                 placeholder={isMobile ? "— Search customer —" : "— Search or select a customer —"}
                 companyId={selectedCompany}
                 onSyncComplete={handleSyncCustomers}
@@ -1212,17 +1425,12 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
               </p>
             )}
 
-            {!isCustomersActuallyLoading && selectedCustomer && <CustomerCard customer={selectedCustomer} />}
-            
-            {/* Disabled customer message when All Companies is selected */}
-             
-          </div>
-          
-          <div style={{ height: 1, background: "#f1f5f9", margin: isMobile ? "1rem 0" : "1.5rem 0" }} />
+          {!isCustomersActuallyLoading && selectedCustomer && <CustomerCard customer={selectedCustomer} />}
+        </SectionCard>
 
-          {/* Items Section - Manual Entry with Modal */}
-          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem" }}>
-            <SectionHeader icon={Package} title="Items" required count={selectedItems.length} loading={false} />
+        {/* Items Section - Manual Entry with Modal */}
+        <SectionCard delay={0.1}>
+          <SectionHeader icon={Package} title="Items" required count={selectedItems.length} loading={false} complete={selectedItems.length > 0} />
             
             {selectedItems.length === 0 ? (
               <EmptyItemsState />
@@ -1279,33 +1487,22 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
                 }
               }}
             >
-              <Plus size={16} /> 
-              {isAllCompaniesSelected 
-                ? "Select a company to add items" 
+              <Plus size={16} />
+              {isAllCompaniesSelected
+                ? "Select a company to add items"
                 : (selectedItems.length > 0 ? "Add Another Item" : "Add Item")}
             </button>
-          </div>
+        </SectionCard>
 
-          {/* Query Date Section */}
-          <div style={{ padding: isMobile ? "0 1rem" : "0 1.5rem", marginTop: "1.5rem" }}>
-            <div style={{ 
-              background: "#f8fafc", 
-              borderRadius: 16, 
+        {/* Query Date Section */}
+        <SectionCard delay={0.15}>
+            <SectionHeader icon={Calendar} title="Follow-up / Query Date" optional />
+            <div style={{
+              background: "#f8fafc",
+              borderRadius: 16,
               padding: isMobile ? "0.875rem 1rem" : "1rem 1.25rem",
               border: "1px solid #e2e8f0"
             }}>
-              <div style={{ 
-                display: "flex", 
-                alignItems: "center", 
-                gap: "0.75rem", 
-                marginBottom: "0.75rem",
-                flexWrap: "wrap"
-              }}>
-                <Calendar size={18} color={PRIMARY} />
-                <label style={{ fontWeight: 600, color: PRIMARY, fontSize: "clamp(0.813rem, 4vw, 0.875rem)" }}>
-                  Follow-up / Query Date
-                </label>
-              </div>
               <div style={{ 
                 display: "flex", 
                 alignItems: "center", 
@@ -1358,107 +1555,20 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
                 Set a follow-up date to remind when to check back with the customer
               </p>
             </div>
-          </div>
+        </SectionCard>
 
-          {/* Summary */}
-          {selectedItems.length > 0 && (
-            <div style={{ padding: isMobile ? "1rem" : "1.5rem" }}>
-              <SummaryCard 
-                grandTotal={grandTotal} 
-                exchangeRates={exchangeRates} 
-                selectedCurrency={localCurrency} 
-              />
-            </div>
-          )}
-
-          {/* Actions */}
-          <div style={{ 
-            padding: isMobile ? "1rem" : "1.25rem 1.5rem", 
-            borderTop: "1px solid #f1f5f9", 
-            display: "flex", 
-            justifyContent: "space-between", 
-            alignItems: "center", 
-            background: "#fafbff",
-            flexDirection: isMobile ? "column-reverse" : "row",
-            gap: isMobile ? "1rem" : "0"
-          }}>
-            
-            {isCustomersActuallyLoading && (
-              <div style={{ 
-                display: "flex", 
-                alignItems: "center", 
-                gap: "0.5rem",
-                width: isMobile ? "100%" : "auto",
-                justifyContent: "center"
-              }}>
-                <Loader2 size={14} color="#6366f1" style={{ animation: "qs-spin 0.9s linear infinite" }} />
-                <span style={{ fontSize: "0.78rem", color: "#6366f1", fontWeight: 500 }}>
-                  Loading customers…
-                </span>
-              </div>
-            )}
-            
-            <div style={{ 
-              display: "flex", 
-              gap: "0.75rem", 
-              width: isMobile ? "100%" : "auto",
-              justifyContent: "center"
-            }}>
-              <button 
-                onClick={handleBack} 
-                style={{ 
-                  padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
-                  background: "white", 
-                  color: "#475569", 
-                  border: "1.5px solid #e2e8f0", 
-                  borderRadius: 14, 
-                  fontSize: "clamp(0.813rem, 4vw, 0.875rem)", 
-                  fontWeight: 600, 
-                  cursor: "pointer", 
-                  display: "flex", 
-                  alignItems: "center", 
-                  gap: "0.5rem",
-                  flex: isMobile ? 1 : "auto",
-                  justifyContent: "center"
-                }}
-              >
-                <ArrowLeft size={17} /> Back
-              </button>
-              
-              <button
-                onClick={handleProceedToTemplate}
-                disabled={!canProceed}
-                style={{
-                  padding: isMobile ? "0.65rem 1rem" : "0.75rem 1.5rem",
-                  background: canProceed ? `linear-gradient(135deg,${PRIMARY},#1e293b)` : "#e2e8f0",
-                  color: canProceed ? "white" : "#94a3b8",
-                  border: "none", 
-                  borderRadius: 14, 
-                  fontSize: "clamp(0.813rem, 4vw, 0.875rem)", 
-                  fontWeight: 600,
-                  cursor: canProceed ? "pointer" : "not-allowed",
-                  display: "flex", 
-                  alignItems: "center", 
-                  gap: "0.5rem",
-                  boxShadow: canProceed ? `0 4px 12px ${PRIMARY}30` : "none",
-                  opacity: canProceed ? 1 : 0.7,
-                  flex: isMobile ? 1 : "auto",
-                  justifyContent: "center"
-                }}
-              >
-                {isCustomersActuallyLoading ? (
-                  <><Loader2 size={15} style={{ animation: "qs-spin 0.9s linear infinite" }} /> Loading…</>
-                ) : isAllCompaniesSelected ? (
-                  <>Select a Company <ArrowRight size={17} /></>
-                ) : (
-                  <>Continue <ArrowRight size={17} /></>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+        {/* Summary */}
+        {selectedItems.length > 0 && (
+          <SectionCard delay={0.2}>
+            <SummaryCard
+              grandTotal={grandTotal}
+              exchangeRates={exchangeRates}
+              selectedCurrency={localCurrency}
+            />
+          </SectionCard>
+        )}
       </div>
-      
+
       <ItemModal
         isOpen={isAddItemModalOpen}
         onClose={() => {

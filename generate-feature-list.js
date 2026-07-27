@@ -43,11 +43,13 @@ const features = [
     ],
   },
   {
-    section: 'Quotation Revision & Resubmission',
+    section: 'Quotation Revision, Duplication & Resubmission',
     items: [
       'When an Operations Manager returns a quotation, the originating creator receives it with the documented return reason, revises the content accordingly, and resubmits it for review',
       'When an Administrator rejects a quotation, the originating creator receives it with the stated rejection reason, makes the necessary amendments, and resubmits it through the approval pipeline',
+      'When a client requests changes to a quotation that has already been approved, cancel the original document and generate a linked revision reflecting the new requirements — automatically numbered (e.g., -R1, -R2) with full traceability back to the original',
       'All revised quotations recommence the full approval workflow, beginning with Operations Manager review prior to Administrator sign-off',
+      'Instantly duplicate any existing quotation to create a new, fully independent quotation — ideal for repeat orders or similar customer requests — without altering the original record\'s status or history',
     ],
   },
   {
@@ -234,7 +236,7 @@ async function generateExcel() {
   fCell.alignment = { horizontal: 'center', vertical: 'middle' };
   footerRow.height = 22;
 
-  const outputPath = path.join('/Users/zcrew/Desktop', 'Quotation-Generator-Feature-List.xlsx');
+  const outputPath = path.join('/Users/zcrew/Desktop', 'Quotation-Generator-Feature-List (1).xlsx');
   await workbook.xlsx.writeFile(outputPath);
   console.log(`✅ Excel saved to: ${outputPath}`);
 }

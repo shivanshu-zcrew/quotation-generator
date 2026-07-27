@@ -90,6 +90,13 @@ router.get('/:id/internal-documents/:docId/download', quotationController.getInt
 router.post('/:id/comments', quotationController.addReviewComment);
 
 /**
+ * @route   PATCH /api/quotations/:id/comments/:commentId
+ * @desc    Edit a review comment's text
+ * @access  Private (Comment author, Admin)
+ */
+router.patch('/:id/comments/:commentId', quotationController.updateReviewComment);
+
+/**
  * @route   PATCH /api/quotations/:id/comments/:commentId/resolve
  * @desc    Mark a review comment as resolved
  * @access  Private (Creator, Admin)

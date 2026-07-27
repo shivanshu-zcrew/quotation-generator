@@ -396,6 +396,21 @@ export function useQuotation() {
     }
   }, [id, showSnack]);
 
+  const handleEditComment = useCallback(async (commentId, newText) => {
+    try {
+      const res = await quotationAPI.updateComment(id, commentId, { comment: newText });
+      if (res?.data?.success) {
+        setReviewComments(prev => prev.map(c => c._id === commentId ? res.data.comment : c));
+        return { success: true };
+      }
+      throw new Error(res?.data?.message || 'Failed to update comment');
+    } catch (error) {
+      const errorMessage = error?.response?.data?.message || error?.message || 'Failed to update comment';
+      showSnack(errorMessage, 'error');
+      return { success: false, error: errorMessage };
+    }
+  }, [id, showSnack]);
+
   const handleResolveComment = useCallback(async (commentId) => {
     try {
       const res = await quotationAPI.resolveComment(id, commentId);
@@ -1285,6 +1300,7 @@ const handleSave = useCallback(async () => {
     newDocuments,
     reviewComments,
     handleAddComment,
+    handleEditComment,
     handleResolveComment,
     handleDeleteComment,
     snackbar,

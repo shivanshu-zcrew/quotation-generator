@@ -108,6 +108,13 @@ const getCompanyName = (selectedCompany, companies) => {
   return company?.name || DEFAULT_COMPANY_NAME;
 };
 
+const getCompanyZohoOrgId = (selectedCompany, companies) => {
+  if (!selectedCompany) return '';
+  if (typeof selectedCompany === 'object' && selectedCompany?.name) return selectedCompany.zohoOrganizationId || '';
+  const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
+  return company?.zohoOrganizationId || '';
+};
+
 const getCompanyDetails = (selectedCompany, companies) => {
   if (!selectedCompany) return { phone: '', email: '', tradeLicense: '', taxRegistration: '' };
   if (typeof selectedCompany === 'object' && selectedCompany?.name) {
@@ -150,6 +157,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   
   // Get company details for header display
   const companyDetails = useMemo(() => getCompanyDetails(selectedCompany, companies), [selectedCompany, companies]);
+  const companyZohoOrgId = useMemo(() => getCompanyZohoOrgId(selectedCompany, companies), [selectedCompany, companies]);
   
   // State
   const [quotationNumber] = useState(() => {
@@ -1206,6 +1214,7 @@ const handleDocumentDownload = useCallback((docId) => {
   getFileIcon={getFileIcon}
   setHeaderErrors={setHeaderErrors}
   companyName={companyName}
+  companyZohoOrgId={companyZohoOrgId}
   companyPhone={user?.phone || companyDetails.phone}
   companyEmail={user?.email || companyDetails.email}
   

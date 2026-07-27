@@ -680,6 +680,12 @@ export const quotationAPI = {
     return response;
   },
 
+  updateComment: async (id, commentId, data) => {
+    const response = await api.patch(`/quotations/${id}/comments/${commentId}`, data);
+    deduplicator.clear(`/quotations/${id}`);
+    return response;
+  },
+
   resolveComment: async (id, commentId) => {
     const response = await api.patch(`/quotations/${id}/comments/${commentId}/resolve`);
     deduplicator.clear(`/quotations/${id}`);

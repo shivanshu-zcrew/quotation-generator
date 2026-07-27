@@ -32,6 +32,14 @@ const DOCUMENT_CONFIG = {
 const UAE_EMIRATES = ['Abu Dhabi', 'Ajman', 'Dubai', 'Fujairah', 'Ras al-Khaimah', 'Sharjah', 'Umm al-Quwain'];
 const GCC_COUNTRIES = ['Saudi Arabia', 'Kuwait', 'Qatar', 'Bahrain', 'Oman'];
 
+// This company's Zoho org has 0% and 15% (Saudi VAT) tax IDs configured on
+// the backend (see TAX_IDS in quotationController.js's awardQuotation) — no
+// 5%. Every other company's Zoho org has 0%/5% (UAE VAT) only, no 15%.
+// Offering a rate with no matching tax ID would 422 at award time (caught
+// by the TAX_RATE_NOT_CONFIGURED guard) instead of a confusing raw Zoho
+// error — but it's better not to offer it as a selectable option at all.
+const FIFTEEN_PERCENT_ZOHO_ORG_ID = '932531766';
+
 // In QuotationLayout.jsx - Update the LEFT_FIELDS and RIGHT_FIELDS arrays
 
 const LEFT_FIELDS = [
@@ -874,29 +882,86 @@ export default function QuotationLayout({
   amountInWords = '', tcSections, onTcChange, actionBar, headerErrors = {},
   fieldErrors = {}, setHeaderErrors, documents = [], onDocumentUpload, onDocumentDelete,
   onDocumentDownload, onDocumentPreview, documentLoading = false, formatFileSize, getFileIcon,
-  companyName, customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai',
+  companyName, companyZohoOrgId = '', customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai',
   customerContactPersons = [],
   termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
   companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = '',
   commentsByTarget = {}, canAddComments = false, canManageComments = false, canDeleteComment,
-  onAddComment, onResolveComment, onDeleteComment,
+  onAddComment, onEditComment, onResolveComment, onDeleteComment,
+  // Whole-line-item comments staged during an active reject/return review —
+  // separate from the highlight-a-text-range comments above, which persist
+  // immediately. These are held in the parent (ViewQuotationScreen) as local
+  // state until the reject/return is confirmed, so a Cancel there discards
+  // them with no backend cleanup needed.
+  lineCommentMode = false, pendingLineComments = [],
+  onAddPendingLineComment, onEditPendingLineComment, onRemovePendingLineComment,
 }) {
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
 
   // Review-comment props shared by CommentableText/CommentBadge instances,
   // keyed by target so callers just spread `commentsFor('item', qi.id)`.
-  const commentsFor = (targetType, targetKey) => ({
-    targetType,
-    targetKey: String(targetKey),
-    comments: commentsByTarget[`${targetType}:${targetKey}`] || [],
-    canAdd: canAddComments,
-    onAdd: onAddComment,
-    canManage: canManageComments,
-    onResolve: onResolveComment,
-    canDeleteComment,
-    onDelete: onDeleteComment,
-  });
+  // For item targets while a reject/return review is active (lineCommentMode),
+  // new comments are staged locally instead of posted immediately — same
+  // select-text-to-comment interaction as everywhere else on the page, but
+  // routed through the pending-comment props so Cancel can discard them with
+  // nothing to clean up server-side (see ViewQuotationScreen).
+  const commentsFor = (targetType, targetKey) => {
+    const savedComments = commentsByTarget[`${targetType}:${targetKey}`] || [];
+    if (targetType !== 'item' || !lineCommentMode) {
+      return {
+        targetType,
+        targetKey: String(targetKey),
+        comments: savedComments,
+        canAdd: canAddComments,
+        onAdd: onAddComment,
+        onEdit: onEditComment,
+        canManage: canManageComments,
+        onResolve: onResolveComment,
+        canDeleteComment,
+        onDelete: onDeleteComment,
+      };
+    }
+
+    const key = String(targetKey);
+    const staged = pendingLineComments
+      .filter((c) => c.itemId === key)
+      .map((c) => ({
+        _id: c.tempId,
+        quote: c.quote,
+        prefix: c.prefix,
+        suffix: c.suffix,
+        comment: c.comment,
+        createdAt: c.createdAt,
+        createdBySnapshot: c.createdBySnapshot,
+        resolved: false,
+        pending: true,
+      }));
+
+    return {
+      targetType,
+      targetKey: key,
+      comments: [...savedComments, ...staged],
+      canAdd: canAddComments,
+      onAdd: ({ quote, prefix, suffix, comment }) => {
+        onAddPendingLineComment?.(key, quote, prefix, suffix, comment);
+        return { success: true };
+      },
+      onEdit: (id, newText) => {
+        const isStaged = pendingLineComments.some((c) => c.tempId === id);
+        if (isStaged) return onEditPendingLineComment?.(id, newText);
+        return onEditComment(id, newText);
+      },
+      canManage: canManageComments,
+      onResolve: onResolveComment,
+      canDeleteComment: (c) => (c.pending ? true : canDeleteComment(c)),
+      onDelete: (id) => {
+        const isStaged = pendingLineComments.some((c) => c.tempId === id);
+        if (isStaged) return onRemovePendingLineComment?.(id);
+        return onDeleteComment(id);
+      },
+    };
+  };
   
   // ✅ Store original company values in state (these never change during edit)
   const [originalCompanyTradeLicense, setOriginalCompanyTradeLicense] = useState(companyTradeLicense);
@@ -926,19 +991,32 @@ export default function QuotationLayout({
 
   const isPlaceOfSupplyUAE = useMemo(() => UAE_EMIRATES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);
   const isPlaceOfSupplyGCC = useMemo(() => GCC_COUNTRIES.includes(customerPlaceOfSupply), [customerPlaceOfSupply]);
+  // The Saudi-registered company's "home" jurisdiction is Saudi Arabia, not
+  // the UAE — so its domestic sales (eligible for the 0%/15% Saudi VAT
+  // presets) are the ones placed in Saudi Arabia, while UAE companies' are
+  // the ones placed in a UAE emirate. Without this split, a Saudi company's
+  // sale to a Saudi customer was being treated as an export (falling into
+  // the GCC zero-rated branch below) instead of domestic.
+  const isSaudiCompany = companyZohoOrgId === FIFTEEN_PERCENT_ZOHO_ORG_ID;
+  const isPlaceOfSupplySA = useMemo(() => customerPlaceOfSupply === 'Saudi Arabia', [customerPlaceOfSupply]);
 
   const getTaxPresets = useCallback(() => {
+    const domesticPresets = isSaudiCompany
+      ? [{ value: "0", label: "0%" }, { value: "15", label: "15%" }]
+      : [{ value: "0", label: "0%" }, { value: "5", label: "5%" }];
+    const isDomestic = isSaudiCompany ? isPlaceOfSupplySA : isPlaceOfSupplyUAE;
+
     if (customerTaxTreatment === 'non_vat_registered' || customerTaxTreatment === 'gcc_non_vat_registered') return [];
     if (customerTaxTreatment === 'vat_registered') {
-      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }, { value: "15", label: "15%" }];
-      if (isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (Export - Zero-rated)" }];
+      if (isDomestic) return domesticPresets;
+      if (isPlaceOfSupplyUAE || isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (Export - Zero-rated)" }];
     }
     if (customerTaxTreatment === 'gcc_vat_registered') {
-      if (isPlaceOfSupplyUAE) return [{ value: "0", label: "0%" }, { value: "5", label: "5%" }, { value: "15", label: "15%" }];
-      if (isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (GCC Domestic)" }];
+      if (isDomestic) return domesticPresets;
+      if (isPlaceOfSupplyUAE || isPlaceOfSupplyGCC) return [{ value: "0", label: "0% (GCC Domestic)" }];
     }
     return [];
-  }, [customerTaxTreatment, isPlaceOfSupplyUAE, isPlaceOfSupplyGCC]);
+  }, [customerTaxTreatment, isPlaceOfSupplyUAE, isPlaceOfSupplyGCC, isPlaceOfSupplySA, isSaudiCompany]);
 
   const taxPresets = getTaxPresets();
 
@@ -955,6 +1033,26 @@ export default function QuotationLayout({
     const fivePercent = taxPresets.find(p => p.value === "5");
     return fivePercent ? "5" : taxPresets[0].value;
   }, [taxPresets, quotationData.tax]);
+
+  // If the customer (and therefore customerTaxTreatment/place of supply)
+  // changes on an in-progress quotation — e.g. duplicating a quotation then
+  // switching to a different customer — the previously selected tax value
+  // can become invalid for the new set of presets. A native <select> with a
+  // value that matches none of its <option>s silently falls back to
+  // whichever option exists without firing onChange, so the stale tax would
+  // otherwise never get corrected and the totals would keep using it. Snap
+  // it back to a valid value whenever the presets no longer contain it.
+  useEffect(() => {
+    if (!isEditing) return;
+    const currentTax = quotationData.tax != null ? String(quotationData.tax) : null;
+    if (taxPresets.length === 0) {
+      if (currentTax && currentTax !== '0') onDataChange('tax', 0);
+      return;
+    }
+    if (!taxPresets.some(p => p.value === currentTax)) {
+      onDataChange('tax', Number(defaultTaxValue));
+    }
+  }, [isEditing, taxPresets, quotationData.tax, defaultTaxValue, onDataChange]);
 
   // ✅ This function determines if a field should be read-only
   const isFieldReadOnly = useCallback((field) => {
@@ -1035,6 +1133,8 @@ export default function QuotationLayout({
           const matchedPhone = contact.workPhone || contact.mobile;
           if (matchedPhone) handleFieldChange('customerPhone', matchedPhone);
         };
+
+        const fieldCommentProps = commentsFor('header', field);
 
         return (
           <React.Fragment key={field}>
@@ -1147,11 +1247,11 @@ export default function QuotationLayout({
                     <AlertCircle size={12} /> {errorMessage}
                   </div>
                 )}
-                {type !== 'date' && <CommentBadge {...commentsFor('header', field)} />}
+                {type !== 'date' && <CommentBadge {...fieldCommentProps} />}
               </div>
             ) : type !== 'date' && fieldValue ? (
               <CommentableText
-                {...commentsFor('header', field)}
+                {...fieldCommentProps}
                 text={String(fieldValue)}
                 as="span"
                 textStyle={styles.fieldValue}
@@ -1219,7 +1319,9 @@ export default function QuotationLayout({
 
   const hideSnack = useCallback(() => setSnackbar({ show: false, message: '', type: 'error' }), []);
 
-  const renderItemRow = (qi, index) => (
+  const renderItemRow = (qi, index) => {
+    const itemCommentProps = commentsFor('item', qi.id);
+    return (
     <tr key={qi.id} style={{ backgroundColor: index % 2 === 0 ? '#ffffff' : '#f8fafc', verticalAlign: 'top' }}>
       <td style={styles.tableCellCenter}>{index + 1}</td>
       <td style={styles.tableCellDescription}>
@@ -1233,10 +1335,10 @@ export default function QuotationLayout({
               rows={2}
               style={{ ...inputStyle, resize: 'vertical', lineHeight: '1.4', fontSize: '0.8125rem', marginTop: '0.5rem' }}
             />
-            <CommentBadge {...commentsFor('item', qi.id)} />
+            <CommentBadge {...itemCommentProps} />
           </>
         ) : (
-          <CommentableText {...commentsFor('item', qi.id)} text={qi.description} textStyle={styles.itemDescription} />
+          <CommentableText {...itemCommentProps} text={qi.description} textStyle={styles.itemDescription} />
         )}
         {renderItemImages(qi)}
         {renderNewImages(qi)}
@@ -1294,7 +1396,8 @@ export default function QuotationLayout({
         </td>
       )}
     </tr>
-  );
+    );
+  };
 
   const handleValidatedUpdate = (itemId, field, value, validator) => {
     if (value === '' && field === 'quantity') {
@@ -1384,6 +1487,7 @@ export default function QuotationLayout({
       canManageComments={canManageComments}
       canDeleteComment={canDeleteComment}
       onAddComment={onAddComment}
+      onEditComment={onEditComment}
       onResolveComment={onResolveComment}
       onDeleteComment={onDeleteComment}
     />;

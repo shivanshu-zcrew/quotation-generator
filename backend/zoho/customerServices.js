@@ -148,6 +148,7 @@ class ScopedZohoClient {
 
   _mapTaxTreatmentToZoho(t) { return this._service._mapTaxTreatmentToZoho(t); }
   _getPlaceOfSupplyData(t, p) { return this._service._getPlaceOfSupplyData(t, p); }
+  _normalizeTaxTreatmentForZoho(t, p) { return this._service._normalizeTaxTreatmentForZoho(t, p); }
   _mapTaxTreatment(c) { return this._service._mapTaxTreatment(c); }
   _buildCurrencyObject(c) { return this._service._buildCurrencyObject(c); }
   _mapContactPersons(c) { return this._service._mapContactPersons(c); }
@@ -375,7 +376,8 @@ class ScopedZohoClient {
     const { taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber, currencyCode, contactPersons = [], address, city, state, zipcode, phone, street2, attention } = customerData;
     let effectivePlaceOfSupply = placeOfSupply;
     if (taxTreatment === 'vat_registered' && uaeEmirate) effectivePlaceOfSupply = uaeEmirate;
-    const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(taxTreatment, effectivePlaceOfSupply);
+    const normalizedTaxTreatment = this._normalizeTaxTreatmentForZoho(taxTreatment, effectivePlaceOfSupply);
+    const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(normalizedTaxTreatment, effectivePlaceOfSupply);
     let currencyId = null;
     if (currencyCode) currencyId = await this._getCurrencyId(currencyCode);
 
@@ -383,7 +385,7 @@ class ScopedZohoClient {
       contact_name: customerData.name,
       company_name: customerData.companyName || '',
       contact_type: 'customer',
-      tax_treatment: this._mapTaxTreatmentToZoho(taxTreatment),
+      tax_treatment: this._mapTaxTreatmentToZoho(normalizedTaxTreatment),
       country_code: countryCode,
       place_of_contact: placeOfSupplyCode
     };
@@ -399,7 +401,7 @@ class ScopedZohoClient {
       contactPayload.billing_address = billingAddress;
       contactPayload.shipping_address = { ...billingAddress };
     }
-    if ((taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
+    if ((normalizedTaxTreatment === 'vat_registered' || normalizedTaxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
       contactPayload.tax_reg_no = taxRegistrationNumber;
       contactPayload.vat_reg_no = taxRegistrationNumber;
     }
@@ -422,7 +424,8 @@ class ScopedZohoClient {
     const { taxTreatment, placeOfSupply, uaeEmirate, taxRegistrationNumber, currencyCode, contactPersons = [], address, city, state, zipcode, phone, street2, attention } = customerData;
     let effectivePlaceOfSupply = placeOfSupply;
     if (taxTreatment === 'vat_registered' && uaeEmirate) effectivePlaceOfSupply = uaeEmirate;
-    const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(taxTreatment, effectivePlaceOfSupply);
+    const normalizedTaxTreatment = this._normalizeTaxTreatmentForZoho(taxTreatment, effectivePlaceOfSupply);
+    const { countryCode, placeOfSupplyCode } = this._getPlaceOfSupplyData(normalizedTaxTreatment, effectivePlaceOfSupply);
 
     const seen = new Set();
     const uniqueContacts = [];
@@ -440,7 +443,7 @@ class ScopedZohoClient {
       contact_name: customerData.name,
       company_name: customerData.companyName || customerData.name,
       contact_type: 'customer',
-      tax_treatment: this._mapTaxTreatmentToZoho(taxTreatment) || 'vat_not_registered',
+      tax_treatment: this._mapTaxTreatmentToZoho(normalizedTaxTreatment) || 'vat_not_registered',
       country_code: countryCode,
       place_of_contact: placeOfSupplyCode,
       contact_persons: uniqueContacts.map(mapContactPersonToZoho)
@@ -448,7 +451,7 @@ class ScopedZohoClient {
 
     const billingAddress = this._buildAddress({ address, street2, city, state, zipcode, phone, attention, country: 'United Arab Emirates' });
     if (billingAddress && Object.keys(billingAddress).length > 0) contactPayload.billing_address = billingAddress;
-    if ((taxTreatment === 'vat_registered' || taxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
+    if ((normalizedTaxTreatment === 'vat_registered' || normalizedTaxTreatment === 'gcc_vat_registered') && taxRegistrationNumber) {
       contactPayload.tax_reg_no = taxRegistrationNumber;
       contactPayload.vat_reg_no = taxRegistrationNumber;
     }
@@ -1354,24 +1357,50 @@ class ZohoBooksService {
 
   // ───────────────────── PURE MAPPERS ─────────────────────────────────────
   _mapTaxTreatmentToZoho(t) {
-    return ({ vat_registered: 'vat_registered', non_vat_registered: 'vat_not_registered', gcc_vat_registered: 'gcc_vat_registered', gcc_non_vat_registered: 'gcc_vat_not_registered' })[t] || 'vat_not_registered';
+    return ({ vat_registered: 'vat_registered', non_vat_registered: 'vat_not_registered', gcc_vat_registered: 'gcc_vat_registered', gcc_non_vat_registered: 'gcc_vat_not_registered', non_gcc: 'non_gcc' })[t] || 'vat_not_registered';
+  }
+
+  // Kuwait/Qatar have not implemented VAT — Zoho rejects gcc_vat_registered/
+  // gcc_non_vat_registered for these two countries ("this transaction date is
+  // before VAT implementing date of ...") and requires 'non_gcc' instead. Our
+  // own Customer.taxTreatment never stores 'non_gcc' — this reclassification
+  // is purely an outbound-to-Zoho detail, transparent to the user; the
+  // customer form keeps offering the same GCC country list (incl. Kuwait/
+  // Qatar) under the regular GCC VAT/Non tiles.
+  _normalizeTaxTreatmentForZoho(taxTreatment, placeOfSupply) {
+    const isNonVatGccPlace = placeOfSupply === 'Kuwait' || placeOfSupply === 'Qatar';
+    if (isNonVatGccPlace && (taxTreatment === 'gcc_vat_registered' || taxTreatment === 'gcc_non_vat_registered')) {
+      return 'non_gcc';
+    }
+    return taxTreatment;
   }
 
   _getPlaceOfSupplyData(taxTreatment, placeOfSupply) {
     let countryCode, placeOfSupplyCode;
-    const isUAE = this.EMIRATE_CODE_MAP[placeOfSupply] !== undefined;
-    if (taxTreatment === 'vat_registered') {
-      if (isUAE) { countryCode = 'AE'; placeOfSupplyCode = this.EMIRATE_CODE_MAP[placeOfSupply] || 'DU'; }
-      else { countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE'; placeOfSupplyCode = countryCode; }
-    } else if (taxTreatment === 'gcc_vat_registered') {
-      const isGCC = this.COUNTRY_CODE_MAP[placeOfSupply] !== undefined;
-      if (isGCC && placeOfSupply !== 'United Arab Emirates (UAE)') { countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE'; placeOfSupplyCode = countryCode; }
-      else if (placeOfSupply === 'United Arab Emirates (UAE)' || this.EMIRATE_CODE_MAP[placeOfSupply]) { countryCode = 'AE'; placeOfSupplyCode = this.EMIRATE_CODE_MAP[placeOfSupply] || 'DU'; }
-      else { countryCode = 'AE'; placeOfSupplyCode = 'AE'; }
-    } else if (taxTreatment === 'non_vat_registered') {
-      countryCode = 'AE'; placeOfSupplyCode = this.EMIRATE_CODE_MAP[placeOfSupply] || 'DU';
-    } else if (taxTreatment === 'gcc_non_vat_registered') {
-      countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE'; placeOfSupplyCode = countryCode;
+    const isEmirate = this.EMIRATE_CODE_MAP[placeOfSupply] !== undefined;
+    const isUAE = isEmirate || placeOfSupply === 'United Arab Emirates';
+
+    if (taxTreatment === 'vat_registered' || taxTreatment === 'non_vat_registered') {
+      if (isEmirate) {
+        // Domestic UAE customer — place of supply is a specific emirate.
+        countryCode = 'AE';
+        placeOfSupplyCode = this.EMIRATE_CODE_MAP[placeOfSupply] || 'DU';
+      } else {
+        // Non-UAE place under a "domestic" treatment (e.g. the Saudi-labeled
+        // company's VAT Reg/Non-VAT locked to Saudi Arabia) — there's no
+        // emirate to give, so place_of_contact mirrors country_code.
+        countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE';
+        placeOfSupplyCode = countryCode;
+      }
+    } else if (taxTreatment === 'gcc_vat_registered' || taxTreatment === 'gcc_non_vat_registered') {
+      // GCC-treatment customers are identified purely by country — Zoho
+      // rejects an emirate-level place_of_contact (e.g. 'DU') here even when
+      // the selected GCC country is UAE itself; it must equal country_code.
+      countryCode = isUAE ? 'AE' : (this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE');
+      placeOfSupplyCode = countryCode;
+    } else if (taxTreatment === 'non_gcc') {
+      countryCode = this.COUNTRY_CODE_MAP[placeOfSupply] || 'AE';
+      placeOfSupplyCode = countryCode;
     }
     return { countryCode, placeOfSupplyCode };
   }
@@ -1400,6 +1429,11 @@ class ZohoBooksService {
     if (t === 'vat_registered') return 'vat_registered';
     if (t === 'gcc_vat_registered') return 'gcc_vat_registered';
     if (t === 'gcc_vat_not_registered') return 'gcc_non_vat_registered';
+    // Zoho's 'non_gcc' (used for Kuwait/Qatar, which have no VAT) has no
+    // direct equivalent in our app's 4-value enum — map it back to the
+    // closest fit (GCC-country, not VAT-registered) so this round-trips
+    // consistently with _normalizeTaxTreatmentForZoho's outbound mapping.
+    if (t === 'non_gcc') return 'gcc_non_vat_registered';
     return 'non_vat_registered';
   }
 
@@ -1482,6 +1516,9 @@ class ZohoBooksService {
     if (zohoContact.tax_treatment === 'vat_registered' || zohoContact.contact_category === 'vat_registered') taxTreatment = 'vat_registered';
     else if (zohoContact.tax_treatment === 'gcc_vat_registered' || zohoContact.gcc_vat_treatment === 'vat_registered') taxTreatment = 'gcc_vat_registered';
     else if (zohoContact.tax_treatment === 'gcc_vat_not_registered') taxTreatment = 'gcc_non_vat_registered';
+    // See _mapTaxTreatment's comment above — 'non_gcc' (Kuwait/Qatar) has no
+    // direct equivalent in our 4-value enum; map it back to the closest fit.
+    else if (zohoContact.tax_treatment === 'non_gcc') taxTreatment = 'gcc_non_vat_registered';
 
     let email = zohoContact.email || '';
     let phone = zohoContact.phone || '';
@@ -1574,10 +1611,18 @@ class ZohoBooksService {
       };
       if (estimateData.estimate_number) payload.estimate_number = estimateData.estimate_number;
       if (currencyId) payload.currency_id = currencyId;
+      if (estimateData.tax_reg_no) payload.tax_reg_no = estimateData.tax_reg_no;
       if (estimateData.tax_id && estimateData.tax_percentage > 0) payload.tax_id = estimateData.tax_id;
       const hasItemDiscount = lineItems.some(i => i.discount && i.discount > 0);
       if (estimateData.discount && estimateData.discount > 0 && !hasItemDiscount) {
-        payload.discount = estimateData.discount; payload.is_discount_before_tax = estimateData.is_discount_before_tax || false; payload.discount_type = estimateData.discount_type || 'entity_level';
+        // Zoho's own web client sends this as a percentage-formatted STRING
+        // (e.g. "30.00%") — a bare number is instead interpreted as a flat
+        // currency amount, which is a different discount mode entirely and
+        // is what was triggering the "Entity level discount ... VAT" error
+        // even though discount_type was correctly 'entity_level'.
+        payload.discount = `${Number(estimateData.discount).toFixed(2)}%`;
+        payload.is_discount_before_tax = estimateData.is_discount_before_tax ?? true;
+        payload.discount_type = estimateData.discount_type || 'entity_level';
       }
       if (estimateData.is_inclusive_tax !== undefined) payload.is_inclusive_tax = estimateData.is_inclusive_tax;
       if (estimateData.contact_persons_associated) payload.contact_persons_associated = estimateData.contact_persons_associated;

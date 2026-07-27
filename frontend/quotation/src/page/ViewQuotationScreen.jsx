@@ -151,7 +151,7 @@ const ReviewBanner = ({
   title, meta, approveLabel, rejectLabel, rejectPlaceholder,
   onApprove, onReject, isApproving, isRejecting,
   showRejectForm, setShowRejectForm, rejectReason, setRejectReason,
-  bannerStyle, onGoToDashboard,
+  bannerStyle, onGoToDashboard, pendingLineCommentCount = 0,
 }) => (
   <div style={{
     ...bannerStyle,
@@ -237,6 +237,16 @@ const ReviewBanner = ({
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {pendingLineCommentCount > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.5rem 0.75rem', borderRadius: '0.5rem',
+              background: '#fef3c7', border: '1px solid #f59e0b',
+              color: '#78350f', fontSize: '0.8rem', fontWeight: 600,
+            }}>
+              💬 {pendingLineCommentCount} line-item comment{pendingLineCommentCount === 1 ? '' : 's'} will be saved with this {rejectLabel.toLowerCase()}. Click Cancel to discard {pendingLineCommentCount === 1 ? 'it' : 'them'} instead.
+            </div>
+          )}
           <textarea
             placeholder={rejectPlaceholder}
             value={rejectReason}
@@ -413,7 +423,7 @@ export default function ViewQuotationScreen() {
   const {
     isEditing, setIsEditing, isSaving, isExporting, editingImgId, setEditingImgId,
     loading, fetchError, newImages, quotationData, quotationItems, tcSections, setTcSections,
-    internalDocuments, newDocuments, reviewComments, handleAddComment, handleResolveComment, handleDeleteComment,
+    internalDocuments, newDocuments, reviewComments, handleAddComment, handleEditComment, handleResolveComment, handleDeleteComment,
     snackbar, setSnackbar, fieldErrors, originalQuotation,
     subtotal, taxAmount, discountAmount, grandTotal, amountInWords, items, previewDoc, setPreviewDoc,
     handleDocumentPreview, handleDataChange, addItem, removeItem, updateItem, handleImageUpload,
@@ -454,6 +464,32 @@ export default function ViewQuotationScreen() {
   const storeReject = useAppStore(s => s.rejectQuotation);
   const storeOpsApprove = useAppStore(s => s.opsApproveQuotation);
   const storeOpsReject = useAppStore(s => s.opsRejectQuotation);
+
+  // Item-description text-selection comments staged while a reject/return
+  // form is open — same select-text-to-comment interaction as everywhere
+  // else on the page (see QuotationLayout's commentsFor), but held only in
+  // local state (never posted) until Confirm is clicked, so Cancel — which
+  // resets showRejectForm — can discard them for free via the effect below,
+  // with nothing to clean up server-side.
+  const [pendingLineComments, setPendingLineComments] = useState([]);
+  useEffect(() => {
+    setPendingLineComments([]);
+  }, [showRejectForm]);
+  const addPendingLineComment = useCallback((itemId, quote, prefix, suffix, comment) => {
+    setPendingLineComments(prev => [...prev, {
+      tempId: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      itemId, quote, prefix, suffix, comment,
+      createdAt: new Date().toISOString(),
+      createdBySnapshot: { name: user?.name || 'You' },
+    }]);
+  }, [user]);
+  const removePendingLineComment = useCallback((tempId) => {
+    setPendingLineComments(prev => prev.filter(c => c.tempId !== tempId));
+  }, []);
+  const editPendingLineComment = useCallback((tempId, newText) => {
+    setPendingLineComments(prev => prev.map(c => c.tempId === tempId ? { ...c, comment: newText } : c));
+    return { success: true };
+  }, []);
 
   // ── Wrong-account detection ──────────────────────────────────
   // Email links carry ?action=review&for=<role> (e.g. for=ops_manager).
@@ -701,10 +737,10 @@ export default function ViewQuotationScreen() {
         return <>The client accepted this quotation — marked <strong>Awarded</strong>. No further action needed.</>;
       case 'not_awarded':
         return <>The client didn't proceed with this quotation — marked <strong>Not Awarded</strong>. No further action needed.</>;
-      case 'cancelled':
-        return <>Cancelled to make way for a new revision. Click <strong>Edit &amp; Revise</strong> to continue.</>;
-      case 'amended':
-        return <>Paused for editing. Click <strong>Edit &amp; Amend</strong> to update it and resubmit for review.</>;
+      // 'cancelled' and 'amended' are intentionally not handled here — the
+      // dedicated banner just below already covers both in full detail
+      // (who cancelled it, why, and whether a revision already exists),
+      // so a second generic message here would only risk contradicting it.
       default:
         return null;
     }
@@ -773,6 +809,27 @@ export default function ViewQuotationScreen() {
     }
   }, [originalQuotation?._id, storeApprove, setSnackbar, navigate, user?.role]);
 
+  // Persists any line-item comments staged during this reject/return
+  // session, right before the reject/return itself is submitted — comments
+  // only ever reach the backend as part of a confirmed reject, never on
+  // Cancel (see the pendingLineComments effect above).
+  const flushPendingLineComments = useCallback(async () => {
+    for (const c of pendingLineComments) {
+      const res = await handleAddComment({
+        targetType: 'item',
+        targetKey: String(c.itemId),
+        quote: c.quote,
+        prefix: c.prefix,
+        suffix: c.suffix,
+        comment: c.comment,
+      });
+      if (!res?.success) {
+        return { success: false, error: res?.error || 'Failed to save a line comment' };
+      }
+    }
+    return { success: true };
+  }, [pendingLineComments, handleAddComment]);
+
   const handleReject = useCallback(async () => {
     if (!rejectReason.trim()) {
       setSnackbar({ show: true, message: 'Please provide a rejection reason', type: 'error' });
@@ -781,6 +838,11 @@ export default function ViewQuotationScreen() {
     if (!originalQuotation?._id) return;
     setIsRejecting(true);
     try {
+      const commentResult = await flushPendingLineComments();
+      if (!commentResult.success) {
+        setSnackbar({ show: true, message: commentResult.error, type: 'error' });
+        return;
+      }
       const result = await storeReject(originalQuotation._id, rejectReason.trim());
       if (result?.success === false) {
         setSnackbar({ show: true, message: result.error || 'Failed to reject quotation', type: 'error' });
@@ -796,7 +858,7 @@ export default function ViewQuotationScreen() {
     } finally {
       setIsRejecting(false);
     }
-  }, [originalQuotation?._id, rejectReason, storeReject, setSnackbar]);
+  }, [originalQuotation?._id, rejectReason, storeReject, setSnackbar, flushPendingLineComments]);
 
   const handleOpsApprove = useCallback(async () => {
     if (!originalQuotation?._id) return;
@@ -824,6 +886,11 @@ export default function ViewQuotationScreen() {
     if (!originalQuotation?._id) return;
     setIsRejecting(true);
     try {
+      const commentResult = await flushPendingLineComments();
+      if (!commentResult.success) {
+        setSnackbar({ show: true, message: commentResult.error, type: 'error' });
+        return;
+      }
       const result = await storeOpsReject(originalQuotation._id, rejectReason.trim());
       if (result?.success === false) {
         setSnackbar({ show: true, message: result.error || 'Failed to return quotation', type: 'error' });
@@ -839,7 +906,7 @@ export default function ViewQuotationScreen() {
     } finally {
       setIsRejecting(false);
     }
-  }, [originalQuotation?._id, rejectReason, storeOpsReject, setSnackbar]);
+  }, [originalQuotation?._id, rejectReason, storeOpsReject, setSnackbar, flushPendingLineComments]);
   
   // Show spinner while loading, or while the quotation is not yet resolved.
   // The "not found" state is only correct after a fetch has been attempted
@@ -1133,14 +1200,20 @@ export default function ViewQuotationScreen() {
               {isRevisePath && activeRevisionCheck.checked && activeRevisionCheck.revision ? (
                 <div style={{ color: '#7f1d1d', marginTop: 4, fontSize: '0.8rem' }}>
                   Already revised as{' '}
-                  <a
-                    href={`/quotation/${activeRevisionCheck.revision._id}`}
-                    onClick={(e) => { e.preventDefault(); navigate(`/quotation/${activeRevisionCheck.revision._id}`); }}
-                    style={{ color: '#9d174d', fontWeight: 700, textDecoration: 'underline' }}
-                  >
+                  <span style={{ color: '#9d174d', fontWeight: 700 }}>
                     {activeRevisionCheck.revision.quotationNumber}
-                  </a>{' '}
-                  ({activeRevisionCheck.revision.status}). Cancel that revision first to create another one.
+                  </span>{' '}
+                  ({activeRevisionCheck.revision.status})
+                  {activeRevisionCheck.revision.createdBySnapshot?.name && (
+                    <>
+                      {' '}— created by {activeRevisionCheck.revision.createdBySnapshot.name}
+                      {activeRevisionCheck.revision.createdBySnapshot.role === 'admin' && ' (Admin)'}
+                    </>
+                  )}
+                  .{' '}
+                  {(user?.role === 'admin' || user?.role === 'ops_manager')
+                    ? 'Cancel that revision first to create another one.'
+                    : 'An admin or ops manager must cancel that revision before another one can be created.'}
                 </div>
               ) : (
                 <div style={{ color: '#6b7280', marginTop: 4, fontSize: '0.8rem' }}>
@@ -1186,6 +1259,7 @@ export default function ViewQuotationScreen() {
                 setRejectReason={setRejectReason}
                 bannerStyle={styles.reviewBanner}
                 onGoToDashboard={handleGoToDashboard}
+                pendingLineCommentCount={pendingLineComments.length}
               />
             );
           }
@@ -1215,6 +1289,7 @@ export default function ViewQuotationScreen() {
                 setRejectReason={setRejectReason}
                 bannerStyle={styles.reviewBanner}
                 onGoToDashboard={handleGoToDashboard}
+                pendingLineCommentCount={pendingLineComments.length}
               />
             );
           }
@@ -1284,8 +1359,14 @@ export default function ViewQuotationScreen() {
           canManageComments={canManageComments}
           canDeleteComment={canDeleteComment}
           onAddComment={handleAddComment}
+          onEditComment={handleEditComment}
           onResolveComment={handleResolveComment}
           onDeleteComment={handleDeleteComment}
+          lineCommentMode={showRejectForm}
+          pendingLineComments={pendingLineComments}
+          onAddPendingLineComment={addPendingLineComment}
+          onEditPendingLineComment={editPendingLineComment}
+          onRemovePendingLineComment={removePendingLineComment}
           actionBar={null}
           documents={allDocuments}
           onDocumentUpload={handleDocumentUpload}
@@ -1302,6 +1383,7 @@ export default function ViewQuotationScreen() {
           customerPlaceOfSupply={customerPlaceOfSupply}
           customerContactPersons={customerContactPersons}
           companyName={originalQuotation?.companySnapshot?.name || originalQuotation?.customer || ''}
+  companyZohoOrgId={originalQuotation?.companySnapshot?.zohoOrganizationId || ''}
   companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
   companyEmail={originalQuotation?.salesManagerEmail || originalQuotation?.createdBySnapshot?.email || ''}
   companyTradeLicense={quotationData?.tl || originalQuotation?.tl || originalQuotation?.companySnapshot?.crNumber || ''}

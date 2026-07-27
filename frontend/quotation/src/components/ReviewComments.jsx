@@ -1,13 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { MessageSquarePlus, MessageSquare, Check, Trash2, X } from 'lucide-react';
-import { getSelectionAnchor, splitTextWithHighlights } from '../utils/textAnchor';
+import { MessageSquarePlus, MessageSquare, Check, Trash2, X, Edit2 } from 'lucide-react';
+import { getSelectionAnchor, splitTextWithHighlights, locateQuote } from '../utils/textAnchor';
 
 const styles = {
   mark: {
-    backgroundColor: '#fef08a',
-    borderBottom: '2px solid #eab308',
+    backgroundColor: '#fef3c7',
+    borderBottom: '2px solid #f59e0b',
     cursor: 'pointer',
-    borderRadius: 2,
   },
   toolbarBtn: {
     position: 'fixed',
@@ -137,7 +136,30 @@ const styles = {
     fontWeight: 700,
     cursor: 'pointer',
   },
+  expandedPanel: {
+    marginTop: 6,
+    border: '1px solid #fde68a',
+    borderRadius: 8,
+    padding: '0.5rem 0.65rem',
+    backgroundColor: '#fffbeb',
+  },
 };
+
+// If the current text selection overlaps an already-commented span (a
+// <mark data-comment-ids>), surface that existing comment instead of
+// letting a new, overlapping/duplicate comment be created on the same
+// text — the reviewer should edit or resolve the existing one, not stack
+// another comment on top of it.
+function findOverlappingMark(container) {
+  const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !container) return null;
+  const range = sel.getRangeAt(0);
+  const marks = container.querySelectorAll('mark[data-comment-ids]');
+  for (const mark of marks) {
+    if (range.intersectsNode(mark)) return mark;
+  }
+  return null;
+}
 
 function relativeTime(dateStr) {
   if (!dateStr) return '';
@@ -150,9 +172,19 @@ function relativeTime(dateStr) {
   }
 }
 
-function CommentEntry({ comment, canManage, onResolve, canDeleteComment, onDelete }) {
+function CommentEntry({ comment, canManage, onResolve, canDeleteComment, onDelete, onEdit }) {
   const [busy, setBusy] = useState(false);
-  const canDelete = canDeleteComment ? canDeleteComment(comment) : false;
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(comment.comment);
+  // A "pending" comment is staged locally (e.g. during an active reject/
+  // return review) and hasn't been saved to the backend yet — Resolve makes
+  // no sense for it (there's nothing to resolve server-side), and the person
+  // who staged it can always edit/remove it regardless of the normal author
+  // check (there's no "author" to check against until it's actually saved).
+  const isPending = !!comment.pending;
+  const canDelete = isPending ? true : (canDeleteComment ? canDeleteComment(comment) : false);
+  // Editing uses the same author-or-admin rule as deleting.
+  const canEdit = !!onEdit && (isPending ? true : (canDeleteComment ? canDeleteComment(comment) : false));
 
   const doResolve = async () => {
     setBusy(true);
@@ -164,29 +196,81 @@ function CommentEntry({ comment, canManage, onResolve, canDeleteComment, onDelet
     await onDelete?.(comment._id);
     setBusy(false);
   };
+  const startEdit = () => {
+    setEditText(comment.comment);
+    setEditing(true);
+  };
+  const cancelEdit = () => {
+    setEditText(comment.comment);
+    setEditing(false);
+  };
+  const saveEdit = async () => {
+    if (!editText.trim() || editText.trim() === comment.comment) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    const result = await onEdit?.(comment._id, editText.trim());
+    setBusy(false);
+    if (result?.success !== false) setEditing(false);
+  };
 
   return (
     <div style={styles.entry}>
       <div style={styles.entryQuote}>&ldquo;{comment.quote}&rdquo;</div>
-      <div style={styles.entryComment}>{comment.comment}</div>
-      <div style={styles.entryMeta}>
-        <span>
-          {comment.createdBySnapshot?.name || 'Reviewer'} &middot; {relativeTime(comment.createdAt)}
-          {comment.resolved && <span style={{ color: '#059669', fontWeight: 700 }}> &middot; Resolved</span>}
-        </span>
-        <span style={styles.entryActions}>
-          {canManage && !comment.resolved && (
-            <button type="button" style={{ ...styles.iconBtn, color: '#059669' }} onClick={doResolve} disabled={busy}>
-              <Check size={11} /> Resolve
+      {editing ? (
+        <>
+          <textarea
+            autoFocus
+            style={styles.textarea}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+          />
+          <div style={styles.actionsRow}>
+            <button type="button" style={styles.ghostBtn} onClick={cancelEdit} disabled={busy}>Cancel</button>
+            <button
+              type="button"
+              style={{ ...styles.primaryBtn, opacity: editText.trim() && !busy ? 1 : 0.55 }}
+              disabled={!editText.trim() || busy}
+              onClick={saveEdit}
+            >
+              {busy ? 'Saving…' : 'Save'}
             </button>
-          )}
-          {canDelete && (
-            <button type="button" style={{ ...styles.iconBtn, color: '#dc2626' }} onClick={doDelete} disabled={busy}>
-              <Trash2 size={11} /> Delete
-            </button>
-          )}
-        </span>
-      </div>
+          </div>
+        </>
+      ) : (
+        <div style={styles.entryComment}>{comment.comment}</div>
+      )}
+      {isPending && !editing && (
+        <div style={{ fontSize: '0.66rem', color: '#b45309', fontWeight: 600, marginTop: 2 }}>
+          Not saved yet — included when you confirm
+        </div>
+      )}
+      {!editing && (
+        <div style={styles.entryMeta}>
+          <span>
+            {comment.createdBySnapshot?.name || 'Reviewer'} &middot; {relativeTime(comment.createdAt)}
+            {comment.resolved && <span style={{ color: '#059669', fontWeight: 700 }}> &middot; Resolved</span>}
+          </span>
+          <span style={styles.entryActions}>
+            {canEdit && !comment.resolved && (
+              <button type="button" style={{ ...styles.iconBtn, color: '#374151' }} onClick={startEdit} disabled={busy}>
+                <Edit2 size={11} /> Edit
+              </button>
+            )}
+            {canManage && !isPending && !comment.resolved && (
+              <button type="button" style={{ ...styles.iconBtn, color: '#059669' }} onClick={doResolve} disabled={busy}>
+                <Check size={11} /> Resolve
+              </button>
+            )}
+            {canDelete && (
+              <button type="button" style={{ ...styles.iconBtn, color: '#dc2626' }} onClick={doDelete} disabled={busy}>
+                <Trash2 size={11} /> Delete
+              </button>
+            )}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -221,7 +305,7 @@ function getPanelPosition(rect, { width = 300, height = 220 } = {}) {
  */
 export function CommentableText({
   text, targetType, targetKey, comments = [], canAdd, onAdd,
-  canManage, onResolve, canDeleteComment, onDelete,
+  canManage, onResolve, canDeleteComment, onDelete, onEdit,
   textStyle, as: Tag = 'div', placeholder = null,
 }) {
   const containerRef = useRef(null);
@@ -252,6 +336,16 @@ export function CommentableText({
 
   const handleMouseUp = useCallback(() => {
     if (!canAdd) return;
+    const overlappingMark = findOverlappingMark(containerRef.current);
+    if (overlappingMark) {
+      setPendingAnchor(null);
+      setComposerOpen(false);
+      setActivePopover({
+        commentIds: overlappingMark.dataset.commentIds.split(','),
+        rect: overlappingMark.getBoundingClientRect(),
+      });
+      return;
+    }
     const anchor = getSelectionAnchor(containerRef.current);
     if (anchor) {
       setActivePopover(null);
@@ -296,7 +390,7 @@ export function CommentableText({
       <Tag ref={containerRef} style={textStyle} onMouseUp={handleMouseUp}>
         {segments.map((seg, idx) => (
           seg.commentIds ? (
-            <mark key={idx} style={styles.mark} onClick={(e) => handleMarkClick(e, seg.commentIds)}>
+            <mark key={idx} data-comment-ids={seg.commentIds.join(',')} style={styles.mark} onClick={(e) => handleMarkClick(e, seg.commentIds)}>
               {seg.text}
             </mark>
           ) : (
@@ -370,6 +464,7 @@ export function CommentableText({
               onResolve={onResolve}
               canDeleteComment={canDeleteComment}
               onDelete={onDelete}
+              onEdit={onEdit}
             />
           ))}
         </div>
@@ -378,16 +473,49 @@ export function CommentableText({
   );
 }
 
+// Wraps the DOM text spanning [start, end) of container.textContent in a
+// <mark data-comment-ids="..."> — walking real text nodes and splitting them
+// with the standard Text.splitText API, so tags can never be corrupted (no
+// HTML string slicing). Handles a match that spans more than one text node
+// (e.g. a selection crossing a <strong>) by wrapping each intersecting piece
+// with the same data-comment-ids.
+function wrapRangeInMarks(container, start, end, commentId) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  let node = walker.nextNode();
+  while (node) { textNodes.push(node); node = walker.nextNode(); }
+
+  let cursor = 0;
+  for (const textNode of textNodes) {
+    const nodeStart = cursor;
+    const nodeEnd = cursor + textNode.length;
+    cursor = nodeEnd;
+    if (nodeEnd <= start || nodeStart >= end) continue;
+
+    const sliceStart = Math.max(start, nodeStart) - nodeStart;
+    const sliceEnd = Math.min(end, nodeEnd) - nodeStart;
+
+    let target = textNode;
+    if (sliceEnd < target.length) target.splitText(sliceEnd);
+    if (sliceStart > 0) target = target.splitText(sliceStart);
+
+    const mark = document.createElement('mark');
+    mark.dataset.commentIds = commentId;
+    Object.assign(mark.style, styles.mark);
+    target.parentNode.insertBefore(mark, target);
+    mark.appendChild(target);
+  }
+}
+
 /**
  * Renders read-only HTML (e.g. rich-text Terms & Conditions content) with the
- * same select-to-comment interaction as CommentableText, but without
- * inline-highlighting existing comments in place — slicing arbitrary HTML by
- * character offset without corrupting tags isn't safe, so existing comments
- * are listed via CommentBadge underneath instead.
+ * same select-to-comment interaction as CommentableText — existing comments
+ * are marked in place (same simple dark-underline style), resolved via real
+ * DOM text nodes rather than slicing the HTML string, so tags can't break.
  */
 export function CommentableHtml({
   html, targetType, targetKey, comments = [], canAdd, onAdd,
-  canManage, onResolve, canDeleteComment, onDelete,
+  canManage, onResolve, canDeleteComment, onDelete, onEdit,
   contentStyle, placeholder = null,
 }) {
   const mergedContentStyle = { padding: 0, color: '#374151', ...contentStyle };
@@ -397,15 +525,17 @@ export function CommentableHtml({
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerText, setComposerText] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [activePopover, setActivePopover] = useState(null); // { commentIds, rect }
 
   const closeAll = useCallback(() => {
     setPendingAnchor(null);
     setComposerOpen(false);
     setComposerText('');
+    setActivePopover(null);
   }, []);
 
   useEffect(() => {
-    if (!canAdd) return undefined;
+    if (!canAdd && !activePopover) return undefined;
     const handleMouseDown = (e) => {
       if (floatRef.current && floatRef.current.contains(e.target)) return;
       if (containerRef.current && containerRef.current.contains(e.target)) return;
@@ -413,16 +543,57 @@ export function CommentableHtml({
     };
     document.addEventListener('mousedown', handleMouseDown);
     return () => document.removeEventListener('mousedown', handleMouseDown);
-  }, [canAdd, closeAll]);
+  }, [canAdd, activePopover, closeAll]);
+
+  // Re-derive marks from scratch each time (reset to the plain HTML first)
+  // so re-running this for a changed comments array never compounds nested
+  // <mark> wrappers from a previous pass.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.innerHTML = html || '';
+    if (!comments.length) return;
+
+    const fullText = container.textContent || '';
+    const claimed = []; // [{start,end}] — skip overlapping matches, first comment wins (same rule as splitTextWithHighlights)
+    for (const comment of comments) {
+      const located = locateQuote(fullText, comment);
+      if (!located) continue;
+      const overlaps = claimed.some(r => located.start < r.end && located.end > r.start);
+      if (overlaps) continue;
+      claimed.push(located);
+      wrapRangeInMarks(container, located.start, located.end, comment._id);
+    }
+  }, [html, comments]);
 
   const handleMouseUp = useCallback(() => {
     if (!canAdd) return;
+    const overlappingMark = findOverlappingMark(containerRef.current);
+    if (overlappingMark) {
+      setPendingAnchor(null);
+      setComposerOpen(false);
+      setActivePopover({
+        commentIds: overlappingMark.dataset.commentIds.split(','),
+        rect: overlappingMark.getBoundingClientRect(),
+      });
+      return;
+    }
     const anchor = getSelectionAnchor(containerRef.current);
     if (anchor) {
+      setActivePopover(null);
       setPendingAnchor(anchor);
       setComposerOpen(false);
     }
   }, [canAdd]);
+
+  const handleContentClick = useCallback((e) => {
+    const mark = e.target.closest?.('mark[data-comment-ids]');
+    if (!mark) return;
+    e.stopPropagation();
+    setPendingAnchor(null);
+    setComposerOpen(false);
+    setActivePopover({ commentIds: mark.dataset.commentIds.split(','), rect: mark.getBoundingClientRect() });
+  }, []);
 
   const submitComment = async () => {
     if (!composerText.trim() || !pendingAnchor) return;
@@ -454,18 +625,37 @@ export function CommentableHtml({
           className="ql-editor"
           style={mergedContentStyle}
           onMouseUp={handleMouseUp}
-          dangerouslySetInnerHTML={{ __html: html }}
+          onClick={handleContentClick}
         />
       </div>
 
-      {comments.length > 0 && (
-        <CommentBadge
-          comments={comments}
-          canManage={canManage}
-          onResolve={onResolve}
-          canDeleteComment={canDeleteComment}
-          onDelete={onDelete}
-        />
+      {activePopover && (
+        <div
+          ref={floatRef}
+          style={{
+            ...styles.panel,
+            ...getPanelPosition(activePopover.rect, {
+              width: 300,
+              height: Math.min(420, 140 + 90 * activePopover.commentIds.length),
+            }),
+          }}
+        >
+          <div style={styles.panelHeader}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#374151' }}>Review comment</span>
+            <button type="button" style={{ ...styles.iconBtn, color: '#9ca3af' }} onClick={closeAll}><X size={14} /></button>
+          </div>
+          {comments.filter(c => activePopover.commentIds.includes(c._id)).map(c => (
+            <CommentEntry
+              key={c._id}
+              comment={c}
+              canManage={canManage}
+              onResolve={onResolve}
+              canDeleteComment={canDeleteComment}
+              onDelete={onDelete}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
       )}
 
       {pendingAnchor && !composerOpen && (
@@ -518,7 +708,7 @@ export function CommentableHtml({
  * so inline highlighting isn't possible). Click expands the comment thread
  * inline, directly under the field — same slot existing field-error text uses.
  */
-export function CommentBadge({ comments = [], canManage, onResolve, canDeleteComment, onDelete }) {
+export function CommentBadge({ comments = [], canManage, onResolve, canDeleteComment, onDelete, onEdit }) {
   const [expanded, setExpanded] = useState(false);
   if (!comments.length) return null;
 
@@ -531,7 +721,7 @@ export function CommentBadge({ comments = [], canManage, onResolve, canDeleteCom
         {unresolvedCount > 0 ? `${unresolvedCount} unresolved comment${unresolvedCount > 1 ? 's' : ''}` : `${comments.length} comment${comments.length > 1 ? 's' : ''} resolved`}
       </span>
       {expanded && (
-        <div style={{ marginTop: 6, border: '1px solid #fde68a', borderRadius: 8, padding: '0.5rem 0.65rem', backgroundColor: '#fffbeb' }}>
+        <div style={styles.expandedPanel}>
           {comments.map(c => (
             <CommentEntry
               key={c._id}
@@ -540,6 +730,7 @@ export function CommentBadge({ comments = [], canManage, onResolve, canDeleteCom
               onResolve={onResolve}
               canDeleteComment={canDeleteComment}
               onDelete={onDelete}
+              onEdit={onEdit}
             />
           ))}
         </div>
