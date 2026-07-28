@@ -391,10 +391,29 @@ class ScopedZohoClient {
     };
     if (currencyId) contactPayload.currency_id = currencyId;
 
+    let contactPersonsForZoho = [];
     if (Array.isArray(contactPersons) && contactPersons.length > 0) {
       const valid = contactPersons.filter(p => p.firstName && p.firstName.trim());
-      if (valid.length > 0) contactPayload.contact_persons = valid.map(mapContactPersonToZoho);
+      if (valid.length > 0) contactPersonsForZoho = valid.map(mapContactPersonToZoho);
     }
+    // Without this, a contact created with no explicit contact person gets
+    // created in Zoho with NO email/phone at all (this payload never sends
+    // customerData.email/phone directly — Zoho only has an email/phone via
+    // a contact_person). The first individual contact added later — e.g.
+    // from a quotation — then becomes the ONLY email/phone Zoho has ever
+    // seen for this contact, so it silently becomes the contact's own
+    // effective email/phone on the next sync instead of staying a separate
+    // person's details.
+    if (contactPersonsForZoho.length === 0 && (customerData.email || customerData.phone)) {
+      contactPersonsForZoho = [mapContactPersonToZoho({
+        salutation: 'Mr.',
+        firstName: customerData.name || customerData.companyName || 'Contact',
+        email: customerData.email || '',
+        workPhone: customerData.phone || '',
+        isPrimaryContact: true,
+      })];
+    }
+    if (contactPersonsForZoho.length > 0) contactPayload.contact_persons = contactPersonsForZoho;
 
     const billingAddress = this._buildAddress({ address, street2, city, state, zipcode, phone, attention, country: 'United Arab Emirates' });
     if (billingAddress && Object.keys(billingAddress).length > 0) {
@@ -632,7 +651,15 @@ class ScopedZohoClient {
           if (isCancelled()) return { action: 'cancelled' };
           try {
             let fullContact = zc;
-            if (!Array.isArray(zc.contact_persons) || zc.contact_persons.length === 0) {
+            // The bulk list response never includes place_of_contact (place
+            // of supply) — only the single-contact detail fetch does. This
+            // used to be gated on "no contact_persons in the list response",
+            // which skipped the detail fetch for any customer that already
+            // had a contact person, silently resetting their place of supply
+            // to the 'Dubai' default on every sync after that point. Check
+            // for the actual field we need instead of using contact_persons
+            // presence as a proxy for it.
+            if (!zc.place_of_contact || !Array.isArray(zc.contact_persons) || zc.contact_persons.length === 0) {
               const detail = await this.getContact(zc.contact_id, true);
               if (detail.success && detail.contact) fullContact = detail.contact;
               // If getContact fails, proceed with the list-level data rather than
@@ -721,7 +748,13 @@ class ScopedZohoClient {
         notes: contactData.notes || '',
         taxTreatment: this._mapTaxTreatment(contactData),
         taxRegistrationNumber: contactData.tax_reg_no || '',
-        placeOfSupply: contactData.place_of_contact || 'Dubai',
+        // place_of_contact is just an emirate/country CODE (e.g. "SA"), not a
+        // name — treating it directly as the place-of-supply string (the old
+        // behavior) meant every non-UAE customer silently rendered as the
+        // raw code instead of "Saudi Arabia" etc.; _getPlaceOfSupplyFromZoho
+        // does the actual code -> name lookup (same helper the single-
+        // customer force-sync path already uses correctly).
+        placeOfSupply: this._getPlaceOfSupplyFromZoho(contactData) || 'Dubai',
         defaultCurrency: this._buildCurrencyObject(contactData.currency_code || 'AED'),
         zohoId: contactData.contact_id,
         isActive: contactData.status === 'active',
@@ -1405,19 +1438,25 @@ class ZohoBooksService {
     return { countryCode, placeOfSupplyCode };
   }
 
+  // The customer's own company-level email/phone always wins — a contact
+  // person is a specific individual at that company, not a stand-in for the
+  // company's own contact details, and should never overwrite them. Only
+  // fall back to a contact person when the customer genuinely has no
+  // company-level value of its own (e.g. a contact created with only a
+  // person's details and no company email on file in Zoho).
   _extractPrimaryEmail(c) {
+    if (c.email) return c.email.trim().toLowerCase();
     const primary = c.contact_persons?.find(p => p.is_primary_contact === true);
     if (primary?.email) return primary.email.trim().toLowerCase();
-    if (c.email) return c.email.trim().toLowerCase();
     const any = c.contact_persons?.find(p => p.email);
     return any?.email ? any.email.trim().toLowerCase() : null;
   }
 
   _extractPrimaryPhone(c) {
+    if (c.phone) return c.phone.trim();
     const primary = c.contact_persons?.find(p => p.is_primary_contact === true);
     if (primary?.phone) return primary.phone.trim();
     if (primary?.mobile) return primary.mobile.trim();
-    if (c.phone) return c.phone.trim();
     const any = c.contact_persons?.find(p => p.phone || p.mobile);
     if (any?.phone) return any.phone.trim();
     if (any?.mobile) return any.mobile.trim();

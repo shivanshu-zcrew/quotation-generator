@@ -205,7 +205,16 @@ const buildContactPersons = (contactPersons = [], existingPrimary = null, mainCo
     }));
 
   if (existingPrimary) {
-    return [{ ...existingPrimary, salutation: mainContactSalutation }, ...extras];
+    // existingPrimary is a Mongoose subdocument when it comes straight from
+    // an existingCustomer.contactPersons.find(...) call — its real field
+    // values (firstName, email, workPhone, isPrimaryContact,
+    // zohoContactPersonId, ...) live behind getters, not as plain
+    // enumerable own-properties, so `{...existingPrimary}` silently
+    // produces an object with all of those fields missing/undefined
+    // instead of actually copying them. .toObject() converts it to a real
+    // plain object first so the spread carries its data over correctly.
+    const plainPrimary = typeof existingPrimary.toObject === 'function' ? existingPrimary.toObject() : existingPrimary;
+    return [{ ...plainPrimary, salutation: mainContactSalutation }, ...extras];
   }
 
   if (extras.length > 0) {
@@ -270,11 +279,56 @@ const buildUpdateData = (body, existingCustomer) => {
     updateData.contactPersons = [...existingCustomer.contactPersons];
     const primaryIdx = updateData.contactPersons.findIndex(cp => cp.isPrimaryContact === true);
     const targetIdx = primaryIdx !== -1 ? primaryIdx : 0;
+    // Same Mongoose-subdocument-spread pitfall as buildContactPersons —
+    // convert to a plain object first so the rest of its fields survive.
+    const targetDoc = updateData.contactPersons[targetIdx];
+    const plainTarget = typeof targetDoc.toObject === 'function' ? targetDoc.toObject() : targetDoc;
     updateData.contactPersons[targetIdx] = {
-      ...updateData.contactPersons[targetIdx],
+      ...plainTarget,
       salutation: mainContactSalutation,
       updatedAt: new Date()
     };
+  }
+
+  // If the customer's own email/phone are being changed here, also correct
+  // the designated primary contact person to match. Zoho treats the primary
+  // contact person's email/phone as the contact's own effective email/phone
+  // (see createContact/processCustomerRecord) — without this, correcting a
+  // customer's email/phone here wouldn't actually fix what Zoho keeps
+  // re-syncing back afterward, since the primary contact itself would still
+  // hold the old (possibly unrelated-person's) value. This is also what
+  // self-heals a customer already affected by that bug, on their next edit.
+  if (email !== undefined || phone !== undefined) {
+    const contacts = updateData.contactPersons || (existingCustomer.contactPersons ? [...existingCustomer.contactPersons] : []);
+    let primaryIdx = contacts.findIndex(cp => cp.isPrimaryContact === true);
+    if (primaryIdx === -1 && contacts.length > 0) primaryIdx = 0;
+    if (primaryIdx !== -1) {
+      // Same Mongoose-subdocument-spread pitfall as buildContactPersons above:
+      // if updateData.contactPersons wasn't already set by one of the
+      // branches above, contacts[primaryIdx] here is still a raw subdocument
+      // from existingCustomer, and `{...contacts[primaryIdx]}` would silently
+      // drop its real fields (isPrimaryContact, zohoContactPersonId, etc.) —
+      // convert to a plain object first so only email/workPhone actually change.
+      const current = contacts[primaryIdx];
+      const plainCurrent = typeof current.toObject === 'function' ? current.toObject() : current;
+      contacts[primaryIdx] = {
+        ...plainCurrent,
+        ...(email !== undefined && { email: email.trim().toLowerCase() }),
+        ...(phone !== undefined && { workPhone: phone.trim() }),
+        updatedAt: new Date(),
+      };
+    } else {
+      contacts.push({
+        salutation: mainContactSalutation || 'Mr.',
+        firstName: (updateData.name || existingCustomer.name || '').trim(),
+        lastName: '',
+        email: email !== undefined ? email.trim().toLowerCase() : '',
+        workPhone: phone !== undefined ? phone.trim() : '',
+        mobile: '', designation: '', department: '',
+        isPrimaryContact: true, notes: '',
+      });
+    }
+    updateData.contactPersons = contacts;
   }
 
   return updateData;
@@ -361,7 +415,31 @@ exports.createCustomer = async (req, res) => {
       }
     }
 
-    const allContactPersons = buildContactPersons(contactPersons, null, mainContactSalutation);
+    let allContactPersons = buildContactPersons(contactPersons, null, mainContactSalutation);
+
+    // A customer created with no explicit contact person has an empty
+    // contactPersons array — meaning there's no "primary" yet. The first
+    // person added later from anywhere else (e.g. typed in as the contact
+    // while creating a quotation) would then become primary purely by being
+    // first, and get pushed to Zoho as that contact's only email/phone —
+    // which silently becomes what Zoho (and our own next sync-pull) treats
+    // as the customer's own email/phone, overwriting what's set here. Seed
+    // an implicit primary contact from the customer's own name/email/phone
+    // so a later individual contact can never usurp that role.
+    if (allContactPersons.length === 0 && (email || phone)) {
+      allContactPersons = [{
+        salutation: mainContactSalutation || 'Mr.',
+        firstName: name.trim(),
+        lastName: '',
+        email: email ? email.trim().toLowerCase() : '',
+        workPhone: phone ? phone.trim() : '',
+        mobile: '',
+        designation: '',
+        department: '',
+        isPrimaryContact: true,
+        notes: '',
+      }];
+    }
 
     const isVatRegistered = taxTreatment.includes('vat_registered');
 

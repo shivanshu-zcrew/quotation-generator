@@ -61,7 +61,6 @@ const ErrorSummary = ({ errors, onTabChange, setActiveTab }) => {
     address: { tab: 'basic', message: 'Street address is required for this tax treatment' },
     city: { tab: 'basic', message: 'City is required for this tax treatment' },
     state: { tab: 'basic', message: 'State is required for this tax treatment' },
-    zipcode: { tab: 'basic', message: 'Zip code is required for this tax treatment' },
   };
   
   Object.keys(errors).forEach(field => {
@@ -373,7 +372,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
         delete newErrors.email;
       }
     }
-    if (['address', 'city', 'state', 'zipcode'].includes(field)) {
+    if (['address', 'city', 'state'].includes(field)) {
       if (isAddressRequired && !formData[field]?.trim()) {
         newErrors[field] = `${ADDRESS_FIELD_LABELS[field]} required`;
       } else {
@@ -451,9 +450,10 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
       newErrors.taxRegistrationNumber = 'TRN required';
     }
 
-    // VAT-registered customers need a full billing address
+    // VAT-registered customers need a full billing address (zip code is
+    // optional — not all emirates/countries use a postal code system)
     if (isAddressRequired) {
-      ['address', 'city', 'state', 'zipcode'].forEach((field) => {
+      ['address', 'city', 'state'].forEach((field) => {
         if (!formData[field]?.trim()) newErrors[field] = `${ADDRESS_FIELD_LABELS[field]} required`;
       });
     }
@@ -473,7 +473,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
     setValidationAttempted(true);
     
     // Mark all fields as touched to show inline errors
-    const allFields = ['name', 'email', 'address', 'city', 'state', 'zipcode'];
+    const allFields = ['name', 'email', 'address', 'city', 'state'];
     const touchedFields = {};
     allFields.forEach(field => { touchedFields[field] = true; });
     setTouched(touchedFields);
@@ -864,7 +864,7 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                             {errors.state && <p style={{ color: '#ef4444', fontSize: '0.65rem', marginTop: '0.25rem', margin: 0 }}>{errors.state}</p>}
                           </div>
                           <div>
-                            <label style={labelStyle}>Zip Code {isAddressRequired && <span style={{ color: '#ef4444' }}>*</span>}</label>
+                            <label style={labelStyle}>Zip Code <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
                             <input
                               type="text"
                               name="zipcode"

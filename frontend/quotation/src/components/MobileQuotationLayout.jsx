@@ -99,7 +99,11 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
           />
         ) : isContactNameField ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-            {contactPersons.filter(cp => cp.firstName?.trim()).length > 0 && (
+            {/* The primary contact represents the customer's own company-level
+                identity (name/email/phone), not a real individual point of
+                contact for a specific quotation — exclude it here so only the
+                actual named contacts are pickable. */}
+            {contactPersons.filter(cp => cp.firstName?.trim() && !cp.isPrimaryContact).length > 0 && (
               <select
                 value=""
                 onChange={(e) => {
@@ -112,10 +116,10 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
                 <option value="">+ Add contact manually, or pick existing below</option>
                 {contactPersons
                   .map((cp, idx) => ({ cp, idx }))
-                  .filter(({ cp }) => cp.firstName?.trim())
+                  .filter(({ cp }) => cp.firstName?.trim() && !cp.isPrimaryContact)
                   .map(({ cp, idx }) => (
                     <option key={cp._id || idx} value={idx}>
-                      {cp.firstName} {cp.lastName || ''}{cp.isPrimaryContact ? ' (Primary)' : ''}
+                      {cp.firstName} {cp.lastName || ''}
                     </option>
                   ))}
               </select>
