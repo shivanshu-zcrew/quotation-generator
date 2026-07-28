@@ -1035,7 +1035,7 @@ exports.createQuotation = async (req, res) => {
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber,
-    revisedFrom, revisionNote,
+    revisedFrom, revisionNote, termsTemplateId,
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
@@ -1306,6 +1306,7 @@ exports.createQuotation = async (req, res) => {
     notes: notes?.trim() || '', 
     remark: remark?.trim() || '',
     termsAndConditions: sanitizeTerms(termsAndConditions),
+    termsTemplateId: termsTemplateId || null,
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
     createdBy: req.user.id,
@@ -1385,7 +1386,7 @@ exports.updateQuotation = async (req, res) => {
     customerTaxRegistrationNumber,  // ← Customer's TRN (keep for customer)
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
-    existingTermsImages  
+    existingTermsImages, termsTemplateId
   } = req.body;
 
   let compressedQuotationImages = quotationImages;
@@ -1729,6 +1730,7 @@ exports.updateQuotation = async (req, res) => {
       totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
       ...(termsAndConditions !== undefined && { termsAndConditions: sanitizeTerms(termsAndConditions) }),
+      ...(termsTemplateId !== undefined && { termsTemplateId: termsTemplateId || null }),
       termsImages: finalTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
       status: newStatus,
@@ -3436,8 +3438,8 @@ exports.addReviewComment = async (req, res) => {
     const { id } = req.params;
     const { targetType, targetKey, quote, prefix, suffix, comment } = req.body;
 
-    if (!['item', 'terms', 'header'].includes(targetType)) {
-      return res.status(400).json({ success: false, message: 'Invalid targetType' });
+    if (typeof targetType !== 'string' || !targetType.trim()) {
+      return res.status(400).json({ success: false, message: 'targetType is required' });
     }
     if (!targetKey || !quote?.trim() || !comment?.trim()) {
       return res.status(400).json({ success: false, message: 'targetKey, quote and comment are required' });

@@ -3,6 +3,8 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Upload, FileText,Eye , Download, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import ValidatedInput from './ValidatedInput';
 import TermsEditor, { TermsViewer } from './TermsCondition';
+import TermsTemplateControls from './TermsTemplateControls';
+import PaymentTermPicker from './PaymentTermPicker';
 import Snackbar from './Snackbar';
 import PhoneInput from './PhoneInput';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
@@ -18,11 +20,15 @@ import headerImage from '../assets/header.png';
 // Mobile Field Component (Updated with read-only support)
 // ============================================================
  
-const MobileField = ({ label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false, showSnack, commentProps, contactPersons = [] }) => {
+const MobileField = ({
+  label, field, type, value, isEditing, onChange, error, isReadOnly = false, required = false, showSnack, commentProps, contactPersons = [],
+  paymentTermOptions = [], selectedPaymentTermId = '', onSelectPaymentTerm, onDeletePaymentTerm,
+}) => {
   // Check if this is a phone field
   const isCustomerPhoneField = field === 'customerPhone';
   const isPhoneField = field === 'ourContact' || field === 'companyPhone';
   const isContactNameField = field === 'customerName';
+  const isPaymentTermsField = field === 'paymentTerms';
 
   // Handle phone number validation
   const handlePhoneChange = (e) => {
@@ -136,6 +142,29 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
               }}
             />
           </div>
+        ) : isPaymentTermsField ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {paymentTermOptions.length > 0 && (
+              <PaymentTermPicker
+                options={paymentTermOptions}
+                selectedId={selectedPaymentTermId}
+                onSelect={onSelectPaymentTerm}
+                onDelete={onDeletePaymentTerm}
+                inputStyle={inputStyle}
+              />
+            )}
+            <input
+              type="text"
+              value={value || ''}
+              onChange={(e) => onChange('paymentTerms', e.target.value)}
+              placeholder="e.g. 50% advance, 50% on delivery"
+              style={{
+                ...inputStyle,
+                borderColor: error ? '#dc2626' : undefined,
+                backgroundColor: error ? '#fef2f2' : undefined,
+              }}
+            />
+          </div>
         ) : (
           <input
             type={type}
@@ -148,18 +177,14 @@ const MobileField = ({ label, field, type, value, isEditing, onChange, error, is
             }}
           />
         )
-      ) : commentProps && type !== 'date' && value ? (
-        <CommentableText
-          {...commentProps}
-          text={String(value)}
-          textStyle={styles.fieldValue}
-        />
       ) : (
-        <div style={{
-          ...styles.fieldValue,
-          ...(isReadOnly && isEditing ? { backgroundColor: '#f3f4f6', padding: '0.5rem 0.75rem', borderRadius: '0.5rem' } : {})
-        }}>
-          {type === 'date' ? fmtDate(value) : (value || 'N/A')}
+        <div style={isReadOnly && isEditing ? { backgroundColor: '#f3f4f6', padding: '0.5rem 0.75rem', borderRadius: '0.5rem' } : undefined}>
+          <CommentableText
+            {...commentProps}
+            text={type === 'date' ? (value ? fmtDate(value) : '') : String(value || '')}
+            textStyle={styles.fieldValue}
+            placeholder={<div style={styles.fieldValue}>N/A</div>}
+          />
         </div>
       )}
       {error && (
@@ -178,6 +203,7 @@ const MobileItemCard = ({
   item, index, isEditing, onUpdate, onRemove, onAddImages,
   newImages, onRemoveNewImage, onRemoveExistingImage,
   availableItems, fieldErrors, showLocalSnack, currency, commentProps,
+  commentsFor,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [showImageUpload, setShowImageUpload] = useState(false);
@@ -294,74 +320,85 @@ const MobileItemCard = ({
                 />
                 {commentProps && <CommentBadge {...commentProps} />}
               </>
-            ) : commentProps && item.description ? (
-              <CommentableText {...commentProps} text={item.description} textStyle={styles.itemDescription} />
             ) : (
-              <div style={styles.itemDescription}>{item.description || '—'}</div>
+              <CommentableText {...commentProps} text={item.description || ''} textStyle={styles.itemDescription} placeholder={<div style={styles.itemDescription}>—</div>} />
             )}
           </div>
-          
+
           {/* Quantity and Price Row */}
           <div style={styles.itemRow}>
             <div style={{ flex: 1 }}>
               <label style={styles.itemLabel}>Qty</label>
               {isEditing ? (
-                <ValidatedInput
-                  type="number"
-                  value={item.quantity}
-                  onChange={(val) => handleValidatedUpdate('quantity', val, validateQuantity)}
-                  placeholder="Qty"
-                  style={{
-                    ...inputStyle,
-                    textAlign: 'center',
-                    borderColor: fieldErrors[item.id]?.quantity ? '#dc2626' : undefined,
-                  }}
-                  min="1"
-                />
+                <>
+                  <ValidatedInput
+                    type="number"
+                    value={item.quantity}
+                    onChange={(val) => handleValidatedUpdate('quantity', val, validateQuantity)}
+                    placeholder="Qty"
+                    style={{
+                      ...inputStyle,
+                      textAlign: 'center',
+                      borderColor: fieldErrors[item.id]?.quantity ? '#dc2626' : undefined,
+                    }}
+                    min="1"
+                  />
+                  <CommentBadge {...commentsFor?.('item', `${item.id}:qty`)} />
+                </>
               ) : (
-                <div style={styles.itemValue}>{item.quantity}</div>
+                <CommentableText {...commentsFor?.('item', `${item.id}:qty`)} text={String(item.quantity ?? '')} textStyle={styles.itemValue} />
               )}
             </div>
             <div style={{ flex: 1 }}>
               <label style={styles.itemLabel}>Unit</label>
               {isEditing ? (
-                <input
-                  type="text"
-                  value={item.unit || ''}
-                  onChange={(e) => onUpdate(item.id, 'unit', e.target.value)}
-                  placeholder="pcs, box..."
-                  style={{ ...inputStyle, textAlign: 'center' }}
-                />
+                <>
+                  <input
+                    type="text"
+                    value={item.unit || ''}
+                    onChange={(e) => onUpdate(item.id, 'unit', e.target.value)}
+                    placeholder="pcs, box..."
+                    style={{ ...inputStyle, textAlign: 'center' }}
+                  />
+                  <CommentBadge {...commentsFor?.('item', `${item.id}:unit`)} />
+                </>
               ) : (
-                <div style={styles.itemValue}>{item.unit || '—'}</div>
+                <CommentableText {...commentsFor?.('item', `${item.id}:unit`)} text={item.unit || ''} textStyle={styles.itemValue} placeholder={<div style={styles.itemValue}>—</div>} />
               )}
             </div>
             <div style={{ flex: 1 }}>
               <label style={styles.itemLabel}>Unit Price ({currency})</label>
               {isEditing ? (
-                <ValidatedInput
-                  type="number"
-                  value={item.unitPrice}
-                  onChange={(val) => handleValidatedUpdate('unitPrice', val, validatePrice)}
-                  placeholder="0.00"
-                  style={{
-                    ...inputStyle,
-                    textAlign: 'right',
-                    borderColor: fieldErrors[item.id]?.unitPrice ? '#dc2626' : undefined,
-                  }}
-                  step="0.01"
-                  min="0"
-                />
+                <>
+                  <ValidatedInput
+                    type="number"
+                    value={item.unitPrice}
+                    onChange={(val) => handleValidatedUpdate('unitPrice', val, validatePrice)}
+                    placeholder="0.00"
+                    style={{
+                      ...inputStyle,
+                      textAlign: 'right',
+                      borderColor: fieldErrors[item.id]?.unitPrice ? '#dc2626' : undefined,
+                    }}
+                    step="0.01"
+                    min="0"
+                  />
+                  <CommentBadge {...commentsFor?.('item', `${item.id}:unitPrice`)} />
+                </>
               ) : (
-                <div style={styles.itemValue}>{Number(item.unitPrice || 0).toFixed(2)}</div>
+                <CommentableText {...commentsFor?.('item', `${item.id}:unitPrice`)} text={Number(item.unitPrice || 0).toFixed(2)} textStyle={styles.itemValue} />
               )}
             </div>
           </div>
-          
+
           {/* Amount */}
           <div style={styles.amountRow}>
             <label style={styles.itemLabel}>Amount ({currency})</label>
-            <div style={styles.amountValue}>{total}</div>
+            {isEditing ? (
+              <div style={styles.amountValue}>{total}</div>
+            ) : (
+              <CommentableText {...commentsFor?.('item', `${item.id}:total`)} text={total} textStyle={styles.amountValue} />
+            )}
           </div>
           
           {/* Images */}
@@ -714,6 +751,16 @@ const MobileQuotationLayout = ({
   termsImages = [],
   onTermsImagesUpload,
   onRemoveTermsImage,
+  termsTemplates = [],
+  selectedTermsTemplateId = '',
+  onSelectTermsTemplate,
+  onSaveTermsTemplateClick,
+  onDeleteTermsTemplate,
+  isTemplateActionsDisabled = false,
+  paymentTermOptions = [],
+  selectedPaymentTermId = '',
+  onSelectPaymentTerm,
+  onDeletePaymentTerm,
   hideSnack,
   companyPhone = '',
   companyEmail = '',
@@ -889,6 +936,10 @@ const MobileQuotationLayout = ({
               required={required}
               showSnack={showLocalSnack}
               commentProps={commentsFor('header', field)}
+              paymentTermOptions={paymentTermOptions}
+              selectedPaymentTermId={selectedPaymentTermId}
+              onSelectPaymentTerm={onSelectPaymentTerm}
+              onDeletePaymentTerm={onDeletePaymentTerm}
             />
           ))}
         </div>
@@ -914,6 +965,7 @@ const MobileQuotationLayout = ({
             showLocalSnack={showLocalSnack}
             currency={displayCurrency}
             commentProps={commentsFor('item', item.id)}
+            commentsFor={commentsFor}
           />
         ))}
         {isEditing && (
@@ -1011,17 +1063,16 @@ const MobileQuotationLayout = ({
               width: '100%',
             }}
           />
+          <CommentBadge {...commentsFor('header', 'remark')} />
         </div>
       ) : (
-        quotationData.remark && (
+        (quotationData.remark || canAddComments) && (
           <div style={styles.remarkSection}>
             <div style={styles.remarkHeader}>
               <FileText size={18} />
               <h4 style={styles.remarkTitle}>Remark</h4>
             </div>
-            <div style={styles.remarkContent}>
-              {quotationData.remark}
-            </div>
+            <CommentableText {...commentsFor('header', 'remark')} text={quotationData.remark || ''} textStyle={styles.remarkContent} />
           </div>
         )
       )}
@@ -1029,6 +1080,16 @@ const MobileQuotationLayout = ({
       {/* Terms & Conditions with Images */}
       <div style={styles.termsSection}>
         <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
+        {isEditing && (
+          <TermsTemplateControls
+            templates={termsTemplates}
+            selectedTemplateId={selectedTermsTemplateId}
+            onSelectTemplate={onSelectTermsTemplate}
+            onSaveClick={onSaveTermsTemplateClick}
+            onDeleteTemplate={onDeleteTermsTemplate}
+            disabled={isTemplateActionsDisabled}
+          />
+        )}
         {isEditing ? (
           <TermsEditor
             sections={tcSections}

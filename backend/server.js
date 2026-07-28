@@ -85,6 +85,8 @@ const adminRoutes = require('./routes/adminRoutes');
 const exchangeRateRoutes = require('./routes/exchangeRates');
 const companyRoutes = require('./routes/companyRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const termsTemplateRoutes = require('./routes/termsTemplateRoutes');
+const paymentTermRoutes = require('./routes/paymentTermRoutes');
 
 app.use('/api/customers', customerRoutes);
 app.use('/api/items', itemRoutes);
@@ -94,6 +96,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/exchange-rates', exchangeRateRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/terms-templates', termsTemplateRoutes);
+app.use('/api/payment-terms', paymentTermRoutes);
 
 // ── Root ──────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

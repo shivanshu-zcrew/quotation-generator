@@ -124,12 +124,16 @@ const quotationDocumentSchema = new mongoose.Schema({
 });
 
 // Review comments — reviewer (ops_manager/admin) annotations anchored to a
-// highlighted quote inside an item description, the terms & conditions text,
-// or a header field. Anchored by quote+context rather than offsets since the
-// underlying text can be edited/reloaded (see quotationSchema.reviewComments).
+// highlighted quote inside an item description, an item's qty/unit/price/
+// total, the terms & conditions text, a header field, or the remark. Not
+// restricted to a fixed enum — targetKey namespaces sub-targets within a
+// type (e.g. `${itemId}:qty`) so new commentable spots on the frontend never
+// need a matching schema change. Anchored by quote+context rather than
+// offsets since the underlying text can be edited/reloaded (see
+// quotationSchema.reviewComments).
 const reviewCommentSchema = new mongoose.Schema({
-  targetType: { type: String, enum: ["item", "terms", "header"], required: true },
-  targetKey: { type: String, required: true }, // item._id string | 'terms' | header field name
+  targetType: { type: String, required: true, trim: true },
+  targetKey: { type: String, required: true, trim: true }, // e.g. item._id | `${item._id}:qty` | 'terms' | header field name
   quote: { type: String, required: true, trim: true },
   prefix: { type: String, default: "" },
   suffix: { type: String, default: "" },
@@ -358,6 +362,10 @@ const quotationSchema = new mongoose.Schema(
     // Notes & Terms
     notes: { type: String, default: "" },
     termsAndConditions: { type: String, default: "" },
+    // Which saved Terms & Conditions template (if any) this quotation's text
+    // was loaded from — lets the edit screen pre-select the same template in
+    // its dropdown instead of re-deriving it via fragile content matching.
+    termsTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: "TermsTemplate", default: null },
     // Terms images — supports S3 (current) and Cloudinary (legacy).
     // url/publicId are NO LONGER required so S3 records (s3Key only) validate.
     termsImages: [

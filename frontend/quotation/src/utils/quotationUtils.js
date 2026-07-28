@@ -96,6 +96,7 @@ export const parseQuotationData = (q) => ({
   discount: q.discountPercent || 0,
   notes: q.notes || "",
   termsAndConditions: q.termsAndConditions || "",
+  termsTemplateId: q.termsTemplateId?._id || q.termsTemplateId || "",
 });
 
 export const parseQuotationItems = (items) => (items || []).map((item) => ({

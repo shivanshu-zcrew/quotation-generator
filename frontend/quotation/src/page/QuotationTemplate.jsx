@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText, Plus, Trash2, X } from "lucide-react";
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
+import SaveTermsTemplateModal from '../components/SaveTermsTemplateModal';
 import { useAppStore } from '../services/store';
 import useCustomerStore from '../services/customerStore';
 import { useQuotations } from '../hooks/customHooks';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
-import { sectionsToHTML, sectionsToHTMLWithoutImages, newSection } from '../components/TermsCondition';
+import { sectionsToHTML, sectionsToHTMLWithoutImages, newSection, htmlToSections } from '../components/TermsCondition';
 import { SkeletonRow } from '../components/SharedComponents';
 import { MAX_IMAGE_SIZE_MB, MAX_IMAGES_PER_ITEM, ALLOWED_IMAGE_TYPES } from '../utils/constants';
 import { numberToWords } from "../utils/numberToWords";
@@ -22,7 +23,7 @@ import ItemModal from "../components/AddItemModal";
 // ============================================================
 // S3 SERVICE IMPORTS
 // ============================================================
-import { quotationAPI, authAPI } from '../services/api';
+import { quotationAPI, authAPI, termsTemplateAPI, paymentTermAPI } from '../services/api';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from '../hooks/useS3Image';
 import { uploadItemImage, uploadTermsImage } from "../utils/imageUpload";
 
@@ -96,6 +97,11 @@ const ErrorState = ({ message }) => (
 // HELPER FUNCTIONS
 // ============================================================
 
+// Whitespace-insensitive comparison for Terms & Conditions HTML — used to
+// detect "this already matches a saved template" so Save-as-Template never
+// creates a content duplicate under a different name.
+const normalizeTemplateContent = (html) => (html || '').replace(/\s+/g, ' ').trim();
+
 const getCurrencyObject = (currencyCode) => ({
   code: currencyCode || 'AED',
   symbol: currencyCode === 'AED' ? 'د.إ' : currencyCode === 'SAR' ? '﷼' : currencyCode === 'USD' ? '$' : '€'
@@ -158,7 +164,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   // Get company details for header display
   const companyDetails = useMemo(() => getCompanyDetails(selectedCompany, companies), [selectedCompany, companies]);
   const companyZohoOrgId = useMemo(() => getCompanyZohoOrgId(selectedCompany, companies), [selectedCompany, companies]);
-  
+
   // State
   const [quotationNumber] = useState(() => {
     const companyCode = typeof selectedCompany === 'object' 
@@ -183,9 +189,9 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     
     // Customer/Left side fields
     customer: initialQuotationData?.customer || customer?.companyName || customer?.name || "",
-    customerName: initialQuotationData?.customerName || "",
-    customerPhone: initialQuotationData?.customerPhone || "",
-    customerEmail: initialQuotationData?.customerEmail || "",
+    customerName: initialQuotationData?.customerName || customer?.contactPerson || "",
+    customerPhone: initialQuotationData?.customerPhone || customer?.phone || "",
+    customerEmail: initialQuotationData?.customerEmail || customer?.email || "",
     customerDesignation: initialQuotationData?.customerDesignation || customer?.designation || "",
     customerTradeLicenseNumber: initialQuotationData?.customerTradeLicenseNumber || customer?.tradeLicenseNumber || "",
     customerTaxRegistrationNumber: initialQuotationData?.customerTaxRegistrationNumber || customer?.vatNumber || "",
@@ -226,7 +232,25 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [saveStep, setSaveStep] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
   const [imageCount, setImageCount] = useState(0);
-  const [tcSections, setTcSections] = useState([newSection()]);
+  // Seeded from initialQuotationData.termsAndConditions (populated for
+  // revise/duplicate, see QuotationScreen.jsx) — without this, tcSections
+  // always started blank regardless of what the original quotation had,
+  // and since the submit payload is built FROM tcSections (not from
+  // quotationData.termsAndConditions), the copied text silently never made
+  // it into the new quotation even though it displayed fine in review.
+  const [tcSections, setTcSections] = useState(() => {
+    if (initialQuotationData?.termsAndConditions) {
+      const sections = htmlToSections(initialQuotationData.termsAndConditions, []);
+      if (sections.length) return sections;
+    }
+    return [newSection()];
+  });
+  const [termsTemplates, setTermsTemplates] = useState([]);
+  const [selectedTermsTemplateId, setSelectedTermsTemplateId] = useState('');
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [savingTermsTemplate, setSavingTermsTemplate] = useState(false);
+  const [paymentTermOptions, setPaymentTermOptions] = useState([]);
+  const [selectedPaymentTermId, setSelectedPaymentTermId] = useState('');
   const [snackbar, setSnackbar] = useState(SNACK_HIDE);
   const [managerModalOpen, setManagerModalOpen] = useState(false);
   const [opsManagers, setOpsManagers] = useState([]);
@@ -238,7 +262,116 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   
   const showSnack = useCallback((msg, type = "error") => setSnackbar({ show: true, message: msg, type }), []);
   const hideSnack = useCallback(() => setSnackbar(SNACK_HIDE), []);
-  
+
+  // Fetch saved Terms & Conditions templates — shared across every company
+  // (not scoped to whichever company is currently selected), so a template
+  // saved under any company shows up here regardless of selectedCompany.
+  useEffect(() => {
+    let cancelled = false;
+    termsTemplateAPI.getAll()
+      .then((res) => { if (!cancelled) setTermsTemplates(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setTermsTemplates([]); }); // failure just leaves the dropdown empty — never blocks the form
+    return () => { cancelled = true; };
+  }, []);
+
+  // Loading a saved template replaces the current Terms & Conditions text —
+  // warn first if there's real content already there so nothing is lost by
+  // accident. termsImages (separate S3-keyed state) is intentionally never
+  // touched here; templates are text-only.
+  const handleSelectTermsTemplate = useCallback((templateId) => {
+    setSelectedTermsTemplateId(templateId);
+    if (!templateId) return;
+    const template = termsTemplates.find((t) => t._id === templateId);
+    if (!template) return;
+
+    const hasExistingContent = tcSections.some((s) => {
+      const text = (s.content || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+      return text.length > 0 || (s.heading || '').trim().length > 0;
+    });
+    if (hasExistingContent) {
+      const confirmed = window.confirm('Loading this template will replace your current Terms & Conditions text. Continue?');
+      if (!confirmed) { setSelectedTermsTemplateId(''); return; }
+    }
+
+    setTcSections(htmlToSections(template.content, []));
+  }, [termsTemplates, tcSections]);
+
+  const handleOpenSaveTemplateModal = useCallback(() => {
+    const currentContent = normalizeTemplateContent(sectionsToHTML(tcSections));
+    const duplicate = termsTemplates.find((t) => normalizeTemplateContent(t.content) === currentContent);
+    if (duplicate) {
+      setSelectedTermsTemplateId(duplicate._id);
+      showSnack(`This already matches the saved template "${duplicate.name}" — no need to save it again.`, 'info');
+      return;
+    }
+    setShowSaveTemplateModal(true);
+  }, [tcSections, termsTemplates, showSnack]);
+
+  const handleSaveTermsTemplate = useCallback(async (name) => {
+    setSavingTermsTemplate(true);
+    try {
+      const content = sectionsToHTML(tcSections);
+      const res = await termsTemplateAPI.create({ name, content });
+      const created = res.data?.data;
+      setTermsTemplates((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedTermsTemplateId(created._id);
+      setShowSaveTemplateModal(false);
+      showSnack('Template saved', 'success');
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to save template', 'error');
+    } finally {
+      setSavingTermsTemplate(false);
+    }
+  }, [tcSections, showSnack]);
+
+  const handleDeleteTermsTemplate = useCallback(async (templateId) => {
+    const template = termsTemplates.find((t) => t._id === templateId);
+    const confirmed = window.confirm(`Delete the saved template "${template?.name || 'this template'}"? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await termsTemplateAPI.delete(templateId);
+      setTermsTemplates((prev) => prev.filter((t) => t._id !== templateId));
+      setSelectedTermsTemplateId((prev) => (prev === templateId ? '' : prev));
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to delete template', 'error');
+    }
+  }, [termsTemplates, showSnack]);
+
+  // Fetch saved Payment Terms — shared across every company, same as Terms
+  // & Conditions templates above.
+  useEffect(() => {
+    let cancelled = false;
+    paymentTermAPI.getAll()
+      .then((res) => { if (!cancelled) setPaymentTermOptions(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setPaymentTermOptions([]); }); // failure just leaves the dropdown empty — never blocks the form
+    return () => { cancelled = true; };
+  }, []);
+
+  // Pre-select the dropdown when the current Payment Terms text (e.g.
+  // carried over from a revised/duplicated quotation) matches one of this
+  // company's saved terms, so the dropdown reflects what's actually in the
+  // field instead of showing "+ Add new" even though a saved value is there.
+  useEffect(() => {
+    if (!paymentTermOptions.length) return;
+    const currentValue = (quotationData.paymentTerms || '').trim();
+    if (!currentValue) return;
+    const match = paymentTermOptions.find((t) => t.value === currentValue);
+    if (match) setSelectedPaymentTermId(match._id);
+  }, [paymentTermOptions, quotationData.paymentTerms]);
+
+  const handleDeletePaymentTerm = useCallback(async (termId) => {
+    const term = paymentTermOptions.find((t) => t._id === termId);
+    const confirmed = window.confirm(`Remove "${term?.value || 'this term'}" from saved payment terms?`);
+    if (!confirmed) return;
+    try {
+      await paymentTermAPI.delete(termId);
+      setPaymentTermOptions((prev) => prev.filter((t) => t._id !== termId));
+      setSelectedPaymentTermId((prev) => (prev === termId ? '' : prev));
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to remove payment term', 'error');
+    }
+  }, [paymentTermOptions, showSnack]);
+
   // Terms images upload directly to S3 (matches edit flow). The shared
   // TermsEditor passes raw File objects; we compress, upload, and store the
   // returned s3Key + a signed URL for display.
@@ -450,7 +583,16 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       return rest;
     });
   }, []);
-  
+
+  // Selecting a saved payment term pre-fills the free-text field — it
+  // remains fully editable afterward, same as the contact-person picker.
+  const handleSelectPaymentTerm = useCallback((termId) => {
+    setSelectedPaymentTermId(termId);
+    if (!termId) return;
+    const term = paymentTermOptions.find((t) => t._id === termId);
+    if (term) handleDataChange('paymentTerms', term.value);
+  }, [paymentTermOptions, handleDataChange]);
+
   const validateAll = useCallback(() => {
     const errors = {};
     if (!quotationData.date) errors.date = VALIDATION_MESSAGES.REQUIRED_DATE;
@@ -765,6 +907,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         discountPercent: Number(quotationData.discount) || 0,
         notes: quotationData.notes?.trim() || "",
         termsAndConditions: finalTermsAndConditions,
+        termsTemplateId: selectedTermsTemplateId || undefined,
         termsImages: newBase64Images,
         existingTermsImages: existingTermsImages,
         items: formattedItems,
@@ -787,6 +930,21 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         }
         setTermsImages([]);
         showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
+        // Remember this payment terms value for reuse on future quotations —
+        // fire-and-forget, the quotation itself already saved successfully
+        // and this must never surface an error or block navigation.
+        if (quotation.paymentTerms?.trim()) {
+          paymentTermAPI.create({ value: quotation.paymentTerms.trim() })
+            .then((res) => {
+              const saved = res.data?.data;
+              if (saved) {
+                setPaymentTermOptions((prev) => (
+                  prev.some((t) => t._id === saved._id) ? prev : [...prev, saved].sort((a, b) => a.value.localeCompare(b.value))
+                ));
+              }
+            })
+            .catch(() => {});
+        }
         setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1200);
       } else {
         showSnack(result?.error || "Failed to create quotation", "error");
@@ -1229,6 +1387,16 @@ const handleDocumentDownload = useCallback((docId) => {
   termsImages={termsImages}
   onTermsImagesUpload={handleTermsImagesUpload}
   onRemoveTermsImage={handleRemoveTermsImage}
+  termsTemplates={termsTemplates}
+  selectedTermsTemplateId={selectedTermsTemplateId}
+  onSelectTermsTemplate={handleSelectTermsTemplate}
+  onSaveTermsTemplateClick={handleOpenSaveTemplateModal}
+  onDeleteTermsTemplate={handleDeleteTermsTemplate}
+  isTemplateActionsDisabled={false}
+  paymentTermOptions={paymentTermOptions}
+  selectedPaymentTermId={selectedPaymentTermId}
+  onSelectPaymentTerm={handleSelectPaymentTerm}
+  onDeletePaymentTerm={handleDeletePaymentTerm}
 />
       </div>
       
@@ -1246,6 +1414,14 @@ const handleDocumentDownload = useCallback((docId) => {
       />
       
       {snackbar.show && <Snackbar message={snackbar.message} type={snackbar.type} onClose={hideSnack} />}
+
+      {showSaveTemplateModal && (
+        <SaveTermsTemplateModal
+          onClose={() => setShowSaveTemplateModal(false)}
+          onSave={handleSaveTermsTemplate}
+          saving={savingTermsTemplate}
+        />
+      )}
 
       {/* Manager picker modal */}
       {managerModalOpen && (
@@ -1378,3 +1554,4 @@ const managerModalStyles = {
   cancelBtn: { padding: '0.5rem 1.125rem', borderRadius: '0.5rem', border: '1.5px solid #e2e8f0', background: '#fff', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem' },
   confirmBtn: { padding: '0.5rem 1.25rem', borderRadius: '0.5rem', border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: '0.875rem', transition: 'opacity 0.15s' },
 };
+

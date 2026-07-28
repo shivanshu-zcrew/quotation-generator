@@ -514,6 +514,20 @@ export const companyAPI = {
   bulkImport: (data) => api.post("/companies/bulk", data),
 };
 
+// ==================== TERMS TEMPLATES API ====================
+export const termsTemplateAPI = {
+  getAll: () => api.get("/terms-templates"),
+  create: (data) => api.post("/terms-templates", data),
+  delete: (id) => api.delete(`/terms-templates/${id}`),
+};
+
+// ==================== PAYMENT TERMS API ====================
+export const paymentTermAPI = {
+  getAll: () => api.get("/payment-terms"),
+  create: (data) => api.post("/payment-terms", data),
+  delete: (id) => api.delete(`/payment-terms/${id}`),
+};
+
 // ==================== EXCHANGE RATES API ====================
 export const exchangeRateAPI = {
   getRates: (params) => api.get("/exchange-rates/rates", { params }),

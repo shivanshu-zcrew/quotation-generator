@@ -334,27 +334,76 @@ export function CommentableText({
     return () => document.removeEventListener('mousedown', handleMouseDown);
   }, [canAdd, activePopover, closeAll]);
 
-  const handleMouseUp = useCallback(() => {
-    if (!canAdd) return;
-    const overlappingMark = findOverlappingMark(containerRef.current);
-    if (overlappingMark) {
-      setPendingAnchor(null);
-      setComposerOpen(false);
-      setActivePopover({
-        commentIds: overlappingMark.dataset.commentIds.split(','),
-        rect: overlappingMark.getBoundingClientRect(),
-      });
-      return;
-    }
-    const anchor = getSelectionAnchor(containerRef.current);
-    if (anchor) {
-      setActivePopover(null);
-      setPendingAnchor(anchor);
-      setComposerOpen(false);
-    }
-  }, [canAdd]);
+  // Listen at the document level, not on the text element itself — a drag
+  // selection very often ends with the pointer slightly outside the element
+  // it started in (past the last character, over padding, over a neighboring
+  // cell), and a mouseup that lands outside the container never bubbles
+  // through it, so an element-level onMouseUp silently misses exactly those
+  // selections. This is the "sometimes the add-comment button doesn't show
+  // up" bug — checking the *selection's* anchor point against the container
+  // (rather than where the pointer happened to be released) makes it fire
+  // reliably regardless of where the drag ends. touchend covers the same
+  // interaction on touch devices (tablets), where there is no mouseup at all.
+  useEffect(() => {
+    if (!canAdd) return undefined;
+    const handleSelectionEnd = (e) => {
+      // Own floating "Comment" button / composer panel — let its own
+      // onClick handlers (Save, Cancel, the toggle button) run undisturbed.
+      if (floatRef.current && floatRef.current.contains(e.target)) return;
 
-  const segments = useMemo(() => splitTextWithHighlights(text || '', comments), [text, comments]);
+      const container = containerRef.current;
+      if (!container) return;
+      const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+
+      // No selection left (a plain tap elsewhere collapses it) — if a
+      // "Comment" trigger or composer from a previous selection was still
+      // showing, tapping away without picking new text should dismiss it
+      // rather than leaving it stuck on screen.
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        closeAll();
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!container.contains(range.commonAncestorContainer)) {
+        closeAll();
+        return;
+      }
+
+      const overlappingMark = findOverlappingMark(container);
+      if (overlappingMark) {
+        setPendingAnchor(null);
+        setComposerOpen(false);
+        setActivePopover({
+          commentIds: overlappingMark.dataset.commentIds.split(','),
+          rect: overlappingMark.getBoundingClientRect(),
+        });
+        return;
+      }
+      const anchor = getSelectionAnchor(container);
+      if (anchor) {
+        setActivePopover(null);
+        setPendingAnchor(anchor);
+        setComposerOpen(false);
+      }
+    };
+    document.addEventListener('mouseup', handleSelectionEnd);
+    document.addEventListener('touchend', handleSelectionEnd);
+    return () => {
+      document.removeEventListener('mouseup', handleSelectionEnd);
+      document.removeEventListener('touchend', handleSelectionEnd);
+    };
+  }, [canAdd, closeAll]);
+
+  // A field with no real value today can still be worth commenting on (e.g.
+  // "this should have a value") — rather than hiding the whole interaction
+  // whenever the field happens to be empty, fall back to a literal, selectable
+  // "N/A" so the exact same select-to-comment flow still works. Only kicks in
+  // when there's actually something to do with it (can add, or a comment is
+  // already anchored here from before the field was cleared).
+  const hasRealText = !!(text && text.trim());
+  const displayText = hasRealText ? text : ((canAdd || comments.length > 0) ? 'N/A' : '');
+
+  const segments = useMemo(() => splitTextWithHighlights(displayText, comments), [displayText, comments]);
 
   const handleMarkClick = (e, commentIds) => {
     e.stopPropagation();
@@ -381,13 +430,13 @@ export function CommentableText({
     }
   };
 
-  if (!text || !text.trim()) {
+  if (!displayText) {
     return placeholder;
   }
 
   return (
     <>
-      <Tag ref={containerRef} style={textStyle} onMouseUp={handleMouseUp}>
+      <Tag ref={containerRef} style={textStyle}>
         {segments.map((seg, idx) => (
           seg.commentIds ? (
             <mark key={idx} data-comment-ids={seg.commentIds.join(',')} style={styles.mark} onClick={(e) => handleMarkClick(e, seg.commentIds)}>
@@ -545,13 +594,19 @@ export function CommentableHtml({
     return () => document.removeEventListener('mousedown', handleMouseDown);
   }, [canAdd, activePopover, closeAll]);
 
+  // Same empty-value fallback as CommentableText — an empty Terms &
+  // Conditions block can still be worth flagging ("this needs content"), so
+  // fall back to literal, selectable "N/A" rather than disappearing entirely.
+  const hasRealHtml = !!(html && html.trim());
+  const displayHtml = hasRealHtml ? html : ((canAdd || comments.length > 0) ? '<p>N/A</p>' : '');
+
   // Re-derive marks from scratch each time (reset to the plain HTML first)
   // so re-running this for a changed comments array never compounds nested
   // <mark> wrappers from a previous pass.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    container.innerHTML = html || '';
+    container.innerHTML = displayHtml || '';
     if (!comments.length) return;
 
     const fullText = container.textContent || '';
@@ -564,27 +619,61 @@ export function CommentableHtml({
       claimed.push(located);
       wrapRangeInMarks(container, located.start, located.end, comment._id);
     }
-  }, [html, comments]);
+  }, [displayHtml, comments]);
 
-  const handleMouseUp = useCallback(() => {
-    if (!canAdd) return;
-    const overlappingMark = findOverlappingMark(containerRef.current);
-    if (overlappingMark) {
-      setPendingAnchor(null);
-      setComposerOpen(false);
-      setActivePopover({
-        commentIds: overlappingMark.dataset.commentIds.split(','),
-        rect: overlappingMark.getBoundingClientRect(),
-      });
-      return;
-    }
-    const anchor = getSelectionAnchor(containerRef.current);
-    if (anchor) {
-      setActivePopover(null);
-      setPendingAnchor(anchor);
-      setComposerOpen(false);
-    }
-  }, [canAdd]);
+  // See the matching comment in CommentableText — document-level, not
+  // element-level, so a drag-selection that ends outside this element's
+  // bounds (very easy to do, and the actual cause of the "add comment"
+  // trigger sometimes not showing up) still registers correctly.
+  useEffect(() => {
+    if (!canAdd) return undefined;
+    const handleSelectionEnd = (e) => {
+      // Own floating "Comment" button / composer panel — let its own
+      // onClick handlers (Save, Cancel, the toggle button) run undisturbed.
+      if (floatRef.current && floatRef.current.contains(e.target)) return;
+
+      const container = containerRef.current;
+      if (!container) return;
+      const sel = typeof window !== 'undefined' ? window.getSelection() : null;
+
+      // No selection left (a plain tap elsewhere collapses it) — if a
+      // "Comment" trigger or composer from a previous selection was still
+      // showing, tapping away without picking new text should dismiss it
+      // rather than leaving it stuck on screen.
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        closeAll();
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!container.contains(range.commonAncestorContainer)) {
+        closeAll();
+        return;
+      }
+
+      const overlappingMark = findOverlappingMark(container);
+      if (overlappingMark) {
+        setPendingAnchor(null);
+        setComposerOpen(false);
+        setActivePopover({
+          commentIds: overlappingMark.dataset.commentIds.split(','),
+          rect: overlappingMark.getBoundingClientRect(),
+        });
+        return;
+      }
+      const anchor = getSelectionAnchor(container);
+      if (anchor) {
+        setActivePopover(null);
+        setPendingAnchor(anchor);
+        setComposerOpen(false);
+      }
+    };
+    document.addEventListener('mouseup', handleSelectionEnd);
+    document.addEventListener('touchend', handleSelectionEnd);
+    return () => {
+      document.removeEventListener('mouseup', handleSelectionEnd);
+      document.removeEventListener('touchend', handleSelectionEnd);
+    };
+  }, [canAdd, closeAll]);
 
   const handleContentClick = useCallback((e) => {
     const mark = e.target.closest?.('mark[data-comment-ids]');
@@ -613,7 +702,7 @@ export function CommentableHtml({
     }
   };
 
-  if (!html || !html.trim()) {
+  if (!displayHtml) {
     return placeholder;
   }
 
@@ -624,7 +713,6 @@ export function CommentableHtml({
           ref={containerRef}
           className="ql-editor"
           style={mergedContentStyle}
-          onMouseUp={handleMouseUp}
           onClick={handleContentClick}
         />
       </div>

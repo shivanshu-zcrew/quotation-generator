@@ -9,10 +9,61 @@
 
 const CONTEXT_LENGTH = 40;
 
+// Converts a DOM range boundary (node, offset) into a plain character offset
+// within containerEl's *textContent* — i.e. counting only real text, with no
+// separators inserted at element boundaries. This has to match textContent's
+// concatenation exactly (not Selection.toString(), which many browsers
+// serialize with synthetic "\n"s between block-level elements like adjacent
+// <p> tags) since locateQuote() later searches within container.textContent
+// (CommentableHtml) or the raw text prop (CommentableText). Using the two
+// different notions of "the text" is exactly why a selection crossing a
+// paragraph/line boundary used to find the button but then fail to actually
+// locate — the quote captured didn't match anything real. `offset` means a
+// character offset when `node` is a Text node, or a child index when `node`
+// is an element (per the Range spec) — both are handled here.
+function domPointToTextOffset(containerEl, node, offset) {
+  let total = 0;
+  let done = false;
+
+  const measure = (n) => {
+    if (n.nodeType === Node.TEXT_NODE) return n.length;
+    let sum = 0;
+    for (const child of n.childNodes) sum += measure(child);
+    return sum;
+  };
+
+  const walk = (n) => {
+    if (done) return;
+    if (n === node) {
+      if (n.nodeType === Node.TEXT_NODE) {
+        total += offset;
+      } else {
+        for (let i = 0; i < offset && i < n.childNodes.length; i++) {
+          total += measure(n.childNodes[i]);
+        }
+      }
+      done = true;
+      return;
+    }
+    if (n.nodeType === Node.TEXT_NODE) {
+      total += n.length;
+      return;
+    }
+    for (const child of n.childNodes) {
+      walk(child);
+      if (done) return;
+    }
+  };
+
+  walk(containerEl);
+  return done ? total : null;
+}
+
 /**
  * Reads the current window selection and, if it's non-empty and fully
- * contained within containerEl, returns { quote, prefix, suffix }.
- * Returns null otherwise.
+ * contained within containerEl, returns { quote, prefix, suffix }. Works
+ * the same whether the selection sits on one line or spans multiple
+ * lines/paragraphs. Returns null otherwise.
  */
 export function getSelectionAnchor(containerEl) {
   if (!containerEl) return null;
@@ -20,24 +71,27 @@ export function getSelectionAnchor(containerEl) {
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
 
   const range = selection.getRangeAt(0);
-  const quote = selection.toString().trim();
-  if (!quote) return null;
-
   if (!containerEl.contains(range.startContainer) || !containerEl.contains(range.endContainer)) {
     return null;
   }
 
   const fullText = containerEl.textContent || '';
-  const rawQuote = selection.toString();
-  const quoteIndex = fullText.indexOf(rawQuote);
-  if (quoteIndex === -1) {
-    // Selection spans non-text nodes or whitespace was normalized away; fall
-    // back to a contextless anchor rather than failing outright.
-    return { quote, prefix: '', suffix: '', rect: range.getBoundingClientRect() };
-  }
+  const start = domPointToTextOffset(containerEl, range.startContainer, range.startOffset);
+  const end = domPointToTextOffset(containerEl, range.endContainer, range.endOffset);
+  if (start === null || end === null || end <= start) return null;
 
-  const prefix = fullText.slice(Math.max(0, quoteIndex - CONTEXT_LENGTH), quoteIndex);
-  const suffix = fullText.slice(quoteIndex + rawQuote.length, quoteIndex + rawQuote.length + CONTEXT_LENGTH);
+  const rawQuote = fullText.slice(start, end);
+  const quote = rawQuote.trim();
+  if (!quote) return null;
+
+  // Keep prefix/suffix aligned with the trimmed quote (a drag can start/end
+  // a character or two into surrounding whitespace).
+  const leadingTrim = rawQuote.indexOf(quote);
+  const trimmedStart = start + leadingTrim;
+  const trimmedEnd = trimmedStart + quote.length;
+
+  const prefix = fullText.slice(Math.max(0, trimmedStart - CONTEXT_LENGTH), trimmedStart);
+  const suffix = fullText.slice(trimmedEnd, trimmedEnd + CONTEXT_LENGTH);
 
   return { quote, prefix, suffix, rect: range.getBoundingClientRect() };
 }

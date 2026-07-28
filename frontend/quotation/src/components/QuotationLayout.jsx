@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { Plus, Trash2, Upload, FileText, Download, Search, AlertCircle, ChevronDown, ChevronUp, X, Loader2 } from 'lucide-react';
 import headerImage from '../assets/header.png';
 import TermsEditor, { TermsViewer } from './TermsCondition';
+import TermsTemplateControls from './TermsTemplateControls';
+import PaymentTermPicker from './PaymentTermPicker';
 import { CommentableText, CommentBadge } from './ReviewComments';
 import ValidatedInput from './ValidatedInput';
 import Snackbar from './Snackbar';
@@ -885,6 +887,8 @@ export default function QuotationLayout({
   companyName, companyZohoOrgId = '', customerTaxTreatment = 'non_vat_registered', customerPlaceOfSupply = 'Dubai',
   customerContactPersons = [],
   termsImages = [], onTermsImagesUpload, onRemoveTermsImage,
+  termsTemplates = [], selectedTermsTemplateId = '', onSelectTermsTemplate, onSaveTermsTemplateClick, onDeleteTermsTemplate, isTemplateActionsDisabled = false,
+  paymentTermOptions = [], selectedPaymentTermId = '', onSelectPaymentTerm, onDeletePaymentTerm,
   companyPhone = '', companyEmail = '', companyTradeLicense = '', companyTaxRegistration = '',
   commentsByTarget = {}, canAddComments = false, canManageComments = false, canDeleteComment,
   onAddComment, onEditComment, onResolveComment, onDeleteComment,
@@ -1114,6 +1118,7 @@ export default function QuotationLayout({
         const isCustomerPhoneField = field === 'customerPhone';
         const isPhoneField = field === 'ourContact' || field === 'companyPhone';
         const isContactNameField = field === 'customerName';
+        const isPaymentTermsField = field === 'paymentTerms';
 
         const handlePhoneChange = (e) => {
           const value = e.target.value;
@@ -1223,6 +1228,30 @@ export default function QuotationLayout({
                       }}
                     />
                   </div>
+                ) : isPaymentTermsField ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    {paymentTermOptions.length > 0 && (
+                      <PaymentTermPicker
+                        options={paymentTermOptions}
+                        selectedId={selectedPaymentTermId}
+                        onSelect={onSelectPaymentTerm}
+                        onDelete={onDeletePaymentTerm}
+                        inputStyle={inputStyle}
+                      />
+                    )}
+                    <input
+                      type="text"
+                      className="edit-input"
+                      value={fieldValue || ''}
+                      onChange={(e) => handleFieldChange('paymentTerms', e.target.value)}
+                      placeholder="e.g. 50% advance, 50% on delivery"
+                      style={{
+                        ...inputStyle,
+                        borderColor: errorMessage ? '#dc2626' : undefined,
+                        backgroundColor: errorMessage ? '#fef2f2' : undefined
+                      }}
+                    />
+                  </div>
                 ) : (
                   <input
                     type={type}
@@ -1251,19 +1280,16 @@ export default function QuotationLayout({
                     <AlertCircle size={12} /> {errorMessage}
                   </div>
                 )}
-                {type !== 'date' && <CommentBadge {...fieldCommentProps} />}
+                <CommentBadge {...fieldCommentProps} />
               </div>
-            ) : type !== 'date' && fieldValue ? (
+            ) : (
               <CommentableText
                 {...fieldCommentProps}
-                text={String(fieldValue)}
+                text={type === 'date' ? (fieldValue ? fmtDate(fieldValue) : '') : String(fieldValue || '')}
                 as="span"
                 textStyle={styles.fieldValue}
+                placeholder={<span style={styles.fieldValue}>N/A</span>}
               />
-            ) : (
-              <span style={styles.fieldValue}>
-                {type === 'date' ? fmtDate(fieldValue) : (fieldValue || 'N/A')}
-              </span>
             )}
           </React.Fragment>
         );
@@ -1361,20 +1387,28 @@ export default function QuotationLayout({
               min="1"
             />
             {fieldErrors[qi.id]?.quantity && <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].quantity}</div>}
+            <CommentBadge {...commentsFor('item', `${qi.id}:qty`)} />
           </div>
-        ) : qi.quantity}
+        ) : (
+          <CommentableText {...commentsFor('item', `${qi.id}:qty`)} text={String(qi.quantity ?? '')} as="span" textStyle={styles.fieldValue} />
+        )}
       </td>
       <td style={styles.tableCellCenter}>
         {isEditing ? (
-          <input
-            type="text"
-            className="edit-input"
-            value={qi.unit || ''}
-            onChange={(e) => onUpdateItem(qi.id, 'unit', e.target.value)}
-            placeholder="pcs, box..."
-            style={{ ...inputStyle, textAlign: 'center' }}
-          />
-        ) : (qi.unit || '—')}
+          <div>
+            <input
+              type="text"
+              className="edit-input"
+              value={qi.unit || ''}
+              onChange={(e) => onUpdateItem(qi.id, 'unit', e.target.value)}
+              placeholder="pcs, box..."
+              style={{ ...inputStyle, textAlign: 'center' }}
+            />
+            <CommentBadge {...commentsFor('item', `${qi.id}:unit`)} />
+          </div>
+        ) : (
+          <CommentableText {...commentsFor('item', `${qi.id}:unit`)} text={qi.unit || ''} as="span" textStyle={styles.fieldValue} placeholder={<span style={styles.fieldValue}>—</span>} />
+        )}
       </td>
       <td style={styles.tableCellRight}>
         {isEditing ? (
@@ -1390,10 +1424,24 @@ export default function QuotationLayout({
               min="0"
             />
             {fieldErrors[qi.id]?.unitPrice && <div style={styles.fieldErrorSmall}>⚠ {fieldErrors[qi.id].unitPrice}</div>}
+            <CommentBadge {...commentsFor('item', `${qi.id}:unitPrice`)} />
           </div>
-        ) : Number(qi.unitPrice || 0).toFixed(2)}
+        ) : (
+          <CommentableText {...commentsFor('item', `${qi.id}:unitPrice`)} text={Number(qi.unitPrice || 0).toFixed(2)} as="span" textStyle={styles.fieldValue} />
+        )}
       </td>
-      <td style={styles.tableCellRightBold}>{(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}</td>
+      <td style={styles.tableCellRightBold}>
+        {isEditing ? (
+          (Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)
+        ) : (
+          <CommentableText
+            {...commentsFor('item', `${qi.id}:total`)}
+            text={(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
+            as="span"
+            textStyle={styles.tableCellRightBold}
+          />
+        )}
+      </td>
       {isEditing && (
         <td style={styles.tableCellCenter}>
           <button onClick={() => onRemoveItem(qi.id)} style={styles.deleteItemBtn}><Trash2 size={15} /></button>
@@ -1481,6 +1529,16 @@ export default function QuotationLayout({
       termsImages={termsImages}
       onTermsImagesUpload={onTermsImagesUpload}
       onRemoveTermsImage={onRemoveTermsImage}
+      termsTemplates={termsTemplates}
+      selectedTermsTemplateId={selectedTermsTemplateId}
+      onSelectTermsTemplate={onSelectTermsTemplate}
+      onSaveTermsTemplateClick={onSaveTermsTemplateClick}
+      onDeleteTermsTemplate={onDeleteTermsTemplate}
+      isTemplateActionsDisabled={isTemplateActionsDisabled}
+      paymentTermOptions={paymentTermOptions}
+      selectedPaymentTermId={selectedPaymentTermId}
+      onSelectPaymentTerm={onSelectPaymentTerm}
+      onDeletePaymentTerm={onDeletePaymentTerm}
       companyPhone={companyPhone}
       companyEmail={companyEmail}
       companyTradeLicense={companyTradeLicense}
@@ -1637,6 +1695,16 @@ export default function QuotationLayout({
 
       <div style={{ marginBottom: '2rem' }}>
         <h3 style={styles.sectionTitle}>Terms & Conditions</h3>
+        {isEditing && (
+          <TermsTemplateControls
+            templates={termsTemplates}
+            selectedTemplateId={selectedTermsTemplateId}
+            onSelectTemplate={onSelectTermsTemplate}
+            onSaveClick={onSaveTermsTemplateClick}
+            onDeleteTemplate={onDeleteTermsTemplate}
+            disabled={isTemplateActionsDisabled}
+          />
+        )}
         {isEditing ? (
           <TermsEditor
             sections={tcSections}
@@ -1689,23 +1757,26 @@ export default function QuotationLayout({
         lineHeight: '1.5'
       }}
     />
+    <CommentBadge {...commentsFor('header', 'remark')} />
   </div>
 ) : (
-  quotationData.remark && (
+  (quotationData.remark || canAddComments) && (
     <div style={{ marginBottom: '2rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', padding: '1.25rem', border: '1px solid #e2e8f0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
         <FileText size={20} color="#4b5563" />
         <h3 style={styles.sectionTitle}>Remark</h3>
       </div>
-      <div style={{ 
-        fontSize: '0.875rem', 
-        color: '#1f2937', 
-        lineHeight: '1.5',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word'
-      }}>
-        {quotationData.remark}
-      </div>
+      <CommentableText
+        {...commentsFor('header', 'remark')}
+        text={quotationData.remark || ''}
+        textStyle={{
+          fontSize: '0.875rem',
+          color: '#1f2937',
+          lineHeight: '1.5',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}
+      />
     </div>
   )
 )}

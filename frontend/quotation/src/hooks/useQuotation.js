@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { quotationAPI, customerAPI } from '../services/api';
+import { quotationAPI, customerAPI, paymentTermAPI, termsTemplateAPI } from '../services/api';
 import { useAppStore } from '../services/store';
 import useCustomerStore from '../services/customerStore';
 import { useItems } from './customHooks';
@@ -16,6 +16,12 @@ import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { ALLOWED_IMAGE_TYPES, MAX_IMAGES_PER_ITEM, MAX_IMAGE_SIZE_MB } from '../utils/constants';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from './useS3Image';
 import { uploadItemImage, uploadTermsImage } from '../utils/imageUpload';
+
+// Whitespace-insensitive comparison for Terms & Conditions HTML — lets us
+// recognize "this is the same content as saved template X" (for dropdown
+// auto-select and duplicate-save prevention) without requiring a byte-exact
+// match, since minor formatting differences shouldn't count as a new template.
+const normalizeTemplateContent = (html) => (html || '').replace(/\s+/g, ' ').trim();
 
 export function useQuotation() {
   const { id } = useParams();
@@ -51,6 +57,12 @@ export function useQuotation() {
   const [customerPlaceOfSupply, setCustomerPlaceOfSupply] = useState('Dubai');
   const [customerContactPersons, setCustomerContactPersons] = useState([]);
   const [termsImages, setTermsImages] = useState([]);
+  const [paymentTermOptions, setPaymentTermOptions] = useState([]);
+  const [selectedPaymentTermId, setSelectedPaymentTermId] = useState('');
+  const [termsTemplates, setTermsTemplates] = useState([]);
+  const [selectedTermsTemplateId, setSelectedTermsTemplateId] = useState('');
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [savingTermsTemplate, setSavingTermsTemplate] = useState(false);
   const [signedUrls, setSignedUrls] = useState({});
   const [signedUrlsLoaded, setSignedUrlsLoaded] = useState(false);
 
@@ -483,6 +495,128 @@ export function useQuotation() {
 
     setQuotationData((prev) => ({ ...prev, [field]: value }));
   }, [showSnack]);
+
+  // Fetch the current company's saved Payment Terms once on mount — same
+  // resource "Create Quotation" already uses (QuotationTemplate.jsx), just
+  // wired into the edit-existing-quotation screen too. Company context here
+  // comes from the same ambient x-company-id the rest of this app's API
+  // calls already rely on (set from the global company switcher), not from
+  // the specific quotation being viewed — consistent with how every other
+  // company-scoped call in this app is scoped.
+  useEffect(() => {
+    let cancelled = false;
+    paymentTermAPI.getAll()
+      .then((res) => { if (!cancelled) setPaymentTermOptions(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setPaymentTermOptions([]); }); // failure just leaves the dropdown empty — never blocks the screen
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSelectPaymentTerm = useCallback((termId) => {
+    setSelectedPaymentTermId(termId);
+    if (!termId) return;
+    const term = paymentTermOptions.find((t) => t._id === termId);
+    if (term) handleDataChange('paymentTerms', term.value);
+  }, [paymentTermOptions, handleDataChange]);
+
+  const handleDeletePaymentTerm = useCallback(async (termId) => {
+    const term = paymentTermOptions.find((t) => t._id === termId);
+    const confirmed = window.confirm(`Remove "${term?.value || 'this term'}" from saved payment terms?`);
+    if (!confirmed) return;
+    try {
+      await paymentTermAPI.delete(termId);
+      setPaymentTermOptions((prev) => prev.filter((t) => t._id !== termId));
+      setSelectedPaymentTermId((prev) => (prev === termId ? '' : prev));
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to remove payment term', 'error');
+    }
+  }, [paymentTermOptions, showSnack]);
+
+  // Same Terms & Conditions Templates resource "Create Quotation" already
+  // uses (QuotationTemplate.jsx), wired into the edit-existing-quotation
+  // screen too — company scope comes from the same ambient x-company-id
+  // used everywhere else in this hook.
+  useEffect(() => {
+    let cancelled = false;
+    termsTemplateAPI.getAll()
+      .then((res) => { if (!cancelled) setTermsTemplates(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setTermsTemplates([]); }); // failure just leaves the dropdown empty — never blocks the screen
+    return () => { cancelled = true; };
+  }, []);
+
+  // Pre-select the dropdown from the persisted record of which template (if
+  // any) this quotation was built from — set on `quotationData.termsTemplateId`
+  // by parseQuotationData() once the quotation loads. This is the source of
+  // truth rather than re-deriving it by comparing HTML content, which proved
+  // fragile (sanitization/formatting round-trips meant a quotation genuinely
+  // built from "Template A" could fail to byte-match Template A's stored
+  // content and show the dropdown as unselected).
+  useEffect(() => {
+    if (!termsTemplates.length) return;
+    const templateId = quotationData.termsTemplateId;
+    if (!templateId) return;
+    const match = termsTemplates.find((t) => t._id === templateId);
+    if (match) setSelectedTermsTemplateId(match._id);
+  }, [termsTemplates, quotationData.termsTemplateId]);
+
+  const handleSelectTermsTemplate = useCallback((templateId) => {
+    setSelectedTermsTemplateId(templateId);
+    if (!templateId) return;
+    const template = termsTemplates.find((t) => t._id === templateId);
+    if (!template) return;
+
+    const hasExistingContent = tcSections.some((s) => {
+      const text = (s.content || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+      return text.length > 0 || (s.heading || '').trim().length > 0;
+    });
+    if (hasExistingContent) {
+      const confirmed = window.confirm('Loading this template will replace your current Terms & Conditions text. Continue?');
+      if (!confirmed) { setSelectedTermsTemplateId(''); return; }
+    }
+
+    setTcSections(htmlToSections(template.content, []));
+  }, [termsTemplates, tcSections]);
+
+  const handleOpenSaveTemplateModal = useCallback(() => {
+    const currentContent = normalizeTemplateContent(sectionsToHTML(tcSections));
+    const duplicate = termsTemplates.find((t) => normalizeTemplateContent(t.content) === currentContent);
+    if (duplicate) {
+      setSelectedTermsTemplateId(duplicate._id);
+      showSnack(`This already matches the saved template "${duplicate.name}" — no need to save it again.`, 'info');
+      return;
+    }
+    setShowSaveTemplateModal(true);
+  }, [tcSections, termsTemplates, showSnack]);
+  const handleCloseSaveTemplateModal = useCallback(() => setShowSaveTemplateModal(false), []);
+
+  const handleSaveTermsTemplate = useCallback(async (name) => {
+    setSavingTermsTemplate(true);
+    try {
+      const content = sectionsToHTML(tcSections);
+      const res = await termsTemplateAPI.create({ name, content });
+      const created = res.data?.data;
+      setTermsTemplates((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedTermsTemplateId(created._id);
+      setShowSaveTemplateModal(false);
+      showSnack('Template saved', 'success');
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to save template', 'error');
+    } finally {
+      setSavingTermsTemplate(false);
+    }
+  }, [tcSections, showSnack]);
+
+  const handleDeleteTermsTemplate = useCallback(async (templateId) => {
+    const template = termsTemplates.find((t) => t._id === templateId);
+    const confirmed = window.confirm(`Delete the saved template "${template?.name || 'this template'}"? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await termsTemplateAPI.delete(templateId);
+      setTermsTemplates((prev) => prev.filter((t) => t._id !== templateId));
+      setSelectedTermsTemplateId((prev) => (prev === templateId ? '' : prev));
+    } catch (err) {
+      showSnack(err?.response?.data?.message || 'Failed to delete template', 'error');
+    }
+  }, [termsTemplates, showSnack]);
 
   const addItem = useCallback(() => {
     setQuotationItems((prev) => [...prev, {
@@ -1071,6 +1205,7 @@ const handleSave = useCallback(async () => {
       notes: quotationData.notes?.trim() || "",
 
       termsAndConditions: finalTermsAndConditions,
+      termsTemplateId: selectedTermsTemplateId || undefined,
       termsImages: newBase64Images,
       existingTermsImages: existingTermsImages,
 
@@ -1174,6 +1309,13 @@ const handleSave = useCallback(async () => {
       }
 
       showSnack("Quotation updated successfully!", 'success');
+      // Remember this payment terms value for reuse on future quotations —
+      // fire-and-forget, must never surface an error or block the already-
+      // successful save. There's no dropdown on this edit screen yet (see
+      // plan), but this still feeds the reusable list new quotations use.
+      if (payload.paymentTerms?.trim()) {
+        paymentTermAPI.create({ value: payload.paymentTerms.trim() }).catch(() => {});
+      }
       setIsEditing(false);
       setEditingImgId(null);
       setNewImages({});
@@ -1190,7 +1332,7 @@ const handleSave = useCallback(async () => {
   }
 }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
     internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages,
-    customerIdForContacts]);
+    customerIdForContacts, selectedTermsTemplateId]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;
@@ -1319,6 +1461,19 @@ const handleSave = useCallback(async () => {
     customerPlaceOfSupply,
     customerContactPersons,
     termsImages,
+    paymentTermOptions,
+    selectedPaymentTermId,
+    handleSelectPaymentTerm,
+    handleDeletePaymentTerm,
+    termsTemplates,
+    selectedTermsTemplateId,
+    showSaveTemplateModal,
+    savingTermsTemplate,
+    handleSelectTermsTemplate,
+    handleOpenSaveTemplateModal,
+    handleCloseSaveTemplateModal,
+    handleSaveTermsTemplate,
+    handleDeleteTermsTemplate,
     handleDocumentPreview,
     generatePDF,
     handleDataChange,

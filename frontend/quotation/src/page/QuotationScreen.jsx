@@ -1157,6 +1157,13 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
       customerSnapshot: selectedCustomer,
       customer: selectedCustomer?.name,
       contact: selectedCustomer?.phone || "",
+      // Carry over the contact person actually used on the original
+      // quotation (revise/duplicate) — otherwise only the customer's
+      // company-level fields survive and the contact's own name/phone/email
+      // silently come out blank on the new draft.
+      customerName: selectedCustomer?.contactPerson || "",
+      customerPhone: selectedCustomer?.phone || "",
+      customerEmail: selectedCustomer?.email || "",
       date: getTodayDate(),
       expiryDate: getDefaultQueryDate(),
       queryDate: manualQueryDate,

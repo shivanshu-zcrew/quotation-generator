@@ -5,6 +5,7 @@ import { useQuotation } from '../hooks/useQuotation';
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import ConfirmModal from '../components/ConfirmModal';
+import SaveTermsTemplateModal from '../components/SaveTermsTemplateModal';
 import { btnStyle, outlineBtnStyle, outlineBtnHoverStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
 import { useAppStore } from '../services/store';
@@ -432,7 +433,11 @@ export default function ViewQuotationScreen() {
     termsImages, handleTermsImagesUpload, removeTermsImage,
     customerTaxTreatment,
     customerPlaceOfSupply,
-    customerContactPersons
+    customerContactPersons,
+    paymentTermOptions, selectedPaymentTermId, handleSelectPaymentTerm, handleDeletePaymentTerm,
+    termsTemplates, selectedTermsTemplateId, showSaveTemplateModal, savingTermsTemplate,
+    handleSelectTermsTemplate, handleOpenSaveTemplateModal, handleCloseSaveTemplateModal, handleSaveTermsTemplate,
+    handleDeleteTermsTemplate
   } = useQuotation();
 
   // Local state
@@ -1382,6 +1387,16 @@ export default function ViewQuotationScreen() {
           customerTaxTreatment={customerTaxTreatment}
           customerPlaceOfSupply={customerPlaceOfSupply}
           customerContactPersons={customerContactPersons}
+          paymentTermOptions={paymentTermOptions}
+          selectedPaymentTermId={selectedPaymentTermId}
+          onSelectPaymentTerm={handleSelectPaymentTerm}
+          onDeletePaymentTerm={handleDeletePaymentTerm}
+          termsTemplates={termsTemplates}
+          selectedTermsTemplateId={selectedTermsTemplateId}
+          onSelectTermsTemplate={handleSelectTermsTemplate}
+          onSaveTermsTemplateClick={handleOpenSaveTemplateModal}
+          onDeleteTermsTemplate={handleDeleteTermsTemplate}
+          isTemplateActionsDisabled={false}
           companyName={originalQuotation?.companySnapshot?.name || originalQuotation?.customer || ''}
   companyZohoOrgId={originalQuotation?.companySnapshot?.zohoOrganizationId || ''}
   companyPhone={originalQuotation?.ourContact || originalQuotation?.createdBySnapshot?.phone || ''}
@@ -1426,6 +1441,14 @@ export default function ViewQuotationScreen() {
           message={snackbar.message}
           type={snackbar.type}
           onClose={handleSnackbarClose}
+        />
+      )}
+
+      {showSaveTemplateModal && (
+        <SaveTermsTemplateModal
+          onClose={handleCloseSaveTemplateModal}
+          onSave={handleSaveTermsTemplate}
+          saving={savingTermsTemplate}
         />
       )}
 
