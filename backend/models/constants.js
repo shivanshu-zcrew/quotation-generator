@@ -41,14 +41,21 @@ const UAE_EMIRATES = [
   // customerServices.js's _getCurrencyId.
   const CURRENCY_OPTIONS = {
     'AED': { code: 'AED', symbol: 'د.إ', name: 'United Arab Emirates Dirham', decimalPlaces: 2, flag: '🇦🇪' },
-    'SAR': { code: 'SAR', symbol: 'ر.س', name: 'Saudi Riyal', decimalPlaces: 2, flag: '🇸🇦' },
-    'KWD': { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar', decimalPlaces: 3, flag: '🇰🇼' },
-    'QAR': { code: 'QAR', symbol: 'ر.ق', name: 'Qatari Riyal', decimalPlaces: 2, flag: '🇶🇦' },
+    'AUD': { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', decimalPlaces: 2, flag: '🇦🇺' },
     'BHD': { code: 'BHD', symbol: '.د.ب', name: 'Bahraini Dinar', decimalPlaces: 3, flag: '🇧🇭' },
-    'OMR': { code: 'OMR', symbol: 'ر.ع.', name: 'Omani Rial', decimalPlaces: 3, flag: '🇴🇲' },
-    'USD': { code: 'USD', symbol: '$', name: 'US Dollar', decimalPlaces: 2, flag: '🇺🇸' },
+    'BND': { code: 'BND', symbol: 'B$', name: 'Brunei Dollar', decimalPlaces: 2, flag: '🇧🇳' },
+    'CAD': { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', decimalPlaces: 2, flag: '🇨🇦' },
+    'CNY': { code: 'CNY', symbol: '¥', name: 'Yuan Renminbi', decimalPlaces: 2, flag: '🇨🇳' },
     'EUR': { code: 'EUR', symbol: '€', name: 'Euro', decimalPlaces: 2, flag: '🇪🇺' },
-    'GBP': { code: 'GBP', symbol: '£', name: 'British Pound', decimalPlaces: 2, flag: '🇬🇧' }
+    'GBP': { code: 'GBP', symbol: '£', name: 'British Pound', decimalPlaces: 2, flag: '🇬🇧' },
+    'INR': { code: 'INR', symbol: '₹', name: 'Indian Rupee', decimalPlaces: 2, flag: '🇮🇳' },
+    'JPY': { code: 'JPY', symbol: '¥', name: 'Japanese Yen', decimalPlaces: 0, flag: '🇯🇵' },
+    'KWD': { code: 'KWD', symbol: 'د.ك', name: 'Kuwaiti Dinar', decimalPlaces: 3, flag: '🇰🇼' },
+    'OMR': { code: 'OMR', symbol: 'ر.ع.', name: 'Omani Rial', decimalPlaces: 3, flag: '🇴🇲' },
+    'QAR': { code: 'QAR', symbol: 'ر.ق', name: 'Qatari Riyal', decimalPlaces: 2, flag: '🇶🇦' },
+    'SAR': { code: 'SAR', symbol: 'ر.س', name: 'Saudi Riyal', decimalPlaces: 2, flag: '🇸🇦' },
+    'USD': { code: 'USD', symbol: '$', name: 'US Dollar', decimalPlaces: 2, flag: '🇺🇸' },
+    'ZAR': { code: 'ZAR', symbol: 'R', name: 'South African Rand', decimalPlaces: 2, flag: '🇿🇦' }
   };
   
   const CURRENCY_CODES = Object.keys(CURRENCY_OPTIONS);

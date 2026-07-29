@@ -397,7 +397,8 @@ QueryDateUpdater.displayName = 'QueryDateUpdater';
 const fmtCurrency = (n, currency = 'AED') => {
   const symbols = {
     AED: 'د.إ', SAR: '﷼', QAR: '﷼', KWD: 'د.ك',
-    BHD: '.د.ب', OMR: '﷼', USD: '$', EUR: '€', GBP: '£'
+    BHD: '.د.ب', OMR: '﷼', USD: '$', EUR: '€', GBP: '£',
+    AUD: 'A$', BND: 'B$', CAD: 'C$', CNY: '¥', INR: '₹', JPY: '¥', ZAR: 'R'
   };
   const symbol = symbols[currency] || currency;
   return `${symbol} ${(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

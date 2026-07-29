@@ -10,7 +10,7 @@ import { useQuotations } from '../hooks/customHooks';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
 import { sectionsToHTML, sectionsToHTMLWithoutImages, newSection, htmlToSections } from '../components/TermsCondition';
 import { SkeletonRow } from '../components/SharedComponents';
-import { MAX_IMAGE_SIZE_MB, MAX_IMAGES_PER_ITEM, ALLOWED_IMAGE_TYPES } from '../utils/constants';
+import { MAX_IMAGE_SIZE_MB, MAX_IMAGES_PER_ITEM, ALLOWED_IMAGE_TYPES, CURRENCY_SYMBOLS } from '../utils/constants';
 import { numberToWords } from "../utils/numberToWords";
 import { getFileIcon, validateFile } from "../utils/quotationUtils";
 import { formatFileSize, getDefaultExpiryDate, getTodayDate } from "../utils/formatters";
@@ -104,7 +104,7 @@ const normalizeTemplateContent = (html) => (html || '').replace(/\s+/g, ' ').tri
 
 const getCurrencyObject = (currencyCode) => ({
   code: currencyCode || 'AED',
-  symbol: currencyCode === 'AED' ? 'د.إ' : currencyCode === 'SAR' ? '﷼' : currencyCode === 'USD' ? '$' : '€'
+  symbol: CURRENCY_SYMBOLS[currencyCode] || currencyCode || 'د.إ'
 });
 
 const getCompanyName = (selectedCompany, companies) => {

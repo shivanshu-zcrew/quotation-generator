@@ -3,7 +3,10 @@ const logger = require('./logger');
 
 const connectDB = async () => {
   try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb+srv://shivanshu:QuotationCreation@cluster0.4wrhvft.mongodb.net/?appName=Cluster0';
+    const mongoURI = process.env.MONGODB_URI;
+    if (!mongoURI) {
+      throw new Error('MONGODB_URI environment variable is required');
+    }
 
     const conn = await mongoose.connect(mongoURI, {
       maxPoolSize: 10,

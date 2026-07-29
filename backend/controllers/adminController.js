@@ -171,7 +171,11 @@ exports.getAllOpsQuotations = async (req, res) => {
 
     if (companyId && companyId !== 'all' && companyId !== 'ALL') {
       if (mongoose.Types.ObjectId.isValid(companyId)) {
-        query.companyId = companyId;
+        // Cast to ObjectId so aggregate() $match works (aggregate bypasses
+        // Mongoose auto-cast) — a raw string here silently matches zero
+        // documents in the status-count aggregation below, even though
+        // find()/countDocuments() cast it fine and return correct results.
+        query.companyId = new mongoose.Types.ObjectId(companyId);
       }
     }
 
@@ -186,7 +190,19 @@ exports.getAllOpsQuotations = async (req, res) => {
     query['createdBySnapshot.role'] = { $ne: 'admin' };
 
     if (search && search.trim()) {
-      query.$text = { $search: search.trim() };
+      // Regex substring match, not $text — $text only matches whole tokens,
+      // so a remembered fragment of a quotation number (e.g. part of the
+      // embedded timestamp, "84714924" out of "MRME-1784714924425-394")
+      // matched nothing even though it's clearly a substring of a real
+      // number. Scoped per-company/creator elsewhere in this query, so a
+      // regex scan here stays cheap at this collection's size.
+      const regex = new RegExp(escapeRegex(search.trim()), 'i');
+      query.$or = [
+        { quotationNumber: regex },
+        { 'customerSnapshot.name': regex },
+        { contact: regex },
+        { projectName: regex },
+      ];
     }
 
     if (fromDate || toDate) {
@@ -234,14 +250,12 @@ exports.getAllOpsQuotations = async (req, res) => {
         break;
     }
 
-    const effectiveSort = search && search.trim()
-      ? { score: { $meta: 'textScore' }, ...sortObject }
-      : sortObject;
-
+    // No more $meta:'textScore' relevance sort — search is now a plain regex
+    // match (see above), which carries no text-index score to sort by.
     const [quotations, totalCount, statusAgg, totalAll] = await Promise.all([
       listPopulate(
         Quotation.find(query)
-          .sort(effectiveSort)
+          .sort(sortObject)
           .skip(skip)
           .limit(parsedLimit)
       ).lean(),
@@ -824,7 +838,15 @@ exports.getAllQuotationsAdmin = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      query.$text = { $search: search.trim() };
+      // Regex substring match, not $text — see getAllOpsQuotations for why
+      // (a fragment of a quotation number wouldn't match via $text).
+      const regex = new RegExp(escapeRegex(search.trim()), 'i');
+      query.$or = [
+        { quotationNumber: regex },
+        { 'customerSnapshot.name': regex },
+        { contact: regex },
+        { projectName: regex },
+      ];
     }
 
     // baseQuery: all filters EXCEPT status — used for accurate tab counts
@@ -870,14 +892,10 @@ exports.getAllQuotationsAdmin = async (req, res) => {
 
     logger.debug('Admin sort query', { sortBy, sortDir, sortObject });
 
-    const effectiveSortAdmin = search && search.trim()
-      ? { score: { $meta: 'textScore' }, ...sortObject }
-      : sortObject;
-
     const [quotations, totalCount, statusAgg, totalAll] = await Promise.all([
       listPopulate(
         Quotation.find(query)
-          .sort(effectiveSortAdmin)
+          .sort(sortObject)
           .skip(skip)
           .limit(parsedLimit)
       ).lean(),

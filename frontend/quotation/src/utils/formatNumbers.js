@@ -1,4 +1,5 @@
 // utils/formatNumbers.js
+import { CURRENCY_SYMBOLS } from './constants';
 
 /**
  * Format large numbers with abbreviations (K, M, B, T)
@@ -48,10 +49,7 @@ export const formatLargeNumber = (num, decimals = 1) => {
   export const formatCurrency = (num, currency = 'AED') => {
     if (num === null || num === undefined || isNaN(num)) return `${currency} 0`;
     
-    const symbol = currency === 'AED' ? 'د.إ' : 
-                   currency === 'USD' ? '$' : 
-                   currency === 'EUR' ? '€' : 
-                   currency === 'GBP' ? '£' : currency;
+    const symbol = CURRENCY_SYMBOLS[currency] || currency;
     
     if (num >= 1_000_000_000) {
       return `${symbol} ${(num / 1_000_000_000).toFixed(1)}B`;

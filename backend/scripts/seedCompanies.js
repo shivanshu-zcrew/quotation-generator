@@ -29,7 +29,7 @@ const companiesData = [
     crNumber: '1234567',
     taxRate: 5,
     baseCurrency: 'AED',
-    acceptedCurrencies: ['AED', 'USD', 'SAR', 'QAR','KWD','BHD','OMR' ],
+    acceptedCurrencies: ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'],
     bankDetails: {
       bankName: 'Emirates NBD',
       accountName: 'Mega Repairing Machinery Equipment LLC',
@@ -57,7 +57,7 @@ const companiesData = [
     crNumber: '1234568',
     taxRate: 5,
     baseCurrency: 'AED',
-    acceptedCurrencies: ['AED', 'USD', 'SAR', 'QAR','KWD','BHD','OMR'],
+    acceptedCurrencies: ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'],
     bankDetails: {
       bankName: 'Dubai Islamic Bank',
       accountName: 'Gulf Technical Services LLC',
@@ -85,7 +85,7 @@ const companiesData = [
     crNumber: '1234569',
     taxRate: 5,
     baseCurrency: 'AED',
-    acceptedCurrencies: ['AED', 'USD', 'SAR', 'QAR','KWD','BHD','OMR'],
+    acceptedCurrencies: ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'],
     bankDetails: {
       bankName: 'Abu Dhabi Commercial Bank',
       accountName: 'Arabian Maintenance Company LLC',
@@ -101,7 +101,10 @@ async function seedCompanies() {
   try {
     // Connect to MongoDB
     console.log('🔄 Connecting to MongoDB...');
-    await mongoose.connect('mongodb+srv://shivanshu:QuotationCreation@cluster0.4wrhvft.mongodb.net/?appName=Cluster0');
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI environment variable is required');
+    }
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB successfully!\n');
 
     // Check if companies already exist

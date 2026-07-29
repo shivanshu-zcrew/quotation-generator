@@ -32,7 +32,8 @@ export const DELETABLE = new Set(['pending', 'ops_rejected']);
 // Currency
 export const CURRENCY_SYMBOLS = {
   AED: 'د.إ', SAR: '﷼', QAR: '﷼', KWD: 'د.ك',
-  BHD: '.د.ب', OMR: '﷼', USD: '$', EUR: '€', GBP: '£'
+  BHD: '.د.ب', OMR: '﷼', USD: '$', EUR: '€', GBP: '£',
+  AUD: 'A$', BND: 'B$', CAD: 'C$', CNY: '¥', INR: '₹', JPY: '¥', ZAR: 'R'
 };
 
 // File Upload

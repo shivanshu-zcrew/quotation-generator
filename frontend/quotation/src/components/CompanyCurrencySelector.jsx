@@ -5,14 +5,21 @@ import { useAppStore } from '../services/store';
 
 const CURRENCY_METADATA = {
   AED: { symbol: 'د.إ', name: 'UAE Dirham', flag: '🇦🇪', decimalPlaces: 2 },
-  SAR: { symbol: '﷼', name: 'Saudi Riyal', flag: '🇸🇦', decimalPlaces: 2 },
-  QAR: { symbol: '﷼', name: 'Qatari Riyal', flag: '🇶🇦', decimalPlaces: 2 },
-  KWD: { symbol: 'د.ك', name: 'Kuwaiti Dinar', flag: '🇰🇼', decimalPlaces: 3 },
+  AUD: { symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺', decimalPlaces: 2 },
   BHD: { symbol: '.د.ب', name: 'Bahraini Dinar', flag: '🇧🇭', decimalPlaces: 3 },
-  OMR: { symbol: '﷼', name: 'Omani Rial', flag: '🇴🇲', decimalPlaces: 3 },
-  USD: { symbol: '$', name: 'US Dollar', flag: '🇺🇸', decimalPlaces: 2 },
+  BND: { symbol: 'B$', name: 'Brunei Dollar', flag: '🇧🇳', decimalPlaces: 2 },
+  CAD: { symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦', decimalPlaces: 2 },
+  CNY: { symbol: '¥', name: 'Yuan Renminbi', flag: '🇨🇳', decimalPlaces: 2 },
   EUR: { symbol: '€', name: 'Euro', flag: '🇪🇺', decimalPlaces: 2 },
-  GBP: { symbol: '£', name: 'British Pound', flag: '🇬🇧', decimalPlaces: 2 }
+  GBP: { symbol: '£', name: 'British Pound', flag: '🇬🇧', decimalPlaces: 2 },
+  INR: { symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳', decimalPlaces: 2 },
+  JPY: { symbol: '¥', name: 'Japanese Yen', flag: '🇯🇵', decimalPlaces: 0 },
+  KWD: { symbol: 'د.ك', name: 'Kuwaiti Dinar', flag: '🇰🇼', decimalPlaces: 3 },
+  OMR: { symbol: '﷼', name: 'Omani Rial', flag: '🇴🇲', decimalPlaces: 3 },
+  QAR: { symbol: '﷼', name: 'Qatari Riyal', flag: '🇶🇦', decimalPlaces: 2 },
+  SAR: { symbol: '﷼', name: 'Saudi Riyal', flag: '🇸🇦', decimalPlaces: 2 },
+  USD: { symbol: '$', name: 'US Dollar', flag: '🇺🇸', decimalPlaces: 2 },
+  ZAR: { symbol: 'R', name: 'South African Rand', flag: '🇿🇦', decimalPlaces: 2 }
 };
 
 const ALL_COMPANIES_ID = 'all';
@@ -101,7 +108,7 @@ export const CompanyCurrencySelector = memo(({
 
   const acceptedCurrencies = useMemo(() => {
     if (isAllCompaniesSelected) {
-      return ['AED', 'SAR', 'USD', 'EUR', 'GBP', 'KWD', 'QAR', 'BHD', 'OMR'];
+      return ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'];
     }
     const company = companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
     return company?.acceptedCurrencies || ['AED'];
@@ -494,7 +501,7 @@ export const useCompanyCurrency = () => {
   
   const currency = CURRENCY_METADATA[selectedCurrency] || CURRENCY_METADATA.AED;
   const acceptedCurrencies = useMemo(() => {
-    if (canViewAllCompanies) return ['AED', 'SAR', 'USD', 'EUR', 'GBP', 'KWD', 'QAR', 'BHD', 'OMR'];
+    if (canViewAllCompanies) return ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'];
     return company?.acceptedCurrencies || ['AED'];
   }, [company, canViewAllCompanies]);
 

@@ -1842,6 +1842,19 @@ export const useCompanyQuotations = () => {
   const pageRef = useRef(page);
   const limitRef = useRef(limit);
 
+  // Remembers the search/status/sort actually sent on the last successful
+  // fetch. Callers (Ops/Admin/Home dashboards) track search+tab as their own
+  // local state and call refresh({search, status, ...}) directly instead of
+  // going through updateFilters/localFilters — so page/limit-only changes
+  // (pagination, page-size) used to fall back to empty localFilters and
+  // silently drop the active search/status filter. Reusing the last-sent
+  // values here means paging keeps whatever filter was already applied.
+  const lastFetchOptionsRef = useRef({});
+  // Queues the most recent refresh() call that arrived while one was already
+  // in flight, so a fast search keystroke (or any refresh during initial
+  // load) isn't dropped — it runs right after the current request settles.
+  const pendingOptionsRef = useRef(null);
+
   // Update refs when values change
   useEffect(() => {
     localFiltersRef.current = localFilters;
@@ -1858,7 +1871,16 @@ export const useCompanyQuotations = () => {
   // Create a stable refresh callback that uses refs
   const refresh = useCallback(async (options = {}) => {
     if (!selectedCompany) return { success: false };
-    if (isRefreshingRef.current) return { success: false, message: 'Already refreshing' };
+
+    // A request is already in flight — don't drop this one on the floor.
+    // Remember it and it'll run immediately once the current request settles,
+    // so a search keystroke that lands during the initial-load fetch (or any
+    // other overlapping refresh) still reaches the server instead of silently
+    // never happening.
+    if (isRefreshingRef.current) {
+      pendingOptionsRef.current = { ...pendingOptionsRef.current, ...options };
+      return { success: false, message: 'Already refreshing' };
+    }
 
     isRefreshingRef.current = true;
 
@@ -1866,21 +1888,35 @@ export const useCompanyQuotations = () => {
       const usePage = options.page !== undefined ? options.page : pageRef.current;
       const useLimit = options.limit !== undefined ? options.limit : limitRef.current;
       const useFilters = options.filters !== undefined ? options.filters : localFiltersRef.current;
+      const prevFetch = lastFetchOptionsRef.current;
+
+      // Callers that only vary page/limit (pagination, page-size change)
+      // don't repeat status/search/sort in `options` — fall back to whatever
+      // was actually sent on the last fetch (not just localFilters, which
+      // stays empty for dashboards that track search/tab as their own local
+      // state) so paging doesn't reset the active filter.
+      const status = 'status' in options ? options.status : (options.filters !== undefined ? useFilters.status : prevFetch.status);
+      const search = 'search' in options ? options.search : (options.filters !== undefined ? useFilters.search : prevFetch.search);
+      const sortBy = 'sortBy' in options ? options.sortBy : prevFetch.sortBy;
+      const sortDir = 'sortDir' in options ? options.sortDir : prevFetch.sortDir;
+      const fromDate = 'fromDate' in options ? options.fromDate : prevFetch.fromDate;
+      const toDate = 'toDate' in options ? options.toDate : prevFetch.toDate;
 
       const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? 'all' : selectedCompany;
+
+      lastFetchOptionsRef.current = { status, search, sortBy, sortDir, fromDate, toDate };
 
       const result = await refetchQuotations({
         companyId: companyIdParam,
         page: usePage,
         limit: useLimit,
-        status: options.status || useFilters.status,
-        search: options.search || useFilters.search,
-        fromDate: options.fromDate,
-        toDate: options.toDate,
-        sortBy: options.sortBy,
-        sortDir: options.sortDir,
+        status,
+        search,
+        fromDate,
+        toDate,
+        sortBy,
+        sortDir,
         forceRefresh: options.forceRefresh || false,
-        ...options
       });
 
       // Update state from result pagination
@@ -1892,6 +1928,11 @@ export const useCompanyQuotations = () => {
       return result;
     } finally {
       isRefreshingRef.current = false;
+      if (pendingOptionsRef.current) {
+        const next = pendingOptionsRef.current;
+        pendingOptionsRef.current = null;
+        refresh(next);
+      }
     }
   }, [selectedCompany, refetchQuotations]);
 

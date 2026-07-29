@@ -15,7 +15,10 @@ const User = require('../models/user'); // Add this
 async function migrateQuotations() {
   try {
     console.log('🔄 Connecting to MongoDB...');
-    await mongoose.connect('mongodb+srv://shivanshu:QuotationCreation@cluster0.4wrhvft.mongodb.net/?appName=Cluster0')
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI environment variable is required');
+    }
+    await mongoose.connect(process.env.MONGODB_URI);
     console.log('✅ Connected to MongoDB successfully!\n');
 
     // Get all companies

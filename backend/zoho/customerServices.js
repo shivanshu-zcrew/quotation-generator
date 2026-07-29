@@ -1570,7 +1570,7 @@ class ZohoBooksService {
     }
     const finalEmail = email && email.trim() !== '' ? email.toLowerCase().trim() : null;
 
-    const allowed = ['AED', 'SAR', 'KWD', 'QAR', 'BHD', 'OMR', 'USD', 'EUR', 'GBP'];
+    const allowed = ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'];
     const currencyCode = zohoContact.currency_code || 'AED';
     let finalCurrencyCode = allowed.includes(currencyCode) ? currencyCode : 'AED';
     let currencyWarning = null;
@@ -1602,11 +1602,11 @@ class ZohoBooksService {
   }
 
   _getCurrencySymbol(code) {
-    return ({ AED: 'د.إ', SAR: 'ر.س', KWD: 'د.ك', QAR: 'ر.ق', BHD: '.د.ب', OMR: 'ر.ع.', USD: '$', EUR: '€', GBP: '£' })[code] || 'د.إ';
+    return ({ AED: 'د.إ', SAR: 'ر.س', KWD: 'د.ك', QAR: 'ر.ق', BHD: '.د.ب', OMR: 'ر.ع.', USD: '$', EUR: '€', GBP: '£', AUD: 'A$', BND: 'B$', CAD: 'C$', CNY: '¥', INR: '₹', JPY: '¥', ZAR: 'R' })[code] || 'د.إ';
   }
 
   _getCurrencyName(code) {
-    return ({ AED: 'United Arab Emirates Dirham', SAR: 'Saudi Riyal', KWD: 'Kuwaiti Dinar', QAR: 'Qatari Riyal', BHD: 'Bahraini Dinar', OMR: 'Omani Rial', USD: 'US Dollar', EUR: 'Euro', GBP: 'British Pound' })[code] || 'United Arab Emirates Dirham';
+    return ({ AED: 'United Arab Emirates Dirham', SAR: 'Saudi Riyal', KWD: 'Kuwaiti Dinar', QAR: 'Qatari Riyal', BHD: 'Bahraini Dinar', OMR: 'Omani Rial', USD: 'US Dollar', EUR: 'Euro', GBP: 'British Pound', AUD: 'Australian Dollar', BND: 'Brunei Dollar', CAD: 'Canadian Dollar', CNY: 'Yuan Renminbi', INR: 'Indian Rupee', JPY: 'Japanese Yen', ZAR: 'South African Rand' })[code] || 'United Arab Emirates Dirham';
   }
 
   _cleanPayload(payload) {

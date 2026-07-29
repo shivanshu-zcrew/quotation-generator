@@ -8,6 +8,12 @@ const ExcelJS = require('exceljs');
 const mongoose = require('mongoose');
 const logger = require('../config/logger');
 
+// Search terms here are free-text user input fed directly into a Mongo
+// $regex — without escaping, a metacharacter-heavy query (e.g. many nested
+// groups/repetitions) can trigger catastrophic backtracking (ReDoS) against
+// the whole customers collection.
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Destructure constants
 const {
   GCC_COUNTRY_NAMES,
@@ -556,7 +562,22 @@ exports.updateCustomer = async (req, res) => {
     const { id } = req.params;
     if (!id?.trim()) return sendErrorResponse(res, 400, 'Invalid customer ID');
 
-    const customer = await Customer.findById(id);
+    // Same tenant-scoping rule as getCustomer/getQuotation — admins/ops
+    // managers can act on any company's customer, everyone else only their
+    // own. A bare findById(id) here would let any authenticated user edit
+    // any other company's customer record.
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    let customerQuery;
+    if (isAdmin || isOps) {
+      customerQuery = { _id: id };
+    } else {
+      const requesterCompanyId = req.companyId || req.headers['x-company-id'];
+      if (!requesterCompanyId) return sendErrorResponse(res, 400, 'Company ID is required');
+      customerQuery = { _id: id, companyId: requesterCompanyId };
+    }
+
+    const customer = await Customer.findOne(customerQuery);
     if (!customer) return sendErrorResponse(res, 404, 'Customer not found');
 
     const company = await Company.findById(customer.companyId);
@@ -795,7 +816,7 @@ const buildCustomerQuery = (companyId, filters) => {
   }
 
   if (search?.trim()) {
-    const searchRegex = { $regex: search.trim(), $options: 'i' };
+    const searchRegex = { $regex: escapeRegex(search.trim()), $options: 'i' };
     const searchConditions = [
       { name: searchRegex }, { email: searchRegex }, { phone: searchRegex },
       { companyName: searchRegex }, { taxRegistrationNumber: searchRegex }
@@ -846,7 +867,7 @@ exports.getAllCustomers = async (req, res) => {
     
     if (isAllCompanies) {
       if (search && search.trim()) {
-        const searchRegex = new RegExp(search.trim(), 'i');
+        const searchRegex = new RegExp(escapeRegex(search.trim()), 'i');
         query.$or = [
           { name: searchRegex },
           { email: searchRegex },
@@ -987,7 +1008,22 @@ exports.getCustomer = async (req, res) => {
     const { id } = req.params;
     if (!id?.trim()) return sendErrorResponse(res, 400, 'Invalid customer ID');
 
-    const customer = await Customer.findById(id).lean();
+    // Admins/ops managers can view any customer regardless of company
+    // context (same rule as getQuotation); everyone else is scoped to
+    // their own company — a bare findById(id) here would let any
+    // authenticated user read any other company's customer record.
+    const isAdmin = req.user.role === 'admin';
+    const isOps = req.user.role === 'ops_manager';
+    let query;
+    if (isAdmin || isOps) {
+      query = { _id: id };
+    } else {
+      const companyId = req.companyId || req.headers['x-company-id'];
+      if (!companyId) return sendErrorResponse(res, 400, 'Company ID is required');
+      query = { _id: id, companyId };
+    }
+
+    const customer = await Customer.findOne(query).lean();
     if (!customer) return sendErrorResponse(res, 404, 'Customer not found');
 
     res.status(200).json({ success: true, data: customer });
@@ -1003,6 +1039,7 @@ exports.searchCustomers = async (req, res) => {
     if (!query?.trim()) return sendErrorResponse(res, 400, 'Search query is required');
 
     const searchTerm = query.trim();
+    const escapedSearchTerm = escapeRegex(searchTerm);
     const parsedLimit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, parseInt(limit, 10) || 20));
     const parsedOffset = Math.max(0, parseInt(offset, 10) || 0);
 
@@ -1011,10 +1048,10 @@ exports.searchCustomers = async (req, res) => {
     const searchFilter = {
       isActive: true,
       $or: [
-        { name: { $regex: searchTerm, $options: 'i' } },
-        { email: { $regex: searchTerm, $options: 'i' } },
-        { phone: { $regex: searchTerm, $options: 'i' } },
-        { companyName: { $regex: searchTerm, $options: 'i' } }
+        { name: { $regex: escapedSearchTerm, $options: 'i' } },
+        { email: { $regex: escapedSearchTerm, $options: 'i' } },
+        { phone: { $regex: escapedSearchTerm, $options: 'i' } },
+        { companyName: { $regex: escapedSearchTerm, $options: 'i' } }
       ]
     };
     if (!isAllCompanies) searchFilter.companyId = companyId;
@@ -1051,10 +1088,11 @@ exports.getCustomerStats = async (req, res) => {
     
     if (isAllCompanies) {
       if (search) {
+        const escapedSearch = escapeRegex(search);
         query.$or = [
-          { name: new RegExp(search, 'i') },
-          { email: new RegExp(search, 'i') },
-          { phone: new RegExp(search, 'i') }
+          { name: new RegExp(escapedSearch, 'i') },
+          { email: new RegExp(escapedSearch, 'i') },
+          { phone: new RegExp(escapedSearch, 'i') }
         ];
       }
       

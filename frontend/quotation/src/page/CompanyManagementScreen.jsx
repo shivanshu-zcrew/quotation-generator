@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Plus, Edit2, Trash2, ToggleLeft, ToggleRight, X, Save, Loader, Building2, Search, AlertCircle } from 'lucide-react';
 import { companyAPI } from '../services/api';
 
-const CURRENCIES = ['AED', 'USD', 'EUR', 'GBP', 'SAR', 'QAR', 'KWD', 'BHD', 'OMR'];
+const CURRENCIES = ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'];
 
 const emptyForm = {
   code: '', name: '', phone: '', email: '', website: '',

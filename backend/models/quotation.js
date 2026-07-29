@@ -446,6 +446,10 @@ const quotationSchema = new mongoose.Schema(
     awardedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     awardedAt: { type: Date },
     awardNote: { type: String, default: "" },
+    // Atomic claim flag so two near-simultaneous "Award" requests (e.g. a
+    // double-click) can't both pass the status check and each independently
+    // create a Zoho estimate — see awardQuotation's findOneAndUpdate guard.
+    awardInProgress: { type: Boolean, default: false },
 
     // Revision (set when an in-place revision is made from a cancelled-post-approval quotation)
     revisedFrom: { type: mongoose.Schema.Types.ObjectId, ref: "Quotation", default: null, index: true },
@@ -548,7 +552,23 @@ quotationSchema.pre("save", async function (next) {
 });
 
 // ===== AUTO-POPULATE =====
+// List endpoints (getAllQuotations/getMyQuotations) call listPopulate()
+// specifically to keep this lightweight for a paginated table — but since
+// Mongoose stores populate() options per-path and this hook's own calls ran
+// AFTER the caller's (at query-execution time, not query-build time), the
+// hook's wider field selections always silently won, and the 4 approval-
+// chain refs (opsApprovedBy/approvedBy/awardedBy/companyId) got populated
+// regardless — 6 unconditional extra lookups per list request, not just on
+// single-document detail views where they're actually shown. Callers that
+// only need the light version now pass `{ minimalPopulate: true }` via
+// .setOptions(...) (see listPopulate in quotationController.js).
 quotationSchema.pre(/^find/, function (next) {
+  if (this.getOptions().minimalPopulate) {
+    this.populate("customerId", "name");
+    this.populate("createdBy", "name");
+    next();
+    return;
+  }
   this.populate("customerId", "name email phone address designation tradeLicenseNumber");
   this.populate("createdBy", "name email role");
   this.populate("opsApprovedBy", "name email");

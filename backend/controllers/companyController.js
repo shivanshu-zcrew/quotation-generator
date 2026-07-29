@@ -48,10 +48,20 @@ exports.getAllCompanies = async (req, res) => {
       .sort({ isActive: -1, name: 1 })
       .lean();
 
+    // Every role legitimately needs most of these fields (VAT/CR/trade-license
+    // numbers auto-fill onto every quotation header regardless of who's
+    // creating it — they're printed business-registration details, not
+    // secrets). bankDetails (real bank account/IBAN/SWIFT info) is the one
+    // genuinely admin-only field here — only CompanyManagementScreen uses it.
+    const isAdmin = req.user?.role === 'admin';
+    const responseCompanies = isAdmin
+      ? companies
+      : companies.map(({ bankDetails, ...rest }) => rest);
+
     res.json({
       success: true,
-      count: companies.length,
-      companies
+      count: responseCompanies.length,
+      companies: responseCompanies
     });
   } catch (error) {
     handleError(res, error, 'Error fetching companies');

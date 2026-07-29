@@ -5,6 +5,7 @@ const cloudinary = require('cloudinary').v2;
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
 
 const connectDB = require('./config/db');
 const redisService = require('./config/redisService');
@@ -68,6 +69,12 @@ app.use(limiter);
 // ── Body parsing middleware ──────────────────────────────────────────────
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
+
+// Strips any key starting with "$" or containing "." from req.body/req.query/
+// req.params — closes a NoSQL operator-injection surface where several
+// controllers assign a raw query-string value straight into a Mongo filter
+// (e.g. ?status[$ne]=x would otherwise become { status: { $ne: 'x' } }).
+app.use(mongoSanitize());
 
 // ── Cloudinary config ─────────────────────────────────────────────────────
 cloudinary.config({

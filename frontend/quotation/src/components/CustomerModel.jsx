@@ -206,14 +206,21 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
 
   const CURRENCY_OPTIONS = [
     { code: 'AED', label: '🇦🇪 AED', symbol: 'د.إ' },
-    { code: 'SAR', label: '🇸🇦 SAR', symbol: 'ر.س' },
-    { code: 'KWD', label: '🇰🇼 KWD', symbol: 'د.ك' },
-    { code: 'QAR', label: '🇶🇦 QAR', symbol: 'ر.ق' },
+    { code: 'AUD', label: '🇦🇺 AUD', symbol: 'A$' },
     { code: 'BHD', label: '🇧🇭 BHD', symbol: '.د.ب' },
-    { code: 'OMR', label: '🇴🇲 OMR', symbol: 'ر.ع.' },
-    { code: 'USD', label: '🇺🇸 USD', symbol: '$' },
+    { code: 'BND', label: '🇧🇳 BND', symbol: 'B$' },
+    { code: 'CAD', label: '🇨🇦 CAD', symbol: 'C$' },
+    { code: 'CNY', label: '🇨🇳 CNY', symbol: '¥' },
     { code: 'EUR', label: '🇪🇺 EUR', symbol: '€' },
-    { code: 'GBP', label: '🇬🇧 GBP', symbol: '£' }
+    { code: 'GBP', label: '🇬🇧 GBP', symbol: '£' },
+    { code: 'INR', label: '🇮🇳 INR', symbol: '₹' },
+    { code: 'JPY', label: '🇯🇵 JPY', symbol: '¥' },
+    { code: 'KWD', label: '🇰🇼 KWD', symbol: 'د.ك' },
+    { code: 'OMR', label: '🇴🇲 OMR', symbol: 'ر.ع.' },
+    { code: 'QAR', label: '🇶🇦 QAR', symbol: 'ر.ق' },
+    { code: 'SAR', label: '🇸🇦 SAR', symbol: 'ر.س' },
+    { code: 'USD', label: '🇺🇸 USD', symbol: '$' },
+    { code: 'ZAR', label: '🇿🇦 ZAR', symbol: 'R' }
   ];
 
   // Reset form when modal opens/closes

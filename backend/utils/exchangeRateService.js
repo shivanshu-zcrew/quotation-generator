@@ -2,11 +2,12 @@ const axios = require('axios');
 const logger = require('../config/logger');
 
 class ExchangeRateService {
-  static SUPPORTED_CURRENCIES = ['AED', 'USD', 'EUR', 'GBP', 'SAR', 'QAR', 'KWD', 'BHD', 'OMR'];
-  
+  static SUPPORTED_CURRENCIES = ['AED', 'AUD', 'BHD', 'BND', 'CAD', 'CNY', 'EUR', 'GBP', 'INR', 'JPY', 'KWD', 'OMR', 'QAR', 'SAR', 'USD', 'ZAR'];
+
   static FALLBACK_RATES = {
     AED: 1, USD: 0.2723, EUR: 0.2512, GBP: 0.2154,
-    SAR: 1.0215, QAR: 0.9912, KWD: 0.0837, BHD: 0.1026, OMR: 0.1048
+    SAR: 1.0215, QAR: 0.9912, KWD: 0.0837, BHD: 0.1026, OMR: 0.1048,
+    AUD: 0.4166, BND: 0.3676, CAD: 0.373, CNY: 1.9715, INR: 22.74, JPY: 40.85, ZAR: 5.04
   };
 
   static async getRates(baseCurrency = 'AED') {

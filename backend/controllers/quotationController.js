@@ -117,19 +117,49 @@ const deleteFromS3 = async (key) => {
 
 const getSignedFileUrl = async (key, expiresIn = 3600) => {
   if (!key) return null;
-  
+
   try {
     const command = new GetObjectCommand({
       Bucket: S3_BUCKET_NAME,
       Key: key,
     });
-    
+
     const url = await getSignedUrl(s3Client, command, { expiresIn });
     return url;
   } catch (error) {
     logger.error(`S3 Get Signed URL Error: ${error.message}`);
     return null;
   }
+};
+
+// S3 keys carry no tenant/quotation information in their own name (they're
+// just `${folder}/${timestamp}-${random}.${ext}`), so "does this requester
+// own this key" can only be answered by finding which quotation actually
+// references it and applying the same visibility rule getQuotation uses —
+// otherwise any authenticated user could mint a signed URL for any file in
+// the bucket just by knowing/guessing its key.
+const canAccessS3Key = async (key, req) => {
+  if (req.user.role === 'admin' || req.user.role === 'ops_manager') return true;
+
+  const owner = await Quotation.findOne({
+    $or: [
+      { 'items.imageS3Keys': key },
+      { 'termsImages.s3Key': key },
+      { 'internalDocuments.s3Key': key },
+    ],
+  }).select('companyId createdBy').lean();
+
+  if (!owner) return false; // unrecognized key — deny by default
+
+  // The schema's pre(/^find/) hook auto-populates companyId/createdBy on
+  // every query including this one, so these come back as full objects,
+  // not raw ObjectIds — unwrap via ._id before comparing.
+  const ownerCompanyId = owner.companyId?._id || owner.companyId;
+  const ownerCreatedBy = owner.createdBy?._id || owner.createdBy;
+
+  const companyId = req.companyId || req.headers['x-company-id'];
+  if (companyId && ownerCompanyId?.toString() === String(companyId)) return true;
+  return ownerCreatedBy?.toString() === req.user.id;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -325,13 +355,6 @@ const calculateTotals = (items, taxPercent, discountPercent, exchangeRate) => {
   };
 };
 
-const generateQuotationNumber = (companyCode) => {
-  const prefix = companyCode || 'QT';
-  const timestamp = Date.now();
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-  return `${prefix}-${timestamp}-${random}`;
-};
-
 const parsePagination = ({ page, limit }) => {
   const p = Math.max(1, parseInt(page, 10) || 1);
   const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -369,9 +392,14 @@ const fullPopulate = (q) =>
     .populate('approvedBy', 'name email designation')
     .populate('awardedBy', 'name email designation');
 
-// Lightweight populate for list endpoints — skips approval-chain refs not shown in tables.
+// Lightweight populate for list endpoints — skips approval-chain refs not
+// shown in tables. setOptions({minimalPopulate:true}) tells the schema's
+// pre(/^find/) hook (models/quotation.js) to take its narrow branch instead
+// of unconditionally widening every populate() call back to the full
+// detail-view set.
 const listPopulate = (q) =>
   q
+    .setOptions({ minimalPopulate: true })
     .populate('customerId', 'name')
     .populate('createdBy', 'name');
 
@@ -554,15 +582,24 @@ exports.getMyQuotations = async (req, res) => {
     if (!isAllCompanies) filter.companyId = companyId;
     if (req.query.status) filter.status = req.query.status;
 
-    if (req.query.search) {
-      filter.$text = { $search: req.query.search.trim() };
+    if (req.query.search && req.query.search.trim()) {
+      // Regex substring match, not $text — $text only matches whole tokens,
+      // so a remembered fragment of a quotation number (e.g. part of the
+      // embedded timestamp) wouldn't match even though it's clearly a
+      // substring of a real number. Already scoped to this user (and
+      // usually a company) above, so the scan stays cheap.
+      const regex = new RegExp(escapeRegex(req.query.search.trim()), 'i');
+      filter.$or = [
+        { quotationNumber: regex },
+        { 'customerSnapshot.name': regex },
+        { contact: regex },
+        { projectName: regex },
+      ];
     }
 
     const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
-    const sortObject = req.query.search
-      ? { score: { $meta: 'textScore' }, [sortField]: sortDir }
-      : { [sortField]: sortDir, _id: 1 };
+    const sortObject = { [sortField]: sortDir, _id: 1 };
 
     const [data, total] = await Promise.all([
       listPopulate(Quotation.find(filter).sort(sortObject).skip(skip).limit(limit)).lean(),
@@ -1035,11 +1072,22 @@ exports.createQuotation = async (req, res) => {
     ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber,
-    revisedFrom, revisionNote, termsTemplateId,
+    revisedFrom, revisionNote, termsTemplateId, duplicatedFrom,
   } = req.body;
 
   if (!projectName) return res.status(400).json({ message: 'Project Name is required' });
   if (!companyId) return res.status(400).json({ message: 'Company selection is required' });
+
+  // The schema enforces min:0/max:100 on both, but only at .save() time —
+  // an out-of-range value here would otherwise surface as a generic 500
+  // (Mongoose's ValidationError isn't specially handled anywhere) instead
+  // of a clear, field-specific 400.
+  if (taxPercent !== undefined && taxPercent !== null && taxPercent !== '' && (isNaN(Number(taxPercent)) || Number(taxPercent) < 0 || Number(taxPercent) > 100)) {
+    return res.status(400).json({ message: 'Tax percent must be between 0 and 100' });
+  }
+  if (discountPercent !== undefined && discountPercent !== null && discountPercent !== '' && (isNaN(Number(discountPercent)) || Number(discountPercent) < 0 || Number(discountPercent) > 100)) {
+    return res.status(400).json({ message: 'Discount percent must be between 0 and 100' });
+  }
 
   const company = await Company.findById(companyId);
   if (!company) return res.status(400).json({ message: 'Invalid company selected' });
@@ -1247,6 +1295,15 @@ exports.createQuotation = async (req, res) => {
     resolvedQuotationNumber = `${rootNumber}-R${resolvedRevisionNumber}`;
   }
 
+  // Duplicate: a lightweight traceability link only (unlike revisedFrom,
+  // it gates no business rules) — the frontend's "Duplicate" action already
+  // sends this, but it was previously never read here, so a duplicated
+  // quotation had no server-side trace back to its source at all.
+  let resolvedDuplicatedFrom = null;
+  if (duplicatedFrom && mongoose.Types.ObjectId.isValid(duplicatedFrom)) {
+    resolvedDuplicatedFrom = duplicatedFrom;
+  }
+
   const quotation = new Quotation({
     quotationNumber: resolvedQuotationNumber,
     projectName: projectName?.trim() || '',
@@ -1316,6 +1373,7 @@ exports.createQuotation = async (req, res) => {
     revisedFrom: resolvedRevisedFrom,
     revisionNote: revisionNote?.trim() || '',
     revisionNumber: resolvedRevisionNumber,
+    duplicatedFrom: resolvedDuplicatedFrom,
   });
 
   await quotation.save();
@@ -1388,6 +1446,13 @@ exports.updateQuotation = async (req, res) => {
     quotationImages, termsAndConditions, termsImages, internalDocuments, internalDocDescriptions,
     existingTermsImages, termsTemplateId
   } = req.body;
+
+  if (taxPercent !== undefined && taxPercent !== null && taxPercent !== '' && (isNaN(Number(taxPercent)) || Number(taxPercent) < 0 || Number(taxPercent) > 100)) {
+    return res.status(400).json({ success: false, message: 'Tax percent must be between 0 and 100' });
+  }
+  if (discountPercent !== undefined && discountPercent !== null && discountPercent !== '' && (isNaN(Number(discountPercent)) || Number(discountPercent) < 0 || Number(discountPercent) > 100)) {
+    return res.status(400).json({ success: false, message: 'Discount percent must be between 0 and 100' });
+  }
 
   let compressedQuotationImages = quotationImages;
   if (quotationImages && Object.keys(quotationImages).length > 0) {
@@ -1997,6 +2062,21 @@ exports.awardQuotation = async (req, res) => {
       return res.status(400).json({ success: false, message: `Only admin-approved quotations can be awarded. Current status: ${quotation.status}` });
     }
 
+    // Atomic claim — closes a real race where two near-simultaneous "Award"
+    // requests (a double-click, two open tabs) could both pass the plain
+    // status check above before either write lands, each independently
+    // calling Zoho and creating two estimates for one quotation. Only one
+    // concurrent request can win this conditional update; the loser gets a
+    // 409 instead of proceeding. Released on every exit path below.
+    const claimed = await Quotation.findOneAndUpdate(
+      { _id: quotationId, companyId, status: 'approved', awardInProgress: { $ne: true } },
+      { $set: { awardInProgress: true } }
+    );
+    if (!claimed) {
+      return res.status(409).json({ success: false, message: 'This quotation is already being awarded, or its status just changed. Please refresh and try again.' });
+    }
+    const releaseAwardClaim = () => Quotation.updateOne({ _id: quotationId }, { $set: { awardInProgress: false } }).catch((err) => logger.error('Failed to release award claim', { quotationId, error: err.message }));
+
     if (quotation.companyId && quotation.companyId.zohoOrganizationId) {
       zohoBooksService.setCompany(quotation.companyId._id, quotation.companyId.zohoOrganizationId);
     }
@@ -2104,6 +2184,7 @@ exports.awardQuotation = async (req, res) => {
     if (awarded) {
       const companyZohoOrgId = quotation.companyId?.zohoOrganizationId;
       if (!companyZohoOrgId) {
+        await releaseAwardClaim();
         return res.status(422).json({
           success: false,
           message: 'This company has no Zoho Organisation ID configured. Please add one before awarding quotations.',
@@ -2113,6 +2194,7 @@ exports.awardQuotation = async (req, res) => {
 
       const customerZohoId = customer?.zohoId;
       if (!customerZohoId) {
+        await releaseAwardClaim();
         return res.status(422).json({
           success: false,
           message: 'Customer is not synced with Zoho Books. Please sync the customer first before awarding.',
@@ -2125,6 +2207,7 @@ exports.awardQuotation = async (req, res) => {
       // 0%/15% but the quotation is at 5%) — fail clearly now instead of
       // sending an undefined tax_id to Zoho and getting back an opaque error.
       if (taxRate > 0 && !taxId) {
+        await releaseAwardClaim();
         return res.status(422).json({
           success: false,
           message: `This company's Zoho organization has no ${taxRate}% tax rate configured. Please choose a different tax rate on the quotation or contact an administrator.`,
@@ -2211,6 +2294,7 @@ exports.awardQuotation = async (req, res) => {
         logger.error(`Zoho createEstimate threw unexpectedly: ${zohoErr.message}`, {
           quotationId, quotationNumber: quotation.quotationNumber
         });
+        await releaseAwardClaim();
         return res.status(502).json({
           success: false,
           message: 'Unable to reach Zoho Books. The quotation has NOT been awarded. Please try again.',
@@ -2250,6 +2334,7 @@ exports.awardQuotation = async (req, res) => {
         };
         const userMessage = kindMessages[zohoKind] || `Zoho Books rejected the request: ${zohoError}`;
 
+        await releaseAwardClaim();
         return res.status(502).json({
           success: false,
           message: `Failed to create estimate in Zoho Books. The quotation has NOT been awarded. ${userMessage}`,
@@ -2261,6 +2346,7 @@ exports.awardQuotation = async (req, res) => {
 
       // ── Zoho succeeded — now safe to update the DB ────────────────────────
       quotation.status = 'awarded';
+      quotation.awardInProgress = false;
       quotation.awardedBy = req.user.id;
       quotation.awardedAt = new Date();
       quotation.awardNote = awardNote?.trim() || '';
@@ -2308,6 +2394,7 @@ exports.awardQuotation = async (req, res) => {
     // ── NOT-AWARDED PATH ─────────────────────────────────────────────────
     // No Zoho call needed — save immediately.
     quotation.status = 'not_awarded';
+    quotation.awardInProgress = false;
     quotation.awardedBy = req.user.id;
     quotation.awardedAt = new Date();
     quotation.awardNote = awardNote?.trim() || '';
@@ -2347,6 +2434,10 @@ exports.awardQuotation = async (req, res) => {
 
   } catch (err) {
     logger.error(`Award quotation error: ${err.message}`, { quotationId: req.params.id, error: err.message, stack: err.stack });
+    // Unconditional, harmless no-op if the award claim was never taken —
+    // guarantees a crash mid-award never leaves the quotation permanently
+    // locked out of ever being awarded again.
+    Quotation.updateOne({ _id: req.params.id }, { $set: { awardInProgress: false } }).catch(() => {});
     res.status(500).json({ success: false, message: 'Error awarding quotation', error: err.message });
   }
 };
@@ -2408,8 +2499,23 @@ exports.generatePDF = async (req, res) => {
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
-      if (['stylesheet', 'font', 'media', 'script', 'fetch', 'xhr', 'websocket', 'other'].includes(type)) req.abort();
-      else req.continue();
+      const url = req.url();
+      // The real template only ever embeds images as inline base64 data
+      // URIs — never a real network fetch. Since `html` here is arbitrary
+      // client-supplied content with no server-side sanitization, blocking
+      // non-data image requests (and any 'document' navigation attempt, e.g.
+      // a script-driven `window.location` change) closes an SSRF path
+      // (attacker-controlled <img src="http://internal-host/..."> or a
+      // dynamically-created one) without affecting legitimate rendering —
+      // verified against both a real quotation-shaped template and injected
+      // <script>/<img> payloads before this was applied.
+      if (type === 'image') {
+        if (!url.startsWith('data:')) { req.abort(); return; }
+        req.continue();
+        return;
+      }
+      if (['stylesheet', 'font', 'media', 'script', 'fetch', 'xhr', 'websocket', 'other', 'document'].includes(type)) { req.abort(); return; }
+      req.continue();
     });
 
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 40000 });
@@ -3607,6 +3713,10 @@ exports.getSignedUrl = async (req, res) => {
       return res.status(400).json({ success: false, message: 'S3 key is required' });
     }
 
+    if (!(await canAccessS3Key(key, req))) {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this file' });
+    }
+
     const signedUrl = await getSignedFileUrl(key, expiresIn);
 
     if (!signedUrl) {
@@ -3632,7 +3742,7 @@ exports.getBatchSignedUrls = async (req, res) => {
     const urls = {};
 
     for (const key of keys) {
-      if (key) {
+      if (key && (await canAccessS3Key(key, req))) {
         const signedUrl = await getSignedFileUrl(key, expiresIn);
         if (signedUrl) {
           urls[key] = signedUrl;
