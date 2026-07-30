@@ -479,11 +479,34 @@ class ScopedZohoClient {
       if (currencyId) contactPayload.currency_id = currencyId;
     }
 
-    const cleanPayload = this._cleanPayload(contactPayload);
-    const result = await this._mutationWithRetry(
-      `updateContact:${contactId}`,
-      () => this._request('PUT', `/contacts/${contactId}`, cleanPayload)
-    );
+    // A contact person's cached zohoContactPersonId can go stale (deleted in
+    // Zoho directly, or mismatched by our email/name-based re-linking) — Zoho
+    // rejects the whole update rather than ignoring just that one bad ID, and
+    // only ever reports ONE offending ID per response. A contact can have
+    // several stale IDs at once (e.g. leftover test contact persons), so keep
+    // stripping and retrying — bounded so a genuinely bad/looping payload
+    // can't retry forever — instead of failing an otherwise-unrelated update
+    // (e.g. just a currency change) over cached fields we don't even need.
+    let payload = this._cleanPayload(contactPayload);
+    let result;
+    const MAX_STALE_ID_RETRIES = 5;
+    for (let attempt = 0; attempt <= MAX_STALE_ID_RETRIES; attempt++) {
+      result = await this._mutationWithRetry(`updateContact:${contactId}`, () => this._request('PUT', `/contacts/${contactId}`, payload));
+      if (result.success || result.kind !== 'client_error' || attempt === MAX_STALE_ID_RETRIES) break;
+
+      const staleIdMatch = /Invalid value passed (\d+) for contact_person_id/i.exec(result.error || '');
+      const hasStalePerson = staleIdMatch && payload.contact_persons?.some(cp => cp.contact_person_id === staleIdMatch[1]);
+      if (!hasStalePerson) break;
+
+      logger.warn(`Stale contact_person_id ${staleIdMatch[1]} rejected by Zoho — retrying without it`, { contactId, attempt: attempt + 1 });
+      payload = this._cleanPayload({
+        ...payload,
+        contact_persons: payload.contact_persons.map(cp =>
+          cp.contact_person_id === staleIdMatch[1] ? { ...cp, contact_person_id: undefined } : cp
+        )
+      });
+    }
+
     if (result.success) {
       logger.info(`Contact updated in Zoho: ${customerData.name}`, { contactId, companyId: this.companyId });
     } else {

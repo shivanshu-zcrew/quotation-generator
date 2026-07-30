@@ -331,8 +331,15 @@ const useCustomerStore = create((set, get) => ({
       }
       throw new Error(response.data.message || 'Failed to update customer');
     } catch (error) {
-      set({ isLoading: false, error: error.message });
-      return { success: false, error: error.message };
+      // Axios throws on non-2xx responses without surfacing the backend's own
+      // message. On a Zoho sync failure the backend sends BOTH a generic
+      // `message` ("Failed to update customer in Zoho Books") and the actual
+      // reason in `error` (e.g. Zoho's own "currency cannot be updated..."
+      // text) — prefer the specific one, then fall back to the generic
+      // message, then to Axios's own "Request failed with status code 400".
+      const message = error.response?.data?.error || error.response?.data?.message || error.message;
+      set({ isLoading: false, error: message });
+      return { success: false, error: message };
     }
   },
 

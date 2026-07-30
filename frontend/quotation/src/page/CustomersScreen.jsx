@@ -1129,6 +1129,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
   const [progressData, setProgressData] = useState(null);
   const [showProgressModal, setShowProgressModal] = useState(false);
   const [toast, setToast] = useState(null);
+  // Long-form errors (e.g. Zoho's own rejection text) from submitting the
+  // add/edit customer form — shown as a dismissible banner inside the modal
+  // itself, since they're a direct result of that form's submission.
+  const [modalError, setModalError] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
@@ -1250,6 +1254,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
       return;
     }
     setEditingCustomer(customer);
+    setModalError(null);
     setShowModal(true);
   }, [isAllCompanies]);
 
@@ -1257,6 +1262,7 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
     setShowModal(false);
     setEditingCustomer(null);
     setIsSubmitting(false);
+    setModalError(null);
   }, []);
 
   const handleSortChange = useCallback((option) => {
@@ -1279,7 +1285,10 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
           showToast('✅ Customer updated successfully', 'success');
           await refreshData();
         } else {
-          showToast(result?.error || 'Error updating customer', 'error');
+          // Zoho's own rejection text (e.g. a locked currency, a stale
+          // contact-person ID) can be long, so it gets a dismissible banner
+          // instead of a toast rather than being truncated/unreadable.
+          setModalError(result?.error || 'Error updating customer');
         }
       } else {
         result = await addCustomerToStore(formData);
@@ -1288,11 +1297,11 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
           showToast('✅ Customer added successfully', 'success');
           await refreshData();
         } else {
-          showToast(result?.error || 'Error adding customer', 'error');
+          setModalError(result?.error || 'Error adding customer');
         }
       }
     } catch (error) {
-      showToast(error?.response?.data?.message || error?.message || 'Error saving customer', 'error');
+      setModalError(error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Error saving customer');
     } finally {
       setIsSubmitting(false);
     }
@@ -1874,7 +1883,15 @@ export default function CustomersScreen({ onBack, companyId: propCompanyId }) {
         danger={true}
       />
 
-      <CustomerModal isOpen={showModal} onClose={handleCloseModal} onSubmit={handleSubmit} initialData={editingCustomer} isSubmitting={isSubmitting} />
+      <CustomerModal
+        isOpen={showModal}
+        onClose={handleCloseModal}
+        onSubmit={handleSubmit}
+        initialData={editingCustomer}
+        isSubmitting={isSubmitting}
+        submitError={modalError}
+        onDismissSubmitError={() => setModalError(null)}
+      />
 
       <AnimatePresence>
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

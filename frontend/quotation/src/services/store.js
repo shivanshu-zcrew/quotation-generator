@@ -65,13 +65,17 @@ export class AppError extends Error {
 
   static from(error) {
     const statusCode = error?.response?.status;
-    const message = error?.response?.data?.message || error?.message || 'Unknown error occurred';
+    // Some endpoints (e.g. a Zoho sync failure) send both a generic
+    // `message` ("Failed to update customer in Zoho Books") and the actual
+    // reason in `error` (Zoho's own rejection text) — prefer the specific one.
+    const message = error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Unknown error occurred';
     return new AppError(message, statusCode, error);
   }
 }
 
 export const getErrorMessage = (error) => {
   if (error instanceof AppError) return error.message;
+  if (error?.response?.data?.error) return error.response.data.error;
   if (error?.response?.data?.message) return error.response.data.message;
   if (error?.message) return error.message;
   return 'An unexpected error occurred';

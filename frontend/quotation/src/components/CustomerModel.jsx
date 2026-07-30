@@ -130,10 +130,51 @@ const ErrorSummary = ({ errors, onTabChange, setActiveTab }) => {
   );
 };
 
+// Long/detailed server-side errors (e.g. Zoho's own rejection text — a
+// locked currency, a stale contact-person ID) don't fit a toast and don't
+// belong to a specific form field like ErrorSummary's validation messages —
+// shown as a dismissible banner right inside the modal instead.
+const SubmitErrorBanner = ({ message, onDismiss }) => {
+  const isMobile = useMediaQuery('(max-width: 640px)');
+  if (!message) return null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      style={{
+        marginTop: '0.75rem',
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: '0.625rem',
+        padding: isMobile ? '0.75rem' : '1rem',
+        background: '#fef2f2',
+        border: '1px solid #fecaca',
+        borderRadius: '12px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+        <AlertCircle size={isMobile ? 16 : 18} color="#dc2626" style={{ flexShrink: 0, marginTop: 1 }} />
+        <span style={{ fontSize: isMobile ? '0.75rem' : '0.8rem', color: '#991b1b', fontWeight: 500, lineHeight: 1.5 }}>
+          {message}
+        </span>
+      </div>
+      <button
+        onClick={onDismiss}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 4, flexShrink: 0, color: '#dc2626' }}
+      >
+        <X size={16} />
+      </button>
+    </motion.div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────────────────
 // Customer Modal
 // ─────────────────────────────────────────────────────────────────────────
-const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmitting }) => {
+const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmitting, submitError, onDismissSubmitError }) => {
   const isMobile = useMediaQuery('(max-width: 640px)');
   const isTablet = useMediaQuery('(max-width: 1024px)');
   
@@ -641,11 +682,18 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                 </div>
 
                 {/* ✅ Error Summary - Shows errors from any tab */}
-                <ErrorSummary 
-                  errors={errors} 
+                <ErrorSummary
+                  errors={errors}
                   onTabChange={handleTabChange}
                   setActiveTab={setActiveTab}
                 />
+
+                {/* Server/Zoho-side submission error (e.g. currency locked, stale contact-person ID) */}
+                <AnimatePresence>
+                  {submitError && (
+                    <SubmitErrorBanner message={submitError} onDismiss={onDismissSubmitError} />
+                  )}
+                </AnimatePresence>
 
                 {/* ✅ Company Selector - Show ONLY when 'All Companies' is selected */}
                 {needsCompanySelection && (
@@ -1067,6 +1115,9 @@ const CustomerModal = ({ isOpen, onClose, onSubmit, initialData = null, isSubmit
                               <option key={opt.code} value={opt.code}>{opt.label}</option>
                             ))}
                           </select>
+                          <p style={{ margin: '0.25rem 0 0', fontSize: '0.7rem', color: '#64748b' }}>
+                            Choose carefully — once a quotation is created for this customer in this currency, it can no longer be changed.
+                          </p>
                         </div>
                       </div>
                     </motion.div>

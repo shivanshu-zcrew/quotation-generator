@@ -13,6 +13,7 @@ import { fmtCurrency } from "../utils/formatters";
 import CustomerSelector from "../components/CustomerSelector";
 import useCustomerStore from "../services/customerStore";
 import ItemModal from "../components/AddItemModal";
+import ConfirmModal from "../components/ConfirmModal";
 
 const PRIMARY = "#0f172a";
 const STEP = { SELECTION: 1, TEMPLATE: 2 };
@@ -879,6 +880,34 @@ const CustomerSelectSkeleton = () => (
   </div>
 );
 
+// Long/detailed error messages (e.g. Zoho's own rejection text) don't fit a
+// toast — shown as a dismissible banner at the top of the page instead, so
+// the full message stays readable and visible until the user clears it.
+const ErrorBanner = ({ message, onDismiss }) => (
+  <div style={{
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: "0.75rem",
+    padding: "0.875rem 1rem",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 12,
+    marginBottom: "1rem"
+  }}>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem" }}>
+      <AlertCircle size={18} color="#dc2626" style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ fontSize: "0.813rem", color: "#991b1b", fontWeight: 500, lineHeight: 1.5 }}>{message}</span>
+    </div>
+    <button
+      onClick={onDismiss}
+      style={{ background: "transparent", border: "none", cursor: "pointer", padding: 4, flexShrink: 0, color: "#dc2626" }}
+    >
+      <X size={16} />
+    </button>
+  </div>
+);
+
 const LoadErrorBanner = ({ error, onRetry }) => (
   <div style={{ 
     display: "flex", 
@@ -929,7 +958,8 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
     loadAllCustomers,
     refreshCustomers,
     resetCustomers,
-    syncCustomers
+    syncCustomers,
+    updateCustomer
   } = useCustomerStore();
   const { loading: storeLoading, loadError, fetchAllData, initialized } = useAppStore();
 
@@ -980,6 +1010,17 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
   // using the actual value (not a boolean flag) means the second fire with the same
   // company is a no-op and doesn't wipe prefill state.
   const prevCompanyRef = useRef(undefined);
+  // Tracks whether the user has manually picked a currency, so selecting a
+  // customer afterward doesn't silently overwrite that choice with the
+  // customer's default billing currency.
+  const currencyManuallySetRef = useRef(false);
+  // Prompts to sync the customer's Zoho currency to the quotation's currency
+  // when they diverge — null when no prompt is showing.
+  const [currencyMismatch, setCurrencyMismatch] = useState(null); // { customer, customerCurrency, newCurrency }
+  const [isSyncingCustomerCurrency, setIsSyncingCustomerCurrency] = useState(false);
+  // Long-form errors (e.g. Zoho's own rejection text) that don't fit a toast —
+  // shown as a dismissible banner at the top of the page instead.
+  const [pageError, setPageError] = useState(null);
   // --------------------------------------------------------------------------
   // Responsive Detection
   // --------------------------------------------------------------------------
@@ -1058,6 +1099,62 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
     setToast({ message, type });
     setTimeout(() => setToast(null), TOAST_DURATION);
   }, []);
+
+  // Zoho locks a customer's transaction currency — if the quotation's currency
+  // doesn't match the customer's currency on record, ask the user whether to
+  // sync the customer's currency (in our DB + Zoho) to the quotation's choice.
+  // Not doing so isn't an error: the award flow already converts amounts to
+  // whatever currency the customer ends up with in Zoho.
+  const checkCurrencyMismatch = useCallback((customer, newCurrency, previousCurrency) => {
+    if (!customer?.defaultCurrency?.code || !newCurrency || customer.defaultCurrency.code === newCurrency) {
+      setCurrencyMismatch(null);
+      return;
+    }
+    setCurrencyMismatch({ customer, customerCurrency: customer.defaultCurrency.code, newCurrency, previousCurrency });
+  }, []);
+
+  const handleConfirmCurrencySync = useCallback(async () => {
+    if (!currencyMismatch) return;
+    const { customer, customerCurrency, newCurrency } = currencyMismatch;
+    setIsSyncingCustomerCurrency(true);
+    try {
+      const result = await updateCustomer(customer._id, { defaultCurrency: newCurrency });
+      if (result?.success) {
+        setSelectedCustomer(prev =>
+          prev && prev._id === customer._id
+            ? { ...prev, defaultCurrency: result.customer.defaultCurrency }
+            : prev
+        );
+        showToast(`Customer currency updated to ${newCurrency} in the system and Zoho.`, 'success');
+      } else {
+        // Non-fatal: Zoho commonly rejects a currency change once the customer
+        // already has transactions on record. Rather than leaving the
+        // quotation mismatched against the customer's actual Zoho currency,
+        // fall back to the currency the customer was created/synced with —
+        // Zoho's own rejection text can be long, so it gets a dismissible
+        // banner instead of a toast rather than being truncated/unreadable.
+        currencyManuallySetRef.current = false;
+        setLocalCurrency(customerCurrency);
+        setPageError(
+          `Couldn't update the customer's currency in Zoho${result?.error ? `: ${result.error}` : ''}. Using this customer's existing currency (${customerCurrency}) for this quotation instead.`
+        );
+      }
+    } catch (err) {
+      currencyManuallySetRef.current = false;
+      setLocalCurrency(customerCurrency);
+      setPageError(`Couldn't update the customer's currency: ${err.message}. Using this customer's existing currency (${customerCurrency}) for this quotation instead.`);
+    } finally {
+      setIsSyncingCustomerCurrency(false);
+      setCurrencyMismatch(null);
+    }
+  }, [currencyMismatch, updateCustomer, showToast]);
+
+  const handleCancelCurrencySync = useCallback(() => {
+    if (currencyMismatch?.previousCurrency) {
+      setLocalCurrency(currencyMismatch.previousCurrency);
+    }
+    setCurrencyMismatch(null);
+  }, [currencyMismatch]);
 
   const handleAddManualItem = useCallback((newItem) => {
     setSelectedItems(prev => [...prev, newItem]);
@@ -1257,6 +1354,8 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
           </p>
         </div>
 
+        {pageError && <ErrorBanner message={pageError} onDismiss={() => setPageError(null)} />}
+
         {/* Sticky Actions Bar — pinned to the top of the viewport the whole time
             you're on this page, so Back/Continue are always reachable while
             scrolling through the form below (kept outside the Main Card since
@@ -1380,7 +1479,10 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
             localCurrencyMode={true}
             localCurrencyValue={localCurrency}
             onCurrencyChange={(currency) => {
+              const previousCurrency = localCurrency;
+              currencyManuallySetRef.current = true;
               setLocalCurrency(currency);
+              checkCurrencyMismatch(selectedCustomer, currency, previousCurrency);
               console.log('Currency changed locally:', currency);
             }}
             onCompanyChange={(companyId, meta) => {
@@ -1405,10 +1507,14 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
                   setSelectedCustomer(customer);
                   // Pre-select the currency selector with this customer's own
                   // billing currency, same field CustomersScreen shows as
-                  // their default currency — carries through to pricing/
-                  // totals via localCurrency below, same as a manual pick.
-                  if (customer?.defaultCurrency?.code) {
+                  // their default currency — but never override a currency
+                  // the user already picked manually. If it was picked
+                  // manually and differs from this customer's currency,
+                  // prompt to sync instead of silently mismatching.
+                  if (customer?.defaultCurrency?.code && !currencyManuallySetRef.current) {
                     setLocalCurrency(customer.defaultCurrency.code);
+                  } else {
+                    checkCurrencyMismatch(customer, localCurrency, localCurrency);
                   }
                 }}
                 placeholder={isMobile ? "— Search customer —" : "— Search or select a customer —"}
@@ -1590,6 +1696,21 @@ export default function QuotationScreen({ onBack, prefillFrom }) {
 
       {/* Toast Notifications */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      <ConfirmModal
+        open={!!currencyMismatch}
+        title="Currency Mismatch"
+        message={
+          currencyMismatch
+            ? `This customer's currency on record is ${currencyMismatch.customerCurrency}, but this quotation is in ${currencyMismatch.newCurrency}. Update the customer's currency to ${currencyMismatch.newCurrency} in both the system and Zoho?`
+            : ''
+        }
+        confirmLabel={currencyMismatch ? `Update to ${currencyMismatch.newCurrency}` : 'Update'}
+        cancelLabel="Cancel"
+        onConfirm={handleConfirmCurrencySync}
+        onCancel={handleCancelCurrencySync}
+        loading={isSyncingCustomerCurrency}
+      />
     </div>
   );
 }

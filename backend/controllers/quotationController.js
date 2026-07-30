@@ -2233,14 +2233,33 @@ exports.awardQuotation = async (req, res) => {
       // not a percentage, which is a different discount mode entirely.
       const originalDiscountPercent = quotation.discountPercent || 0;
 
+      // Zoho locks a contact's transaction currency to whatever it was set up
+      // with — passing a currency_id that doesn't match the customer's own
+      // Zoho currency is rejected outright ("Invalid value specified for the
+      // parameter"), not silently ignored. Only override the estimate's
+      // currency when it actually matches the customer; otherwise convert
+      // every amount into the customer's currency so Zoho still gets the
+      // right numbers (instead of the quotation's raw currency-X figures
+      // being mislabeled under the customer's currency, the original bug).
+      const quotationCurrencyCode = quotation.currency?.code;
+      const customerCurrencyCode = customer.defaultCurrency?.code;
+      const sendCurrencyCode = !customerCurrencyCode || quotationCurrencyCode === customerCurrencyCode;
+      let conversionRate = 1;
+      if (!sendCurrencyCode) {
+        const rates = await ExchangeRateService.getRates(quotationCurrencyCode);
+        conversionRate = rates[customerCurrencyCode] || 1;
+      }
+      const round2 = (v) => Math.round(v * 100) / 100;
+
       const lineItemsWithDiscount = quotation.items.map((item, i) => {
+        const rate = round2(item.unitPrice * conversionRate);
         const lineItem = {
           description: item.description || '',
           quantity: item.quantity,
-          rate: item.unitPrice,
+          rate,
           discount: 0,
           discount_amount: 0,
-          item_total: item.quantity * item.unitPrice,
+          item_total: round2(item.quantity * rate),
           item_order: i + 1
         };
 
@@ -2267,7 +2286,7 @@ exports.awardQuotation = async (req, res) => {
         reference_number: quotation.quotationNumber,
         date: new Date(quotation.date).toISOString().split('T')[0],
         expiry_date: new Date(quotation.expiryDate).toISOString().split('T')[0],
-        exchange_rate: quotation.currency?.exchangeRate?.rate || 1,
+        exchange_rate: sendCurrencyCode ? (quotation.currency?.exchangeRate?.rate || 1) : 1,
         discount: originalDiscountPercent,
         is_discount_before_tax: true,
         discount_type: 'entity_level',
@@ -2289,6 +2308,7 @@ exports.awardQuotation = async (req, res) => {
       };
 
       if (taxRate > 0) estimateData.tax_id = taxId;
+      if (sendCurrencyCode) estimateData.currency_code = quotationCurrencyCode;
 
       // ── Call Zoho FIRST — do not touch the DB until this succeeds ────────
       let zohoEstimate;

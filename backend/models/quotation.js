@@ -168,22 +168,22 @@ const quotationItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     unitPriceInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     totalPrice: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     totalPriceInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     // S3 (current)
     imageS3Keys: [{ type: String }],
@@ -317,46 +317,46 @@ const quotationSchema = new mongoose.Schema(
     subtotal: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     taxAmount: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     discountAmount: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     total: {
       type: Number,
       required: true,
       index: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
 
     // Totals (in base currency)
     subtotalInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     taxAmountInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     discountAmountInBaseCurrency: {
       type: Number,
       required: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
     totalInBaseCurrency: {
       type: Number,
       required: true,
       index: true,
-      set: (v) => Math.round(v * 1000) / 1000,
+      set: (v) => Math.round(v * 100) / 100,
     },
 
     // Notes & Terms
