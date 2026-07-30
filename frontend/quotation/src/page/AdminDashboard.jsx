@@ -35,6 +35,7 @@ import { SimpleLoadingOverlay } from '../components/LoadingOverlay';
 import AwardModal from '../components/AwardModal';
 import { adminAPI } from '../services/api';
 import AdminDesktopStatsGrid from '../components/AdminDesktopstatsCard';
+import QuotationFilterBar from '../components/QuotationFilterBar';
 
 // Helper function to format amount without currency symbol
 const formatAmount = (amount) => {
@@ -322,7 +323,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const loadingTimeoutRef = useRef(null);
 
   // ── Filters ───────────────────────────────────────────────
-  const [filters, setFilters] = useState({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc' });
+  const [filters, setFilters] = useState({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc', fromDate: '', toDate: '' });
   const [searchInput, setSearchInput] = useState('');
 
   // ── Action state ──────────────────────────────────────────
@@ -350,7 +351,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       statsLatchRef.current = false;
       tableLatchRef.current = false;
       resetPagination();
-      setFilters({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc' });
+      setFilters({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc', fromDate: '', toDate: '' });
       setSearchInput('');
     }
   }, [selectedCompany, resetPagination]);
@@ -434,6 +435,11 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     const newDir = filters.sortBy === sortField && filters.sortDir === 'asc' ? 'desc' : 'asc';
     setFilters(p => ({ ...p, sortBy: sortField, sortDir: newDir }));
     refreshCompanyQuotations({ sortBy: sortField, sortDir: newDir, status: filters.status, search: filters.search, page: 1, limit: currentLimit });
+  }, [refreshCompanyQuotations, filters, currentLimit]);
+
+  const handleApplyFilters = useCallback(({ fromDate, toDate }) => {
+    setFilters(p => ({ ...p, fromDate, toDate }));
+    refreshCompanyQuotations({ fromDate, toDate, status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: 1, limit: currentLimit });
   }, [refreshCompanyQuotations, filters, currentLimit]);
 
   const handleRefresh = useCallback(async () => {
@@ -832,6 +838,14 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                 <input ref={searchRef} style={{ border: 'none', background: 'transparent', outline: 'none', fontSize: '0.875rem', color: T.ink, width: isMobile ? '100%' : 210, fontFamily: FONT_STACK }} placeholder="Search…  /" value={searchInput} onChange={handleSearchChange} disabled={showTableShimmer} />
                 {searchInput && <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, padding: 0 }}><X size={13} /></button>}
               </div>
+              <QuotationFilterBar
+                T={T}
+                FONT_STACK={FONT_STACK}
+                isMobile={isMobile}
+                fromDate={filters.fromDate}
+                toDate={filters.toDate}
+                onApply={handleApplyFilters}
+              />
               <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} />
             </div>
           </div>

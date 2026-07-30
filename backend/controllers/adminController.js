@@ -797,11 +797,11 @@ exports.rejectQuotation = async (req, res) => {
 exports.getAllQuotationsAdmin = async (req, res) => {
   const startTime = Date.now();
   try {
-    const { 
-      status, 
-      fromDate, 
-      toDate, 
-      userId, 
+    const {
+      status,
+      fromDate,
+      toDate,
+      userId,
       companyId,
       page = 1,
       limit = 20,

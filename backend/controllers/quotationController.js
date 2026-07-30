@@ -582,6 +582,12 @@ exports.getMyQuotations = async (req, res) => {
     if (!isAllCompanies) filter.companyId = companyId;
     if (req.query.status) filter.status = req.query.status;
 
+    if (req.query.fromDate || req.query.toDate) {
+      filter.createdAt = {};
+      if (req.query.fromDate) filter.createdAt.$gte = new Date(req.query.fromDate);
+      if (req.query.toDate) filter.createdAt.$lte = new Date(req.query.toDate);
+    }
+
     if (req.query.search && req.query.search.trim()) {
       // Regex substring match, not $text — $text only matches whole tokens,
       // so a remembered fragment of a quotation number (e.g. part of the

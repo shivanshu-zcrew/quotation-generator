@@ -53,6 +53,7 @@ import CompactStatsCard from "../components/HomePageComponent/CompactStatsCard";
 import DesktopStatsGrid from "../components/HomePageComponent/DesktopStatsGrid";
 import QuotationCard from "../components/HomePageComponent/QuotationCard";
 import ViewToggle from "../components/HomePageComponent/ViewToggle";
+import QuotationFilterBar from "../components/QuotationFilterBar";
 import {
   PAGE_SIZE_OPTIONS,
   DEBOUNCE_MS,
@@ -339,7 +340,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     saveProgress: 0, saveStep: "", pdfProgress: 0, pdfStep: "",
   });
 
-  const [filters, setFilters] = useState({ status: null, search: "", sortBy: "date", sortDir: "desc" });
+  const [filters, setFilters] = useState({ status: null, search: "", sortBy: "date", sortDir: "desc", fromDate: "", toDate: "" });
 
   const [modalsState, setModalsState] = useState({
     exportingId: null,
@@ -537,6 +538,14 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
       else newDir = "asc";
       setFilters((prev) => ({ ...prev, sortBy: sortField, sortDir: newDir }));
       refreshCompanyQuotations({ sortBy: sortField, sortDir: newDir, status: filters.status, search: filters.search, page: 1 });
+    },
+    [refreshCompanyQuotations, filters.status, filters.search, filters.sortBy, filters.sortDir]
+  );
+
+  const handleApplyFilters = useCallback(
+    ({ fromDate, toDate }) => {
+      setFilters((prev) => ({ ...prev, fromDate, toDate }));
+      refreshCompanyQuotations({ fromDate, toDate, status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: 1 });
     },
     [refreshCompanyQuotations, filters.status, filters.search, filters.sortBy, filters.sortDir]
   );
@@ -882,6 +891,15 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                 <input ref={searchRef} style={{ border: "none", background: "transparent", outline: "none", fontSize: "0.875rem", color: T.ink, width: isMobile ? "100%" : 210, fontFamily: FONT_STACK }} placeholder="Search…  /" defaultValue={filters.search} onChange={handleSearchChange} disabled={isInitialLoading} />
                 {filters.search && <button onClick={clearSearch} style={{ background: "none", border: "none", cursor: "pointer", color: T.inkFaint, padding: 0 }}><X size={13} /></button>}
               </div>
+
+              <QuotationFilterBar
+                T={T}
+                FONT_STACK={FONT_STACK}
+                isMobile={isMobile}
+                fromDate={filters.fromDate}
+                toDate={filters.toDate}
+                onApply={handleApplyFilters}
+              />
 
               <ViewToggle view={uiState.viewMode} onViewChange={(view) => setUiState((prev) => ({ ...prev, viewMode: view }))} isMobile={isMobile} />
             </div>

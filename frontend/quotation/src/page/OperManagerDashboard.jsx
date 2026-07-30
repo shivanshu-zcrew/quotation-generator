@@ -30,6 +30,7 @@ import ViewToggle from '../components/HomePageComponent/ViewToggle';
 import { DEBOUNCE_MS, PAGE_SIZE_OPTIONS } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import AwardModal from '../components/AwardModal';
+import QuotationFilterBar from '../components/QuotationFilterBar';
 
 // Helper function to format amount without currency symbol
 const formatAmount = (amount) => {
@@ -556,6 +557,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const [searchInput,  setSearchInput]  = useState('');
   const [search,       setSearch]       = useState('');
   const [sort,         setSort]         = useState({ field: 'createdAt', dir: 'desc' });
+  const [dateFilters, setDateFilters] = useState({ fromDate: '', toDate: '' });
   const [loadingIds,   setLoadingIds]   = useState({});
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
@@ -700,6 +702,11 @@ export default function OpsDashboard({ onViewQuotation }) {
     const newDir = sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc';
     setSort({ field, dir: newDir });
     refreshCompanyQuotations({ page: 1, sortBy: field, sortDir: newDir, status: activeTab === 'all' ? undefined : activeTab, search });
+  }, [refreshCompanyQuotations, activeTab, search, sort]);
+
+  const handleApplyFilters = useCallback(({ fromDate, toDate }) => {
+    setDateFilters({ fromDate, toDate });
+    refreshCompanyQuotations({ page: 1, fromDate, toDate, status: activeTab === 'all' ? undefined : activeTab, search, sortBy: sort.field, sortDir: sort.dir });
   }, [refreshCompanyQuotations, activeTab, search, sort]);
 
   const handleRefresh = useCallback(async () => {
@@ -1047,6 +1054,15 @@ export default function OpsDashboard({ onViewQuotation }) {
                   <button onClick={clearSearch} style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.inkFaint, padding: 0 }}><X size={13} /></button>
                 )}
               </div>
+
+              <QuotationFilterBar
+                T={T}
+                FONT_STACK={FONT_STACK}
+                isMobile={isMobile}
+                fromDate={dateFilters.fromDate}
+                toDate={dateFilters.toDate}
+                onApply={handleApplyFilters}
+              />
 
               <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} />
             </div>
