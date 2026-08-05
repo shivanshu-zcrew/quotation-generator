@@ -11,6 +11,7 @@ import {
   TERMS_CONTENT_CSS,
   TERMS_STICKY_TOOLBAR_CSS,
   TERMS_TOOLBAR_THEME_CSS,
+  fixEmptyQuillLines,
 } from "../utils/richTextConfig";
 
 // The Terms editor's toolbar sticks to the top of the page while scrolling
@@ -66,11 +67,22 @@ export const newSection = () => ({
 const HTML_TAG_RE = /<[a-z][\s\S]*>/i;
 export const isHtmlContent = (str) => HTML_TAG_RE.test(str || "");
 
-// Legacy plain text needs "\n" converted to "<br>" before being treated as
-// HTML — otherwise browsers/Quill collapse raw newlines to spaces.
+// Legacy plain text needs each line wrapped in its own <p> before being
+// treated as HTML — otherwise browsers/Quill collapse raw newlines to
+// spaces. Per-line <p> (rather than one <br>-joined blob, what this used to
+// do) matches how modern Quill HTML is already structured, so the same
+// hanging-indent CSS (TERMS_CONTENT_CSS) applies to legacy content too, and
+// each line wraps under normal whitespace rules instead of staying one
+// giant white-space:pre-wrap block (which, right at the point a line fills
+// the container, can break a word mid-way instead of carrying it whole to
+// the next line). Mirrors formatTermsText's legacy branch in pdfGenerator.js.
 const toHtmlContent = (content) => {
   if (!content) return "";
-  return isHtmlContent(content) ? content : content.replace(/\n/g, "<br>");
+  if (isHtmlContent(content)) return content;
+  return content
+    .split("\n")
+    .map((line) => `<p>${line.trim() === "" ? "<br>" : line}</p>`)
+    .join("");
 };
 
 // Quill's empty-editor output is "<p><br></p>" — not an empty string, so a
@@ -198,7 +210,7 @@ export default function TermsEditor({
             <ReactQuill
               theme="snow"
               defaultValue={sec.content || ""}
-              onChange={(html) => updateSection(sec.id, { content: html })}
+              onChange={(html) => updateSection(sec.id, { content: fixEmptyQuillLines(html) })}
               placeholder="Write your terms and conditions here..."
               modules={{ toolbar: TERMS_TOOLBAR_MODULE }}
               formats={TERMS_EDITOR_FORMATS}

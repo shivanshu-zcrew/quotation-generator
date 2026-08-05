@@ -3,7 +3,7 @@ import { numberToWords } from './numberToWords';
 import { fmtDate } from './formatters';
 import headerImage from '../assets/header.png';
 import { quotationAPI } from '../services/api';
-import { sanitizeTermsHtml } from './sanitizeTermsHtml';
+import { sanitizeTermsHtml, protectHyphenatedWords, preserveRepeatedSpaces, normalizeNonBreakingSpaces } from './sanitizeTermsHtml';
 
 import { ITEMS_PER_FIRST_PAGE, BASE_URL } from './constants';
 
@@ -427,7 +427,18 @@ const formatTermsText = (text) => {
     cleaned = cleaned.replace(/\n+$/, '');
   }
 
-  return cleaned.replace(/\n/g, '<br>');
+  // Wrap each line in its own <p> instead of joining them flat with <br>.
+  // That gives legacy plain-text terms the same per-line block structure
+  // modern Quill HTML already has, so the same CSS applies to both: a
+  // wrapped (long) line hang-indents under its own first line instead of
+  // restarting at the margin, and each line wraps under normal whitespace
+  // rules instead of staying one big white-space:pre-wrap blob (which — at
+  // the exact point a line fills the container — can break a word mid-way
+  // instead of carrying it whole to the next line).
+  return cleaned
+    .split('\n')
+    .map((line) => `<p>${line.trim() === '' ? '<br>' : protectHyphenatedWords(preserveRepeatedSpaces(normalizeNonBreakingSpaces(line)))}</p>`)
+    .join('');
 };
 
 /**
@@ -575,7 +586,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     return `<tr>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${index + 1}</td>
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
-        ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;">${escapeHtml(item.description)}</div>` : ''}
+        ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;white-space:pre-wrap;">${protectHyphenatedWords(escapeHtml(item.description))}</div>` : ''}
         ${imageRows.map(row => `
           <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;">
             ${row.map(src => `
@@ -699,7 +710,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 <head>
   <meta charset="UTF-8">
   <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
+    *{margin:0;padding:0;box-sizing:border-box;overflow-wrap:break-word;word-wrap:break-word;}
     body{font-family:'Segoe UI',Tahoma,sans-serif;background:white;color:#1f2937;line-height:1.6;}
     .container{width:874px;margin:0 auto;padding:10px;}
     @page{size:A4;margin:5mm;}
@@ -711,7 +722,19 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        Puppeteer page that doesn't load that stylesheet — keeps rich-text
        terms content (headings/lists/blockquote/links) looking the same as
        the in-app editor and viewer. */
-    .terms-content p{margin:0 0 6px;white-space:normal;}
+    /* Hanging indent: a paragraph's first line starts at the left edge
+       (text-indent cancels the padding), but if it wraps, the continuation
+       line(s) align under that first line's text instead of restarting at
+       the margin — matters for manually-typed "1. ...", "2. ..." points,
+       which are plain paragraphs with no real list semantics to hang off.
+       Skipped for center/right/justify-aligned paragraphs: an asymmetric
+       left-only padding visibly throws off centering/right-edge alignment
+       on any paragraph that actually wraps, and a hanging indent has no
+       meaning for those alignments anyway. */
+    .terms-content p{margin:0 0 6px;white-space:normal;padding-left:1.5em;text-indent:-1.5em;}
+    .terms-content p[style*="text-align: center"],.terms-content p[style*="text-align:center"],
+    .terms-content p[style*="text-align: right"],.terms-content p[style*="text-align:right"],
+    .terms-content p[style*="text-align: justify"],.terms-content p[style*="text-align:justify"]{padding-left:0;text-indent:0;}
     .terms-content h1,.terms-content h2,.terms-content h3,.terms-content h4,.terms-content h5,.terms-content h6{margin:10px 0 6px;font-weight:700;color:#0f172a;white-space:normal;}
     .terms-content h1{font-size:18px;} .terms-content h2{font-size:15px;} .terms-content h3{font-size:13px;}
     .terms-content h4{font-size:11px;} .terms-content h5{font-size:10px;} .terms-content h6{font-size:9px;}
@@ -723,6 +746,27 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        internal DOM. Plain list-style + native nesting is all that's needed. */
     .terms-content ul,.terms-content ol{margin:4px 0;padding-left:1.5em;}
     .terms-content li{margin-bottom:2px;white-space:normal;}
+    /* Quill's indent format (toolbar +1/-1) is always written as a
+       ql-indent-N class (Quill has no inline-style variant for indent,
+       unlike align/font/size above), so it must be reproduced here too or
+       indentation set in the editor silently vanishes in the PDF. Values
+       match quill.snow.css's own .ql-indent-N padding-left scale. */
+    .terms-content .ql-indent-1{padding-left:3em;}
+    .terms-content .ql-indent-2{padding-left:6em;}
+    .terms-content .ql-indent-3{padding-left:9em;}
+    .terms-content .ql-indent-4{padding-left:12em;}
+    .terms-content .ql-indent-5{padding-left:15em;}
+    .terms-content .ql-indent-6{padding-left:18em;}
+    .terms-content .ql-indent-7{padding-left:21em;}
+    .terms-content .ql-indent-8{padding-left:24em;}
+    .terms-content li.ql-indent-1{padding-left:4.5em;}
+    .terms-content li.ql-indent-2{padding-left:7.5em;}
+    .terms-content li.ql-indent-3{padding-left:10.5em;}
+    .terms-content li.ql-indent-4{padding-left:13.5em;}
+    .terms-content li.ql-indent-5{padding-left:16.5em;}
+    .terms-content li.ql-indent-6{padding-left:19.5em;}
+    .terms-content li.ql-indent-7{padding-left:22.5em;}
+    .terms-content li.ql-indent-8{padding-left:25.5em;}
   </style>
 </head>
 <body>
@@ -812,7 +856,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     ${notes ? `
       <div style="margin-bottom:16px;">
         <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Notes</h3>
-        <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;">${notes}</div>
+        <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;">${protectHyphenatedWords(notes)}</div>
       </div>
     ` : ''}
 
@@ -821,9 +865,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <div style="margin-bottom:16px;">
         <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
         <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;">
-          <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">
-            ${formattedTermsText}
-          </div>
+          <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">${formattedTermsText}</div>
           ${termsImagesHTML}
         </div>
       </div>
