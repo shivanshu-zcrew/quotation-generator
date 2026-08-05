@@ -638,7 +638,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;">SR#</th>
     <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Qty</th>
-    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Unit</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit Price</th>
     <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:80px;">Amount</th>
   </tr></thead>`;

@@ -866,7 +866,7 @@ const TABLE_HEADERS = (isEditing, currency) => [
   { label: 'SR#', w: '50px', align: 'center' },
   { label: 'Item Description', w: 'auto', align: 'left' },
   { label: 'Qty', w: '80px', align: 'center' },
-  { label: 'Unit', w: '80px', align: 'center' },
+  { label: 'Unit', w: '100px', align: 'center' },
   { label: 'Unit Price', w: '110px', align: 'right' },
   { label: `Amount (${currency})`, w: '120px', align: 'right' },
   ...(isEditing ? [{ label: '', w: '50px', align: 'center' }] : []),
