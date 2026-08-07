@@ -805,6 +805,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       
       <!-- RIGHT COLUMN -->
       <div style="display:grid;grid-template-columns:140px 20px 1fr;row-gap:8px;font-size:11px;">
+        <span style="font-weight:600;color:#4b5563;">Company Name</span><span>:</span><span>${escapeHtml(companySnapshot?.name) || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Name</span><span>:</span><span>${focalPointName}</span>
         <span style="font-weight:600;color:#4b5563;">Phone</span><span>:</span><span>${focalPointPhone || "N/A"}</span>
         <span style="font-weight:600;color:#4b5563;">Email</span><span>:</span><span>${focalPointEmail || "N/A"}</span>
