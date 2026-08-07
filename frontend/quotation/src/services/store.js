@@ -102,6 +102,12 @@ const initialState = {
     fromDate: null,
     toDate: null
   },
+  // Last status/search/sort/date-range actually sent to the server by
+  // useCompanyQuotations' refresh(). Lives in the store (not a component
+  // ref) so it survives HomeScreen/AdminDashboard/OperManagerDashboard
+  // unmounting when navigating to /quotation/:id and back — see
+  // useCompanyQuotations for why this matters.
+  quotationsLastFetchOptions: {},
   opsReviewHistory: [],
   quotationCounts: {},
   companies: [],
@@ -350,7 +356,7 @@ export const useAppStore = create(
 
         // ==================== QUOTATIONS ACTIONS ====================
 
-        fetchQuotationsForCompany: async (companyId, page = 1, limit = 20, options = {}) => {
+        fetchQuotationsForCompany: async (companyId, page = 1, limit = 5, options = {}) => {
           const { user } = get();
           if (!user) return { success: false, error: 'No user logged in' };
 
@@ -455,7 +461,7 @@ export const useAppStore = create(
 
           // Use provided page/limit or current pagination values
           const usePage = options.page !== undefined ? options.page : (quotationsPagination?.page || 1);
-          const useLimit = options.limit !== undefined ? options.limit : (quotationsPagination?.limit || 20);
+          const useLimit = options.limit !== undefined ? options.limit : (quotationsPagination?.limit || 5);
 
           let companyId = options.companyId !== undefined ? options.companyId : selectedCompany;
 
@@ -540,6 +546,13 @@ export const useAppStore = create(
           }
           // Force refetch after cache clear
           await get().refetchQuotations({ forceRefresh: true });
+        },
+
+        // Replaces (not merges) the record of the status/search/sort/date
+        // options last actually sent to the server — see
+        // quotationsLastFetchOptions above.
+        setQuotationsLastFetchOptions: (options) => {
+          set({ quotationsLastFetchOptions: options });
         },
 
         // Add method to set quotation filters
@@ -1834,8 +1847,14 @@ export const useCompanyQuotations = () => {
   const resetQuotationsFilters = useAppStore((state) => state.resetQuotationsFilters);
   const quotationsFilters = useAppStore((state) => state.quotationsFilters);
 
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+  // Seeded from the store's persisted pagination (not hardcoded 1/20) so
+  // that when HomeScreen/AdminDashboard/OperManagerDashboard unmount (e.g.
+  // React Router swaps to /quotation/:id) and remount on navigating back,
+  // the page picks up where it left off instead of resetting to page 1 —
+  // quotationsPagination lives in the Zustand store and survives the
+  // unmount even though this hook's own local state doesn't.
+  const [page, setPage] = useState(() => quotationsPagination?.page || 1);
+  const [limit, setLimit] = useState(() => quotationsPagination?.limit || 5);
   const [localFilters, setLocalFilters] = useState({});
   const isRefreshingRef = useRef(false);
   const initialLoadDone = useRef(false);
@@ -1845,15 +1864,6 @@ export const useCompanyQuotations = () => {
   const localFiltersRef = useRef(localFilters);
   const pageRef = useRef(page);
   const limitRef = useRef(limit);
-
-  // Remembers the search/status/sort actually sent on the last successful
-  // fetch. Callers (Ops/Admin/Home dashboards) track search+tab as their own
-  // local state and call refresh({search, status, ...}) directly instead of
-  // going through updateFilters/localFilters — so page/limit-only changes
-  // (pagination, page-size) used to fall back to empty localFilters and
-  // silently drop the active search/status filter. Reusing the last-sent
-  // values here means paging keeps whatever filter was already applied.
-  const lastFetchOptionsRef = useRef({});
   // Queues the most recent refresh() call that arrived while one was already
   // in flight, so a fast search keystroke (or any refresh during initial
   // load) isn't dropped — it runs right after the current request settles.
@@ -1892,7 +1902,10 @@ export const useCompanyQuotations = () => {
       const usePage = options.page !== undefined ? options.page : pageRef.current;
       const useLimit = options.limit !== undefined ? options.limit : limitRef.current;
       const useFilters = options.filters !== undefined ? options.filters : localFiltersRef.current;
-      const prevFetch = lastFetchOptionsRef.current;
+      // Read from the store (not a component ref) so this survives
+      // HomeScreen/AdminDashboard/OperManagerDashboard unmounting when
+      // navigating to /quotation/:id and back — see quotationsLastFetchOptions.
+      const prevFetch = useAppStore.getState().quotationsLastFetchOptions || {};
 
       // Callers that only vary page/limit (pagination, page-size change)
       // don't repeat status/search/sort in `options` — fall back to whatever
@@ -1908,7 +1921,7 @@ export const useCompanyQuotations = () => {
 
       const companyIdParam = (selectedCompany === 'all' || selectedCompany === 'ALL') ? 'all' : selectedCompany;
 
-      lastFetchOptionsRef.current = { status, search, sortBy, sortDir, fromDate, toDate };
+      useAppStore.getState().setQuotationsLastFetchOptions({ status, search, sortBy, sortDir, fromDate, toDate });
 
       const result = await refetchQuotations({
         companyId: companyIdParam,

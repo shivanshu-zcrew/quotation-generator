@@ -427,10 +427,14 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const safeQ = quotations || [];
 
+  // Applies the default page size once, on mount only — must NOT depend on
+  // currentLimit (or run again on isMobile changes), or it would re-fire and
+  // clobber a page size the user picked manually from the per-page dropdown,
+  // e.g. right after they picked it, or on a mobile/desktop resize.
   useEffect(() => {
-    const newLimit = isMobile ? 10 : 20;
-    if (currentLimit !== newLimit) changeLimit(newLimit);
-  }, [isMobile, currentLimit, changeLimit]);
+    changeLimit(5);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!hasMountedRef.current) {

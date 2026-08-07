@@ -611,10 +611,13 @@ export default function OpsDashboard({ onViewQuotation }) {
   }, [quotationCounts, pagination, tabCounts]);
 
   // ── Responsive defaults ───────────────────────────────────
+  // Applies the default page size once, on mount only — depending on
+  // currentLimit/changeLimit here would re-fire on every manual page-size
+  // change and clobber the user's pick right after they made it.
   useEffect(() => {
-    const newLimit = isMobile ? 10 : 20;
-    if (currentLimit !== newLimit) changeLimit(newLimit);
-  }, [isMobile, currentLimit, changeLimit]);
+    changeLimit(5);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' }));
@@ -641,10 +644,10 @@ export default function OpsDashboard({ onViewQuotation }) {
       
       try {
         await Promise.all([
-          refreshCompanyQuotations({ 
-            page: 1, 
-            limit: isMobile ? 10 : 20, 
-            status: undefined, 
+          refreshCompanyQuotations({
+            page: 1,
+            limit: 5,
+            status: undefined,
             search: '', 
             sortBy: 'createdAt', 
             sortDir: 'desc' 

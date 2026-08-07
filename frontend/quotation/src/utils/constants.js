@@ -1,7 +1,7 @@
 import { FileText, Clock, RefreshCw, CheckCircle, Award, Ban } from 'lucide-react';
 
 // Pagination
-export const PAGE_SIZE_OPTIONS = [10, 20, 50];
+export const PAGE_SIZE_OPTIONS = [5, 10, 20, 50];
 export const DEBOUNCE_MS = 350;
 'pending'
 // Status Config
