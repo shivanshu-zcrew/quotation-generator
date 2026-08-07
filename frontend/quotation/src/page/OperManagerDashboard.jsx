@@ -615,7 +615,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   // currentLimit/changeLimit here would re-fire on every manual page-size
   // change and clobber the user's pick right after they made it.
   useEffect(() => {
-    changeLimit(5);
+    changeLimit(20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -646,7 +646,7 @@ export default function OpsDashboard({ onViewQuotation }) {
         await Promise.all([
           refreshCompanyQuotations({
             page: 1,
-            limit: 5,
+            limit: 20,
             status: undefined,
             search: '', 
             sortBy: 'createdAt', 

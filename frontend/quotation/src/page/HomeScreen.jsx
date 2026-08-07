@@ -432,7 +432,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   // clobber a page size the user picked manually from the per-page dropdown,
   // e.g. right after they picked it, or on a mobile/desktop resize.
   useEffect(() => {
-    changeLimit(5);
+    changeLimit(20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

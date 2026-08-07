@@ -356,7 +356,7 @@ export const useAppStore = create(
 
         // ==================== QUOTATIONS ACTIONS ====================
 
-        fetchQuotationsForCompany: async (companyId, page = 1, limit = 5, options = {}) => {
+        fetchQuotationsForCompany: async (companyId, page = 1, limit = 20, options = {}) => {
           const { user } = get();
           if (!user) return { success: false, error: 'No user logged in' };
 
@@ -461,7 +461,7 @@ export const useAppStore = create(
 
           // Use provided page/limit or current pagination values
           const usePage = options.page !== undefined ? options.page : (quotationsPagination?.page || 1);
-          const useLimit = options.limit !== undefined ? options.limit : (quotationsPagination?.limit || 5);
+          const useLimit = options.limit !== undefined ? options.limit : (quotationsPagination?.limit || 20);
 
           let companyId = options.companyId !== undefined ? options.companyId : selectedCompany;
 
@@ -1854,7 +1854,7 @@ export const useCompanyQuotations = () => {
   // quotationsPagination lives in the Zustand store and survives the
   // unmount even though this hook's own local state doesn't.
   const [page, setPage] = useState(() => quotationsPagination?.page || 1);
-  const [limit, setLimit] = useState(() => quotationsPagination?.limit || 5);
+  const [limit, setLimit] = useState(() => quotationsPagination?.limit || 20);
   const [localFilters, setLocalFilters] = useState({});
   const isRefreshingRef = useRef(false);
   const initialLoadDone = useRef(false);

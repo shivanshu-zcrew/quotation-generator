@@ -398,7 +398,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   // `changeLimit` here would re-fire on every manual page-size change (its
   // identity changes with the store's limit) and clobber the user's pick.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { changeLimit(5); }, []);
+  useEffect(() => { changeLimit(20); }, []);
   useEffect(() => { if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' })); }, [isMobile, isTablet]);
   useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false; if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current); if (searchTimer.current) clearTimeout(searchTimer.current); }; }, []);
 
