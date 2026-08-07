@@ -13,6 +13,9 @@ const path = require('path');
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const { Quotation } = require('../models/quotation');
+// Registered so Quotation's pre(/^find/) auto-populate hook can resolve them.
+require('../models/customer');
+require('../models/user');
 const { S3Client, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
 const s3Client = new S3Client({
