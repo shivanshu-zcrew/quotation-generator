@@ -9,7 +9,7 @@ import Snackbar from './Snackbar';
 import PhoneInput from './PhoneInput';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
 import { validatePhoneNumber } from '../utils/quotationUtils';
-import { fmtDate } from '../utils/formatters';
+import { fmtDate, fmtCurrency } from '../utils/formatters';
 import { inputStyle } from './QuotationLayout';
 import { useAppStore } from '../services/store';
 import { CommentableText, CommentBadge } from './ReviewComments';
@@ -236,7 +236,7 @@ const MobileItemCard = ({
     }
   };
 
-  const total = (Number(item.quantity || 0) * Number(item.unitPrice || 0)).toFixed(2);
+  const total = fmtCurrency(Number(item.quantity || 0) * Number(item.unitPrice || 0));
 
   const renderItemImages = () => {
     // Combine imagePaths (Cloudinary) and imageUrls (S3)
@@ -298,7 +298,7 @@ const MobileItemCard = ({
                 <option value="">— Select Item —</option>
                 {availableItems.map((itm) => (
                   <option key={itm._id} value={itm._id}>
-                    {itm.name} - {currency} {Number(itm.unitPrice || 0).toFixed(2)}
+                    {itm.name} - {currency} {fmtCurrency(Number(itm.unitPrice || 0))}
                   </option>
                 ))}
               </select>
@@ -386,7 +386,7 @@ const MobileItemCard = ({
                   <CommentBadge {...commentsFor?.('item', `${item.id}:unitPrice`)} />
                 </>
               ) : (
-                <CommentableText {...commentsFor?.('item', `${item.id}:unitPrice`)} text={Number(item.unitPrice || 0).toFixed(2)} textStyle={styles.itemValue} />
+                <CommentableText {...commentsFor?.('item', `${item.id}:unitPrice`)} text={fmtCurrency(Number(item.unitPrice || 0))} textStyle={styles.itemValue} />
               )}
             </div>
           </div>
@@ -979,23 +979,25 @@ const MobileQuotationLayout = ({
       <div style={styles.totalsSection}>
         <div style={styles.totalRow}>
           <span>Subtotal ({displayCurrency})</span>
-          <span>{subtotal.toFixed(2)}</span>
+          <span>{fmtCurrency(subtotal)}</span>
         </div>
         {showTaxSection && (
           <div style={styles.totalRow}>
             <span>VAT ({quotationData.tax || 0}%)</span>
-            <span>{taxAmount.toFixed(2)}</span>
+            <span>{fmtCurrency(taxAmount)}</span>
           </div>
         )}
         {discountAmount > 0 && (
           <div style={{ ...styles.totalRow, color: '#059669' }}>
             <span>Discount ({quotationData.discount || 0}%)</span>
-            <span>-{discountAmount.toFixed(2)}</span>
+            <span>-{fmtCurrency(discountAmount)}</span>
           </div>
         )}
         <div style={styles.grandTotalRow}>
           <span>Grand Total ({displayCurrency})</span>
-          <span>{grandTotal.toFixed(2)}</span>
+          {/* Rounded to the nearest whole currency unit, matching the PDF
+              export (pdfGenerator.js) and the desktop QuotationLayout. */}
+          <span>{fmtCurrency(Math.round(grandTotal))}</span>
         </div>
       </div>
 

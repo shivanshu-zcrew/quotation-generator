@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { MessageSquarePlus, MessageSquare, Check, Trash2, X, Edit2 } from 'lucide-react';
 import { getSelectionAnchor, splitTextWithHighlights, locateQuote } from '../utils/textAnchor';
+import { refreshRenderedImages } from '../utils/inlineImages';
 
 const styles = {
   mark: {
@@ -607,6 +608,10 @@ export function CommentableHtml({
     const container = containerRef.current;
     if (!container) return;
     container.innerHTML = displayHtml || '';
+    // Any inline image in this HTML (Terms & Conditions — see
+    // TermsCondition.jsx) may have a since-expired src; refresh it before
+    // the user notices a broken image.
+    refreshRenderedImages(container);
     if (!comments.length) return;
 
     const fullText = container.textContent || '';

@@ -199,7 +199,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     
     // Company/Right side fields - Use user data directly
     ourFocalPoint: user?.name || "",
-    ourFocalPointDesignation: user?.role || "",
+    ourFocalPointDesignation: user?.designation || "",
     ourContact: user?.phone || "",
     salesManagerEmail: user?.email || "",
     
@@ -512,7 +512,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       setQuotationData(prev => ({
         ...prev,
         ourFocalPoint: user.name || "",
-        ourFocalPointDesignation: user.role || "",
+        ourFocalPointDesignation: user.designation || "",
         ourContact: user.phone || "",
         salesManagerEmail: user.email || "",
       }));
@@ -549,7 +549,12 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     [subtotalAfterDiscount, taxAmount]
   );
 
-  const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
+  // numberToWords floors its input rather than rounding it, so feeding it
+  // the raw grandTotal (which still carries cents) could describe a
+  // different whole number than the one shown on screen, which rounds to
+  // the nearest unit (see QuotationLayout's Grand Total cell). Round here
+  // too so both always agree.
+  const amountInWords = useMemo(() => numberToWords(Math.round(grandTotal)), [grandTotal]);
 
   // Images to display per item: uploaded keys (as signed URLs) + any live previews
   // still uploading. This is what keeps an image visible after its upload finishes.

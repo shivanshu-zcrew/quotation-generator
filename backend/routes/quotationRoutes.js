@@ -32,6 +32,16 @@ router.get('/signed-url/:key', quotationController.getSignedUrl);
  */
 router.post('/signed-urls/batch', quotationController.getBatchSignedUrls);
 
+/**
+ * @route   GET /api/quotations/image-base64/:key
+ * @desc    Fetch an S3 image server-side and return it as a data: URI —
+ *          used for embedding images into PDF export HTML, where the
+ *          browser-side canvas conversion can't work without S3 CORS
+ *          headers the bucket doesn't currently send.
+ * @access  Private (All authenticated users)
+ */
+router.get('/image-base64/:key', quotationController.getImageAsBase64);
+
 // =============================================================
 // INTERNAL DOCUMENT ROUTES
 // =============================================================

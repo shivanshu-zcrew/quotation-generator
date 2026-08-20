@@ -570,10 +570,10 @@ quotationSchema.pre(/^find/, function (next) {
     return;
   }
   this.populate("customerId", "name email phone address designation tradeLicenseNumber");
-  this.populate("createdBy", "name email role");
-  this.populate("opsApprovedBy", "name email");
-  this.populate("approvedBy", "name email");
-  this.populate("awardedBy", "name email");
+  this.populate("createdBy", "name email role designation");
+  this.populate("opsApprovedBy", "name email designation");
+  this.populate("approvedBy", "name email designation");
+  this.populate("awardedBy", "name email designation");
   this.populate("companyId", "name code baseCurrency logo zohoOrganizationId focalPointDesignation");
   next();
 });

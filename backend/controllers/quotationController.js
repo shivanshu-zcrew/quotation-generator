@@ -115,6 +115,25 @@ const deleteFromS3 = async (key) => {
   }
 };
 
+// Inline images embedded directly in Terms & Conditions rich text
+// (TermsCondition.jsx's Word-style image insert) carry their S3 key as a
+// data-s3-key attribute on the <img> tag itself — there's no separate
+// array to diff the way termsImages/item images have below, so cleanup
+// for these just extracts every key present in the old vs. new HTML with
+// a plain regex (no DOM available server-side — this endpoint never
+// parses the HTML into one) and deletes whatever key dropped out.
+const extractInlineImageKeys = (html) => {
+  const keys = new Set();
+  if (!html) return keys;
+  const re = /data-s3-key="([^"]+)"/g;
+  let match = re.exec(html);
+  while (match !== null) {
+    keys.add(match[1]);
+    match = re.exec(html);
+  }
+  return keys;
+};
+
 const getSignedFileUrl = async (key, expiresIn = 3600) => {
   if (!key) return null;
 
@@ -138,6 +157,8 @@ const getSignedFileUrl = async (key, expiresIn = 3600) => {
 // references it and applying the same visibility rule getQuotation uses —
 // otherwise any authenticated user could mint a signed URL for any file in
 // the bucket just by knowing/guessing its key.
+const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const canAccessS3Key = async (key, req) => {
   if (req.user.role === 'admin' || req.user.role === 'ops_manager') return true;
 
@@ -146,6 +167,14 @@ const canAccessS3Key = async (key, req) => {
       { 'items.imageS3Keys': key },
       { 'termsImages.s3Key': key },
       { 'internalDocuments.s3Key': key },
+      // Inline images inserted into Terms & Conditions (TermsCondition.jsx's
+      // Word-style image insert) aren't tracked in a separate array the way
+      // termsImages is — their key only exists as a data-s3-key attribute
+      // embedded inside the termsAndConditions HTML itself. Without this,
+      // every inline image's signed-URL request 404s/403s for any non-admin
+      // user (the three conditions above never match), which is what made
+      // them fail to render both in the app and in generated PDFs.
+      { termsAndConditions: { $regex: escapeRegExp(key) } },
     ],
   }).select('companyId createdBy').lean();
 
@@ -1742,6 +1771,30 @@ exports.updateQuotation = async (req, res) => {
     logger.debug('Terms images summary', { existing: dbTermsImages.length, removed: removedImages.length, kept: keptExistingImages.length, new: newUploadedImages.length, total: finalTermsImages.length });
     // ==================== END OF TERMS IMAGES HANDLING ====================
 
+    // ==================== INLINE TERMS IMAGE S3 CLEANUP ====================
+    // Computed once here (rather than inline where termsAndConditions gets
+    // assigned into the update payload further below) so the diff against
+    // the old HTML and the actual persisted value use the exact same
+    // sanitized string.
+    const sanitizedNewTerms = termsAndConditions !== undefined ? sanitizeTerms(termsAndConditions) : undefined;
+    try {
+      if (sanitizedNewTerms !== undefined) {
+        const oldInlineKeys = extractInlineImageKeys(existing.termsAndConditions);
+        const newInlineKeys = extractInlineImageKeys(sanitizedNewTerms);
+        const removedInlineKeys = [...oldInlineKeys].filter(k => !newInlineKeys.has(k));
+        for (const key of removedInlineKeys) {
+          await deleteFromS3(key);
+          logger.debug('Deleted removed inline terms image', { key });
+        }
+        if (removedInlineKeys.length > 0) {
+          logger.info(`Inline terms image cleanup: removed ${removedInlineKeys.length} orphaned S3 object(s)`);
+        }
+      }
+    } catch (cleanupErr) {
+      logger.error(`Inline terms image S3 cleanup error: ${cleanupErr.message}`);
+    }
+    // ==================== END INLINE TERMS IMAGE S3 CLEANUP ====================
+
     let newInternalDocs = [];
     if (compressedInternalDocuments && compressedInternalDocuments.length > 0) {
       const validBase64Strings = compressedInternalDocuments.filter(doc => typeof doc === 'string' && doc.startsWith('data:'));
@@ -1800,7 +1853,7 @@ exports.updateQuotation = async (req, res) => {
       total: totals.total, 
       totalInBaseCurrency: totalInBaseCurrency,
       ...(notes !== undefined && { notes: notes?.trim() || '' }),
-      ...(termsAndConditions !== undefined && { termsAndConditions: sanitizeTerms(termsAndConditions) }),
+      ...(sanitizedNewTerms !== undefined && { termsAndConditions: sanitizedNewTerms }),
       ...(termsTemplateId !== undefined && { termsTemplateId: termsTemplateId || null }),
       termsImages: finalTermsImages,
       internalDocuments: [...(existing.internalDocuments || []), ...newInternalDocs],
@@ -2493,7 +2546,15 @@ exports.deleteQuotation = async (req, res) => {
     quotation.termsImages?.forEach((img) => {
       if (img.s3Key) jobs.push(deleteFromS3(img.s3Key));
     });
-    
+
+    // Inline images embedded directly in the terms rich text (not part of
+    // the termsImages array above) — same extraction used by
+    // updateQuotation's cleanup, since there's no structured list of these
+    // to iterate.
+    extractInlineImageKeys(quotation.termsAndConditions).forEach((key) => {
+      jobs.push(deleteFromS3(key));
+    });
+
     quotation.internalDocuments?.forEach((doc) => {
       if (doc.s3Key) jobs.push(deleteFromS3(doc.s3Key));
     });
@@ -3753,6 +3814,49 @@ exports.getSignedUrl = async (req, res) => {
   } catch (err) {
     logger.error(`Get signed URL error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error generating signed URL', error: err.message });
+  }
+};
+
+// Fetches an S3 object and returns it as a data: URI, entirely server-side.
+// Exists specifically for embedding images into the PDF export HTML
+// (resolveInlineImages in pdfGenerator.js, and — same underlying need —
+// buildTermsImagesHTML's gallery images): the frontend's own
+// browser-side conversion (canvas + toDataURL, in imageUtils.js's
+// imageToBase64) needs the S3 bucket to return CORS headers to avoid a
+// tainted canvas, and confirmed directly against the bucket (a manual
+// OPTIONS preflight came back with no Access-Control-Allow-Origin header
+// at all), it doesn't — that's genuinely a bucket configuration gap, not
+// an application bug, and not something fixable from here. A browser can
+// still *display* the same image fine without CORS (that only gates
+// reading pixel data back out via canvas), which is why this looked like
+// it "worked" in the viewer but not the PDF. Fetching server-side via the
+// AWS SDK sidesteps CORS entirely — it's not a browser making the request.
+exports.getImageAsBase64 = async (req, res) => {
+  try {
+    const { key } = req.params;
+    if (!key) {
+      return res.status(400).json({ success: false, message: 'S3 key is required' });
+    }
+
+    if (!(await canAccessS3Key(key, req))) {
+      return res.status(403).json({ success: false, message: 'Not authorized to access this file' });
+    }
+
+    const command = new GetObjectCommand({ Bucket: S3_BUCKET_NAME, Key: key });
+    const response = await s3Client.send(command);
+
+    if (response.ContentLength && response.ContentLength > PRESIGN_MAX_BYTES) {
+      return res.status(413).json({ success: false, message: 'File too large to inline' });
+    }
+
+    const bytes = await response.Body.transformToByteArray();
+    const contentType = response.ContentType || 'application/octet-stream';
+    const dataUrl = `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`;
+
+    res.json({ success: true, dataUrl });
+  } catch (err) {
+    logger.error(`Get image base64 error: ${err.message}`);
+    res.status(500).json({ success: false, message: 'Error fetching image' });
   }
 };
 

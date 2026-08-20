@@ -18,6 +18,7 @@ import {
   Plus,
   Calendar,
   Eye,
+  Edit2,
   Award,
   Trash2,
   Menu,
@@ -982,8 +983,15 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                               const canDelete = DELETABLE.has(q.status);
                               const canAward = q.status === "approved";
                               const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
+                              const isDraft = q.status === "draft";
                               return (
-                                <tr key={q._id} style={{ borderBottom: `1px solid ${T.lineSoft}` }} className="hs-row">
+                                <tr
+                                  key={q._id}
+                                  style={{ borderBottom: `1px solid ${T.lineSoft}`, cursor: isDraft ? "pointer" : "default" }}
+                                  className="hs-row"
+                                  onClick={isDraft ? () => onViewQuotation(q._id, { edit: true }) : undefined}
+                                  title={isDraft ? "Continue editing this draft" : undefined}
+                                >
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}>
                                     <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
                                       <span style={{ fontWeight: 600, color: T.ink, fontFamily: "'Inter', monospace", fontSize: "0.8rem" }}>{q.quotationNumber || "—"}</span>
@@ -1035,9 +1043,13 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   )}
 </td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}><EnhancedStatusBadge status={q.status} quotation={q} /></td>
-                                  <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }}>
+                                  <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
                                     <div style={{ display: "flex", gap: "0.3rem", justifyContent: "center", flexWrap: "wrap" }}>
-                                      <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onViewQuotation(q._id)} icon={Eye} label="View" title="View quotation" />
+                                      {isDraft ? (
+                                        <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onViewQuotation(q._id, { edit: true })} icon={Edit2} label="Edit" title="Continue editing this draft" />
+                                      ) : (
+                                        <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onViewQuotation(q._id)} icon={Eye} label="View" title="View quotation" />
+                                      )}
                                       {canAward && <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation: q, busy: false } }))} icon={Award} label="Award" title="Mark awarded / not awarded" />}
                                       {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation: q, busy: false } }))} icon={Trash2} label="Del" title="Delete quotation" />}
                                     </div>

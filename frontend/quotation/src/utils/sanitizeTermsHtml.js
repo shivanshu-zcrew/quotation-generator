@@ -10,9 +10,21 @@ const ALLOWED_TAGS = [
   "p", "br", "strong", "b", "em", "i", "u", "s", "span",
   "h1", "h2", "h3", "h4", "h5", "h6",
   "ul", "ol", "li", "blockquote", "a",
+  "table", "thead", "tbody", "tr", "td", "th",
+  "img",
 ];
 
-const ALLOWED_ATTR = ["style", "href", "target", "rel", "class", "data-list"];
+// data-row is written by Quill's built-in table module (TableCell blot) to
+// group cells into rows — stripping it wouldn't visibly break the table on
+// this render pass, but would silently lose the row grouping the next time
+// this same HTML is loaded back into the Quill editor for editing.
+// data-s3-key is this app's own addition for inline images — the durable
+// S3 key an expired signed-URL src gets refreshed from (see
+// reconcileInlineImages/refreshRenderedImages). src/alt/width/height are
+// standard <img> attributes; DOMPurify already blocks javascript:/other
+// dangerous URI schemes on src regardless of this allowlist, so no extra
+// scheme config is needed here the way the backend sanitizer needs one.
+const ALLOWED_ATTR = ["style", "href", "target", "rel", "class", "data-list", "data-row", "src", "alt", "width", "height", "data-s3-key"];
 
 // Quill's own formats never produce url()/expression() in inline styles —
 // only color/background-color/font-family/font-size/text-align/

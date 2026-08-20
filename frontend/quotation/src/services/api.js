@@ -685,8 +685,8 @@ export const quotationAPI = {
     return response;
   },
   
-  presignItemImage: (contentType, fileName, itemIndex, size) =>
-    api.post('/quotations/presign-image', { contentType, fileName, itemIndex, size }),
+  presignItemImage: (contentType, fileName, itemIndex, size, type) =>
+    api.post('/quotations/presign-image', { contentType, fileName, itemIndex, size, type }),
 
   addComment: async (id, data) => {
     const response = await api.post(`/quotations/${id}/comments`, data);
@@ -788,9 +788,16 @@ export const quotationAPI = {
   getSignedUrl: (s3Key, expiresIn = 3600) =>
     api.get(`/quotations/signed-url/${encodeURIComponent(s3Key)}`, { params: { expiresIn } }),
   
-  getBatchSignedUrls: (s3Keys, expiresIn = 3600) => 
+  getBatchSignedUrls: (s3Keys, expiresIn = 3600) =>
     api.post(`/quotations/signed-urls/batch`, { keys: s3Keys }, { params: { expiresIn } }),
-  
+
+  // Fetches an S3 image server-side and returns it as a data: URI — used
+  // for embedding images into PDF export HTML, where the browser-side
+  // canvas conversion (imageToBase64 in utils/imageUtils.js) can't work
+  // without S3 CORS headers the bucket doesn't send.
+  getImageAsBase64: (s3Key) =>
+    api.get(`/quotations/image-base64/${encodeURIComponent(s3Key)}`),
+
   clearCache: () => {
     quotationCache.clear();
     adminQuotationCache.clear();

@@ -11,7 +11,7 @@ import PhoneInput from './PhoneInput';
 import { useCompanyCurrency } from './CompanyCurrencySelector';
 import MobileQuotationLayout from './MobileQuotationLayout';
 import { validateQuantity, validatePrice, validatePercentage } from '../utils/qtyValidation';
-import { fmtDate } from '../utils/formatters';
+import { fmtDate, fmtCurrency } from '../utils/formatters';
 import { useAppStore } from '../services/store';
 import { validatePhoneNumber } from '../utils/quotationUtils';
 
@@ -1427,16 +1427,16 @@ export default function QuotationLayout({
             <CommentBadge {...commentsFor('item', `${qi.id}:unitPrice`)} />
           </div>
         ) : (
-          <CommentableText {...commentsFor('item', `${qi.id}:unitPrice`)} text={Number(qi.unitPrice || 0).toFixed(2)} as="span" textStyle={styles.fieldValue} />
+          <CommentableText {...commentsFor('item', `${qi.id}:unitPrice`)} text={fmtCurrency(Number(qi.unitPrice || 0))} as="span" textStyle={styles.fieldValue} />
         )}
       </td>
       <td style={styles.tableCellRightBold}>
         {isEditing ? (
-          (Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)
+          fmtCurrency(Number(qi.quantity || 0) * Number(qi.unitPrice || 0))
         ) : (
           <CommentableText
             {...commentsFor('item', `${qi.id}:total`)}
-            text={(Number(qi.quantity || 0) * Number(qi.unitPrice || 0)).toFixed(2)}
+            text={fmtCurrency(Number(qi.quantity || 0) * Number(qi.unitPrice || 0))}
             as="span"
             textStyle={styles.tableCellRightBold}
           />
@@ -1617,14 +1617,14 @@ export default function QuotationLayout({
               <tr style={styles.totalRow}>
                 <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                 <td style={styles.totalLabelCell}>Subtotal ({displayCurrency})</td>
-                <td style={styles.totalValueCell}>{subtotal.toFixed(2)}</td>
+                <td style={styles.totalValueCell}>{fmtCurrency(subtotal)}</td>
                 {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
               </tr>
               {showTaxRow && (
                 <tr style={styles.totalRow}>
                   <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                   <td style={styles.totalLabelCell}>VAT ({quotationData.tax || 0}%)</td>
-                  <td style={styles.totalValueCell}>{taxAmount.toFixed(2)}</td>
+                  <td style={styles.totalValueCell}>{fmtCurrency(taxAmount)}</td>
                   {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
                 </tr>
               )}
@@ -1632,14 +1632,17 @@ export default function QuotationLayout({
                 <tr style={styles.totalRow}>
                   <td colSpan={isEditing ? 5 : 4} style={{ border: '1px solid #e5e7eb' }} />
                   <td style={{ ...styles.totalLabelCell, color: '#059669' }}>Discount ({quotationData.discount}%)</td>
-                  <td style={{ ...styles.totalValueCell, color: '#059669' }}>−{discountAmount.toFixed(2)}</td>
+                  <td style={{ ...styles.totalValueCell, color: '#059669' }}>−{fmtCurrency(discountAmount)}</td>
                   {isEditing && <td style={{ border: '1px solid #e5e7eb' }} />}
                 </tr>
               )}
               <tr style={styles.grandTotalRow}>
                 <td colSpan={isEditing ? 5 : 4} style={{ border: 'none' }} />
                 <td style={styles.grandTotalLabel}>Grand Total ({displayCurrency})</td>
-                <td style={styles.grandTotalValue}>{grandTotal.toFixed(2)}</td>
+                {/* Rounded to the nearest whole currency unit for display,
+                    matching the PDF export (pdfGenerator.js) — cents aren't
+                    a meaningful amount to invoice for. */}
+                <td style={styles.grandTotalValue}>{fmtCurrency(Math.round(grandTotal))}</td>
                 {isEditing && <td style={{ border: 'none' }} />}
               </tr>
             </tbody>

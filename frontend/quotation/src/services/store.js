@@ -191,6 +191,7 @@ export const useAppStore = create(
               email: userData.email,
               phone: userData.phone,
               role: userData.role,
+              designation: userData.designation,
               token,
               companyId: userData.companyId || userData.assignedCompany || null,
             };

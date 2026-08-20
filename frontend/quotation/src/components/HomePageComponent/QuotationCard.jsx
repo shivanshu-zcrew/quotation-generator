@@ -1,6 +1,6 @@
 // components/HomePageComponent/QuotationCard.jsx
 import React from 'react';
-import { Calendar, Eye, Award, Trash2 } from 'lucide-react';
+import { Calendar, Eye, Edit2, Award, Trash2 } from 'lucide-react';
 import { StatusBadge, RejectionNote, ActionBtn } from '../SharedComponents';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../../utils/formatters';
 import { DELETABLE } from '../../utils/constants';
@@ -38,6 +38,7 @@ const QuotationCard = React.memo(({
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canDelete = DELETABLE.has(quotation.status);
   const canAward = quotation.status === 'approved';
+  const isDraft = quotation.status === 'draft';
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
 
   const customerName = quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A';
@@ -71,7 +72,10 @@ const QuotationCard = React.memo(({
       height: '100%',
       boxSizing: 'border-box',
       minWidth: 0,
+      cursor: isDraft ? 'pointer' : 'default',
     }}
+      onClick={isDraft ? () => onView(quotation._id, { edit: true }) : undefined}
+      title={isDraft ? 'Continue editing this draft' : undefined}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = 'translateY(-1px)';
         e.currentTarget.style.boxShadow = '0 1px 2px rgba(20,22,24,0.04), 0 12px 26px -16px rgba(20,22,24,0.16)';
@@ -172,8 +176,12 @@ const QuotationCard = React.memo(({
       </div>
 
       {/* Row 5: actions + created-by, pinned to the bottom */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.65rem', marginTop: 'auto' }}>
-        <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.65rem', marginTop: 'auto' }} onClick={(e) => e.stopPropagation()}>
+        {isDraft ? (
+          <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onView(quotation._id, { edit: true })} icon={Edit2} label="Edit" size="small" />
+        ) : (
+          <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
+        )}
         {canAward && (
           <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onAward(quotation)} icon={Award} label="Outcome" size="small" />
         )}

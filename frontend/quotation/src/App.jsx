@@ -114,7 +114,7 @@ function useScreenNavigate() {
 function HomeScreenRoute() {
   const navigate = useNavigate();
   const onNavigate = useScreenNavigate();
-  return <HomeScreen onNavigate={onNavigate} onViewQuotation={(id) => navigate(`/quotation/${id}`)} />;
+  return <HomeScreen onNavigate={onNavigate} onViewQuotation={(id, opts) => navigate(`/quotation/${id}${opts?.edit ? '?edit=true' : ''}`)} />;
 }
 
 function AdminDashboardRoute() {

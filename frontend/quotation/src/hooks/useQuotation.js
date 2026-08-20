@@ -155,7 +155,12 @@ export function useQuotation() {
   const taxAmount = useMemo(() => round((subtotalAfterDiscount * taxPercent) / 100), [subtotalAfterDiscount, taxPercent, round]);
   const grandTotal = useMemo(() => round(subtotalAfterDiscount + taxAmount), [subtotalAfterDiscount, taxAmount, round]);
 
-  const amountInWords = useMemo(() => numberToWords(grandTotal), [grandTotal]);
+  // numberToWords floors its input rather than rounding it, so feeding it
+  // the raw grandTotal (which still carries cents) could describe a
+  // different whole number than the one shown on screen, which rounds to
+  // the nearest unit (see QuotationLayout's Grand Total cell). Round here
+  // too so both always agree.
+  const amountInWords = useMemo(() => numberToWords(Math.round(grandTotal)), [grandTotal]);
 
   // Fetch quotation if not in store
   useEffect(() => {
@@ -203,7 +208,7 @@ export function useQuotation() {
       customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
       customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || "",
       ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
-      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
+      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBy?.designation || "",
       ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
       salesManagerEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
       companyPhone: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
@@ -966,7 +971,7 @@ export function useQuotation() {
       customerTradeLicenseNumber: originalQuotation.customerSnapshot?.tradeLicenseNumber || "",
       customerTaxRegistrationNumber: originalQuotation.customerSnapshot?.vatNumber || "",
       ourFocalPoint: originalQuotation.ourFocalPoint || originalQuotation.createdBySnapshot?.name || "",
-      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBySnapshot?.role || "",
+      ourFocalPointDesignation: originalQuotation.ourFocalPointDesignation || originalQuotation.createdBy?.designation || "",
       ourContact: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
       salesManagerEmail: originalQuotation.salesManagerEmail || originalQuotation.createdBySnapshot?.email || "",
       companyPhone: originalQuotation.ourContact || originalQuotation.createdBySnapshot?.phone || "",
@@ -1252,7 +1257,7 @@ const handleSave = useCallback(async () => {
           customerTradeLicenseNumber: updatedQuotation.customerTradeLicenseNumber || updatedQuotation.customerSnapshot?.tradeLicenseNumber || "",
           customerTaxRegistrationNumber: updatedQuotation.customerTaxRegistrationNumber || updatedQuotation.customerSnapshot?.vatNumber || "",
           ourFocalPoint: updatedQuotation.ourFocalPoint || updatedQuotation.createdBySnapshot?.name || "",
-          ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBySnapshot?.role || "",
+          ourFocalPointDesignation: updatedQuotation.ourFocalPointDesignation || updatedQuotation.createdBy?.designation || "",
           ourContact: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",
           salesManagerEmail: updatedQuotation.salesManagerEmail || updatedQuotation.createdBySnapshot?.email || "",
           companyPhone: updatedQuotation.ourContact || updatedQuotation.createdBySnapshot?.phone || "",

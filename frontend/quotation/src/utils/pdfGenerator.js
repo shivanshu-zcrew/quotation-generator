@@ -1,11 +1,11 @@
 import { imageToBase64 } from './imageUtils';
 import { numberToWords } from './numberToWords';
-import { fmtDate } from './formatters';
+import { fmtDate, fmtCurrency } from './formatters';
 import headerImage from '../assets/header.png';
 import { quotationAPI } from '../services/api';
 import { sanitizeTermsHtml, protectHyphenatedWords, preserveRepeatedSpaces, normalizeNonBreakingSpaces } from './sanitizeTermsHtml';
 
-import { ITEMS_PER_FIRST_PAGE, BASE_URL } from './constants';
+import { BASE_URL } from './constants';
 
 /**
  * Escapes a value for safe interpolation into the PDF/print HTML template.
@@ -154,7 +154,7 @@ const getFocalPointEmail = (quotation) => {
 const getFocalPointDesignation = (quotation) => {
   if (quotation.ourFocalPointDesignation) return quotation.ourFocalPointDesignation;
   if (quotation.companySnapshot?.focalPointDesignation) return quotation.companySnapshot.focalPointDesignation;
-  if (quotation.createdBySnapshot?.role) return quotation.createdBySnapshot.role;
+  if (quotation.createdBy?.designation) return quotation.createdBy.designation;
   if (quotation.focalPointDesignation) return quotation.focalPointDesignation;
   return 'N/A';
 };
@@ -368,12 +368,29 @@ const buildTermsImagesHTML = async (termsImages = []) => {
     return '';
   }
   
-  // Convert to base64
+  // Convert to base64. Prefers the server-side conversion (same reasoning
+  // as resolveInlineImages above — the S3 bucket doesn't send CORS
+  // headers, so imageToBase64's browser-side canvas read of an S3 URL
+  // fails silently) whenever an s3Key is available; falls back to the
+  // client-side conversion of whatever URL was resolved above for
+  // anything that isn't S3-hosted (a plain filePath/fileUrl, or content
+  // already inlined as base64).
   const imagesWithBase64 = [];
-  
+
   for (const img of processedImages) {
     try {
-      const base64Url = await imageToBase64(img.url);
+      let base64Url = null;
+      if (img.s3Key) {
+        try {
+          const response = await quotationAPI.getImageAsBase64(img.s3Key);
+          base64Url = response.data?.dataUrl || null;
+        } catch (error) {
+          console.error('Server-side base64 fetch failed for terms image, falling back:', error);
+        }
+      }
+      if (!base64Url) {
+        base64Url = await imageToBase64(img.url);
+      }
       if (base64Url) {
         imagesWithBase64.push({ ...img, base64: base64Url });
       }
@@ -386,20 +403,92 @@ const buildTermsImagesHTML = async (termsImages = []) => {
     return '';
   }
   
-  // Build HTML with 2 images per row
-  let imagesHTML = '<div style="margin-top:16px;">';
-  imagesHTML += '<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;">';
-  
-  for (const img of imagesWithBase64) {
-    imagesHTML += `
-      <div style="text-align:center;">
-        <img src="${img.base64}" style="width:100%;height:180px;border-radius:4px;object-fit:cover;" />
-       </div>
-    `;
+  // Chunk into rows of 2 images each (not one flat grid spanning every
+  // image) so a long gallery can flow across pages a row at a time —
+  // Chromium's PDF paginator treats a single CSS Grid container as one
+  // unbreakable unit, so a gallery that didn't fit as a whole used to jump
+  // entirely to the next page, leaving a large blank gap on the page before
+  // it. Each row still gets break-inside:avoid so a single row of 2 images
+  // isn't itself split mid-way across a page boundary.
+  const imageRows = [];
+  for (let i = 0; i < imagesWithBase64.length; i += 2) {
+    imageRows.push(imagesWithBase64.slice(i, i + 2));
   }
-  
-  imagesHTML += '</div></div>';
+
+  let imagesHTML = '<div style="margin-top:16px;">';
+  for (const row of imageRows) {
+    imagesHTML += '<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;break-inside:avoid;page-break-inside:avoid;">';
+    for (const img of row) {
+      imagesHTML += `
+        <div style="text-align:center;">
+          <img src="${img.base64}" style="width:100%;height:180px;border-radius:4px;object-fit:cover;" />
+         </div>
+      `;
+    }
+    if (row.length === 1) imagesHTML += '<div></div>';
+    imagesHTML += '</div>';
+  }
+  imagesHTML += '</div>';
   return imagesHTML;
+};
+
+/**
+ * Resolves inline images (TermsCondition.jsx's Word-style "insert image",
+ * distinct from the termsImages gallery handled above) to base64 data URIs
+ * before this HTML ever reaches the backend. Two separate reasons this is
+ * required rather than optional:
+ *  - the backend's Puppeteer PDF page (generatePDF, quotationController.js)
+ *    deliberately aborts every image request that isn't a data: URI, as an
+ *    SSRF guard — a signed S3 https:// URL would just render as a broken
+ *    image there.
+ *  - a signed URL only lives an hour (getSignedUrl), so even if it were
+ *    allowed through, whatever src happens to be baked into the saved HTML
+ *    could easily already be dead by the time a PDF is generated.
+ * Each <img>'s durable data-s3-key (see reconcileInlineImages in
+ * TermsCondition.jsx) is resolved to a fresh signed URL — batched into one
+ * request for every image in the document — then to base64 via the same
+ * imageToBase64 already used for the gallery above.
+ */
+const resolveInlineImages = async (html) => {
+  if (!html || !html.includes('<img')) return html;
+
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  const images = Array.from(container.querySelectorAll('img[data-s3-key]'));
+  if (images.length === 0) return html;
+
+  // Fetched server-side (quotationAPI.getImageAsBase64) rather than via the
+  // browser-side canvas conversion (imageToBase64) every other image path
+  // on this page uses: confirmed directly against the S3 bucket that it
+  // doesn't send CORS headers, so a canvas read of one of these images
+  // (crossOrigin='anonymous' + toDataURL) fails silently — the browser can
+  // still *display* the image fine without CORS (that only gates reading
+  // pixel data back out), which is why this looked fine in the live viewer
+  // right up until PDF export. Server-side has no CORS involved at all.
+  const keys = [...new Set(images.map((img) => img.getAttribute('data-s3-key')).filter(Boolean))];
+  const base64ByKey = {};
+  await Promise.all(keys.map(async (key) => {
+    try {
+      const response = await quotationAPI.getImageAsBase64(key);
+      const dataUrl = response.data?.dataUrl;
+      if (dataUrl) base64ByKey[key] = dataUrl;
+    } catch (error) {
+      console.error('Failed to fetch inline terms image as base64:', key, error);
+    }
+  }));
+
+  for (const img of images) {
+    const key = img.getAttribute('data-s3-key');
+    // Falls back to the old client-side conversion of whatever src is
+    // currently on the tag (works if the bucket ever does get CORS
+    // configured, or for a same-origin/data: src) rather than just giving
+    // up outright if the server-side fetch above failed for this image.
+    const base64Url = base64ByKey[key] || (await imageToBase64(img.getAttribute('src')));
+    if (base64Url) img.setAttribute('src', base64Url);
+    img.removeAttribute('data-s3-key');
+  }
+
+  return container.innerHTML;
 };
 
 /**
@@ -563,13 +652,12 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const taxAmt = (subtotalAfterDiscount * tax) / 100;
   const grandTotal = subtotalAfterDiscount + taxAmt;
   
-  const roundedTotal = Number(grandTotal.toFixed(2));
+  // Grand Total rounds to the nearest whole currency unit (9732322.20 ->
+  // 9732322, 9732322.80 -> 9732323), not just to 2 decimal places — cents
+  // are never a meaningful amount to invoice for, and fmtCurrency's
+  // minimumFractionDigits:2 still displays it as "9,732,322.00".
+  const roundedTotal = Math.round(grandTotal);
   const amountInWords = numberToWords(roundedTotal);
-
-  // Split items for multi-page
-  const firstPage = itemsWithImages.slice(0, ITEMS_PER_FIRST_PAGE);
-  const remaining = itemsWithImages.slice(ITEMS_PER_FIRST_PAGE);
-  const multiPage = remaining.length > 0;
 
   // Render row function - with 2 images per row
   const renderRow = (item, index) => {
@@ -588,7 +676,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
         ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;white-space:pre-wrap;">${protectHyphenatedWords(escapeHtml(item.description))}</div>` : ''}
         ${imageRows.map(row => `
-          <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;">
+          <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;break-inside:avoid;page-break-inside:avoid;">
             ${row.map(src => `
               <div style="width:100%;height:180px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;background:#f9fafb;">
                 <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
@@ -600,8 +688,8 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       </td>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.quantity}</td>
       <td style="text-align:center;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${escapeHtml(item.unit || '-')}</td>
-      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${item.unitPrice.toFixed(2)}</td>
-      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">${(item.quantity * item.unitPrice).toFixed(2)}</td>
+      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;white-space:nowrap;">${fmtCurrency(item.unitPrice)}</td>
+      <td style="text-align:right;font-weight:600;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;white-space:nowrap;">${fmtCurrency(item.quantity * item.unitPrice)}</td>
     </tr>`;
   };
 
@@ -612,39 +700,46 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
         <td colspan="3" style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">Subtotal (${currency})</td>
-        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;">${subtotal.toFixed(2)}</td>
+        <td style="text-align:right;padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;white-space:nowrap;">${fmtCurrency(subtotal)}</td>
       </tr>
       ${taxPercent > 0 ? `
       <tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
         <td colspan="3" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">VAT (${taxPercent}%)</td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;">${taxAmt.toFixed(2)}</td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;white-space:nowrap;">${fmtCurrency(taxAmt)}</td>
       </tr>
     ` : ''}
       ${discAmt > 0 ? `<tr style="background:#f8fafc;font-weight:600;">
         <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;"></td>
         <td colspan="3" style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">Discount (${discountPercent}%)</td>
-        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;">-${discAmt.toFixed(2)}</td>
+        <td style="text-align:right;padding:8px;border:1px solid #e5e7eb;font-size:10px;color:#059669;white-space:nowrap;">-${fmtCurrency(discAmt)}</td>
       </tr>` : ''}
       <tr style="background:#0C405A;color:white;font-weight:700;">
         <td colspan="2" style="border:none;padding:8px;"></td>
         <td colspan="3" style="text-align:right;padding:12px 8px;font-size:12px;">Grand Total (${currency})</td>
-        <td style="text-align:right;padding:12px 8px;font-size:12px;">${roundedTotal.toFixed(2)}</td>
+        <td style="text-align:right;padding:12px 8px;font-size:12px;white-space:nowrap;">${fmtCurrency(roundedTotal)}</td>
       </tr>`;
   }
 
   // Table header
+  // Unit Price / Amount are widened (and the header labels themselves kept
+  // nowrap) so quotations with values into the millions/billions render
+  // the full unbroken figure — table-layout:fixed locks every row's cell
+  // to these column widths, and the page's global overflow-wrap:break-word
+  // reset otherwise breaks a long unbroken number mid-digit once it no
+  // longer fits (visible on the Grand Total row, which uses a larger font
+  // than the item rows and so needs the most room).
   const thead = `<thead><tr style="background:#0C405A;">
-    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;">SR#</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;white-space:nowrap;">SR#</th>
     <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
-    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:50px;">Qty</th>
-    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit</th>
-    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:70px;">Unit Price</th>
-    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:80px;">Amount</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:45px;">Qty</th>
+    <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:55px;">Unit</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:95px;white-space:nowrap;">Unit Price</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:125px;white-space:nowrap;">Amount</th>
   </tr></thead>`;
 
   const termsImagesHTML = await buildTermsImagesHTML(termsImages);
-  const formattedTermsText = formatTermsText(termsAndConditions);
+  const formattedTermsText = formatTermsText(await resolveInlineImages(termsAndConditions));
 
   // Company footer
   const companyInfo = companySnapshot;
@@ -713,9 +808,23 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     *{margin:0;padding:0;box-sizing:border-box;overflow-wrap:break-word;word-wrap:break-word;}
     body{font-family:'Segoe UI',Tahoma,sans-serif;background:white;color:#1f2937;line-height:1.6;}
     .container{width:874px;margin:0 auto;padding:10px;}
-    @page{size:A4;margin:5mm;}
-    thead{display:table-row-group;}
-    @media print{body{margin:0;padding:0;}.page-break{page-break-before:always;}thead{display:table-row-group;}}
+    /* Page margins are set by Puppeteer's page.pdf({ margin }) call
+       (backend quotationController.js generatePDF) — that's the value that
+       actually applies since preferCSSPageSize isn't enabled, so a margin
+       here would silently do nothing. Keep only page size in @page. */
+    @page{size:A4;}
+    /* thead keeps its browser-default display:table-header-group so a long
+       items table that spans multiple PDF pages repeats the column header
+       row at the top of each page automatically — a single <table> flowing
+       naturally like this (rows breaking only between <tr>s, never mid-row)
+       replaces an earlier fixed "first 8 items, then a forced page break"
+       split that didn't account for real row height (long descriptions,
+       item images): whenever real content pushed fewer than 8 rows onto
+       page 1, the leftover rows landed on page 2 with no header at all,
+       and the forced break threw away whatever space was left on that
+       page, which is what produced the large blank gaps between pages. */
+    tr{page-break-inside:avoid;break-inside:avoid;}
+    @media print{body{margin:0;padding:0;}}
     .terms-content{white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.5; text-indent: 0;margin: 0;padding: 0;}
     /* Minimal subset of Quill's own editor CSS (quill.snow.css/quill.core.css),
        reproduced here because this document is rendered in an isolated
@@ -767,6 +876,22 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     .terms-content li.ql-indent-6{padding-left:19.5em;}
     .terms-content li.ql-indent-7{padding-left:22.5em;}
     .terms-content li.ql-indent-8{padding-left:25.5em;}
+    /* Mirrors Quill's own default table CSS (quill.snow.css's
+       .ql-editor table/td rules) — this document is rendered in an
+       isolated Puppeteer page that doesn't load that stylesheet, same
+       reason as every other .terms-content rule above. */
+    .terms-content table{border-collapse:collapse;table-layout:fixed;width:100%;margin:6px 0;}
+    .terms-content td,.terms-content th{border:1px solid #cbd5e1;padding:4px 6px;white-space:normal;vertical-align:top;word-wrap:break-word;}
+    .terms-content th{font-weight:700;color:#0f172a;background:#f8fafc;}
+    /* max-width keeps an inline image (TermsCondition.jsx's image insert)
+       wider than the PDF's content area from overflowing it. Deliberately
+       no height:auto alongside it — a CSS height rule always overrides
+       the HTML height attribute regardless of specificity, so pairing one
+       with a resized image's explicit width+height (ImageResizeHandles)
+       silently discarded the saved height on every render, falling back
+       to whatever the browser auto-computes from the image's own
+       intrinsic ratio instead — a real, confirmed bug. */
+    .terms-content img{max-width:100%;}
   </style>
 </head>
 <body>
@@ -826,25 +951,11 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
         ${thead}
         <tbody>
-          ${firstPage.map((item, i) => renderRow(item, i)).join('')}
-          ${!multiPage ? totalsRows : ''}
+          ${itemsWithImages.map((item, i) => renderRow(item, i)).join('')}
+          ${totalsRows}
         </tbody>
       </table>
     </div>
-
-    <!-- Multi-page continuation -->
-    ${multiPage ? `
-      <div class="page-break">
-        <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;border-bottom:2px solid #000;padding-bottom:8px;">Items Detail (Continued)</h3>
-        <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-          ${thead}
-          <tbody>
-            ${remaining.map((item, i) => renderRow(item, i + ITEMS_PER_FIRST_PAGE)).join('')}
-            ${totalsRows}
-          </tbody>
-        </table>
-      </div>
-    ` : ''}
 
     <!-- Amount in Words -->
     ${exportType === 'with_total' ? `
@@ -856,16 +967,16 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <!-- Notes -->
     ${notes ? `
       <div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Notes</h3>
-        <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;">${protectHyphenatedWords(notes)}</div>
+        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;break-after:avoid;page-break-after:avoid;">Notes</h3>
+        <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;box-decoration-break:clone;-webkit-box-decoration-break:clone;">${protectHyphenatedWords(notes)}</div>
       </div>
     ` : ''}
 
     <!-- Terms & Conditions -->
     ${termsAndConditions ? `
       <div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
-        <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;">
+        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;break-after:avoid;page-break-after:avoid;">Terms & Conditions</h3>
+        <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;box-decoration-break:clone;-webkit-box-decoration-break:clone;">
           <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">${formattedTermsText}</div>
           ${termsImagesHTML}
         </div>

@@ -458,7 +458,7 @@ export default function ViewQuotationScreen() {
   const [isCancelling, setIsCancelling] = useState(false);
 
   // Router hooks for wrong-account detection
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -645,6 +645,21 @@ export default function ViewQuotationScreen() {
     }
     return true;
   }, [isEditing, isApproved, isCancelled, isAmended, isFinalised, originalQuotation?.status, isCreatorViewer, user?.role]);
+
+  // Auto-enter edit mode when arriving via ?edit=true (e.g. "Continue Editing"
+  // on a draft from the quotations list), so drafts open straight into the
+  // edit form instead of requiring a separate View → Edit click.
+  useEffect(() => {
+    if (!originalQuotation || isEditing) return;
+    if (searchParams.get('edit') !== 'true') return;
+    if (!canEdit()) return;
+    setIsEditing(true);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('edit');
+      return next;
+    }, { replace: true });
+  }, [originalQuotation, isEditing, searchParams, canEdit, setSearchParams, setIsEditing]);
 
   // Cancel: admin can cancel an approved quotation (revise path).
   // The "Amend" path (cancelling a pre-approval quotation) is hidden for now.
