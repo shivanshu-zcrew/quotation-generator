@@ -878,6 +878,25 @@ function ImageResizeHandles({ quill, imageEl, onDeleted }) {
 // through the exact same path as the toolbar button closes that gap:
 // same compression, same size validation, same S3 storage, same tracked
 // data-s3-key.
+// Reads a File into a base64 data: URL — used as the local-preview fallback
+// below instead of URL.createObjectURL(file). Verified directly (traced a
+// live insert with Element.prototype.setAttribute instrumented) that a
+// blob: URL silently fails here: Quill's own built-in Image blot sanitizes
+// every src through quill/formats/image.js's static sanitize(), which only
+// allows the 'http'/'https'/'data' schemes — 'blob:' isn't one of them, so
+// Quill discards it and substitutes its own hardcoded placeholder ('//:0')
+// with no error or warning, which is exactly the broken-image icon this
+// was supposed to prevent. 'data:' is on that allow-list, so this survives
+// the same sanitize step blob: was silently failing.
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function uploadImageIntoEditor(quill, range, file, { onUploadingChange, onError } = {}) {
   if (!file.type.startsWith("image/")) {
     onError?.(`"${file.name}" is not an image.`);
@@ -893,13 +912,14 @@ async function uploadImageIntoEditor(quill, range, file, { onUploadingChange, on
     // the upload itself just succeeded — the same gap
     // handleTermsImagesUpload (QuotationTemplate.jsx, the terms image
     // gallery) already works around with a local object URL. Mirror that
-    // here: fall back to a local preview of the file just uploaded, still
+    // here: fall back to a local preview of the file just uploaded (as a
+    // data: URL — see fileToDataUrl above for why not a blob: URL), still
     // tagged with its durable data-s3-key, so refreshRenderedImages/
     // reconcileInlineImages swap in the real signed URL themselves the
     // first time this content renders again after the quotation is
     // actually saved (the viewer, a PDF export, or just reopening this
     // editor) — see the comment on data-s3-key in TermsCondition.jsx.
-    const url = (await convertS3KeyToUrl(key)) || URL.createObjectURL(file);
+    const url = (await convertS3KeyToUrl(key)) || (await fileToDataUrl(file));
     const insertAt = range?.index ?? quill.getLength();
     quill.insertEmbed(insertAt, "image", url, "user");
     // insertEmbed only takes a URL — the durable S3 key is attached as a
