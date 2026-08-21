@@ -230,54 +230,67 @@ const generateImageHash = (source) => {
 const processItemImages = async (item, newImages = {}) => {
   const imageSources = [];
   const imageSet = new Set();
-  
-  const addImageIfUnique = (source, sourceType) => {
+
+  const addImageIfUnique = (source, s3Key) => {
     if (!source) return false;
     const hash = generateImageHash(source);
     if (!imageSet.has(hash)) {
       imageSet.add(hash);
-      imageSources.push(source);
+      imageSources.push({ source, s3Key: s3Key || null });
       return true;
     }
     return false;
   };
-  
+
   // Add Cloudinary images
   if (item.imagePaths && Array.isArray(item.imagePaths)) {
     for (const imgPath of item.imagePaths) {
-      addImageIfUnique(imgPath, 'Cloudinary');
+      addImageIfUnique(imgPath);
     }
   }
-  
+
   // Add new images from editing
   if (newImages[item.id] && Array.isArray(newImages[item.id])) {
     for (const newImg of newImages[item.id]) {
-      addImageIfUnique(newImg, 'New base64');
+      addImageIfUnique(newImg);
     }
   }
-  
-  // Add S3 images
+
+  // Add S3 images. Keeps the s3Key alongside the resolved signed URL (rather
+  // than just collecting URLs) so the base64 conversion below can fetch each
+  // one server-side — the S3 bucket doesn't send CORS headers, so the
+  // browser-side canvas conversion (imageToBase64) silently fails on these
+  // and used to drop item images from the PDF while leaving legacy Cloudinary
+  // images (which do send CORS headers) unaffected.
   if (item.imageS3Keys && Array.isArray(item.imageS3Keys) && item.imageS3Keys.length > 0) {
     try {
       const response = await quotationAPI.getBatchSignedUrls(item.imageS3Keys);
-      let urls = [];
-      if (response.data?.urls) {
-        urls = Object.values(response.data.urls);
-      } else if (response.urls) {
-        urls = Object.values(response.urls);
-      }
-      
-      for (const url of urls) {
-        addImageIfUnique(url, 'S3');
+      const urlsByKey = response.data?.urls || response.urls || {};
+
+      for (const key of item.imageS3Keys) {
+        const url = urlsByKey[key];
+        if (url) addImageIfUnique(url, key);
       }
     } catch (error) {
       console.error(`Failed to get S3 URLs:`, error);
     }
   }
-  
-  // Convert to base64
+
+  // Convert to base64. Prefers the server-side conversion (quotationAPI.
+  // getImageAsBase64) whenever an s3Key is available, falling back to the
+  // client-side canvas conversion for anything that isn't S3-hosted — same
+  // approach as buildTermsImagesHTML/resolveInlineImages above.
   const base64Images = await Promise.all(
-    imageSources.map(async (source) => {
+    imageSources.map(async ({ source, s3Key }) => {
+      if (s3Key) {
+        try {
+          const response = await quotationAPI.getImageAsBase64(s3Key);
+          const dataUrl = response.data?.dataUrl;
+          if (dataUrl) return dataUrl;
+        } catch (error) {
+          console.error('Server-side base64 fetch failed for item image, falling back:', error);
+        }
+      }
       try {
         return await imageToBase64(source);
       } catch (err) {
@@ -286,7 +299,7 @@ const processItemImages = async (item, newImages = {}) => {
       }
     })
   );
-  
+
   const validBase64 = base64Images.filter(Boolean);
   
   const { description } = getItemDetails(item);
@@ -404,12 +417,7 @@ const buildTermsImagesHTML = async (termsImages = []) => {
   }
   
   // Chunk into rows of 2 images each (not one flat grid spanning every
-  // image) so a long gallery can flow across pages a row at a time —
-  // Chromium's PDF paginator treats a single CSS Grid container as one
-  // unbreakable unit, so a gallery that didn't fit as a whole used to jump
-  // entirely to the next page, leaving a large blank gap on the page before
-  // it. Each row still gets break-inside:avoid so a single row of 2 images
-  // isn't itself split mid-way across a page boundary.
+  // image) so a long gallery can flow across pages a row at a time.
   const imageRows = [];
   for (let i = 0; i < imagesWithBase64.length; i += 2) {
     imageRows.push(imagesWithBase64.slice(i, i + 2));
@@ -417,7 +425,7 @@ const buildTermsImagesHTML = async (termsImages = []) => {
 
   let imagesHTML = '<div style="margin-top:16px;">';
   for (const row of imageRows) {
-    imagesHTML += '<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;break-inside:avoid;page-break-inside:avoid;">';
+    imagesHTML += '<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;">';
     for (const img of row) {
       imagesHTML += `
         <div style="text-align:center;">
@@ -616,7 +624,16 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   const createdByName = escapeHtml(quotation.createdBy?.name || quotation.createdBySnapshot?.name || '—');
   const createdByEmail = escapeHtml(quotation.createdBy?.email || quotation.createdBySnapshot?.email || '');
   const createdByRole = quotation.createdBy?.role || quotation.createdBySnapshot?.role || 'user';
-  const createdByDesignation = escapeHtml(quotation.createdBy?.designation || roleLabel(createdByRole));
+  // Prefers the same quotation-level designation the header's "Designation"
+  // field already shows (getFocalPointDesignation above, "ourFocalPointDesignation")
+  // — that's the one the preparer actually entered on this quotation, e.g.
+  // "sales manager". quotation.createdBy?.designation (the user profile's own
+  // designation field) is rarely populated, so it used to fall straight
+  // through to a title-cased role name ("User") instead — a mismatch with
+  // the header showing the real designation right above it.
+  const createdByDesignation = escapeHtml(
+    quotation.ourFocalPointDesignation || quotation.createdBy?.designation || roleLabel(createdByRole)
+  );
 
   const opsReviewedByName = escapeHtml(quotation.opsApprovedBySnapshot?.name || '—');
   const opsReviewedByEmail = escapeHtml(quotation.opsApprovedBySnapshot?.email || '');
@@ -661,14 +678,16 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 
   // Render row function - with 2 images per row
   const renderRow = (item, index) => {
+    // Already deduplicated by source identity in processItemImages (S3 key /
+    // Cloudinary URL / new-image entry) — do not dedup again here by base64
+    // content, or two distinct uploads that happen to be pixel-identical
+    // (e.g. the same file attached twice on purpose) collapse into one.
     const imgs = item._b64Images || [];
-    // Remove duplicates in final render
-    const uniqueImgs = [...new Set(imgs)];
-    
+
     // Split images into rows of 2
     const imageRows = [];
-    for (let i = 0; i < uniqueImgs.length; i += 2) {
-      imageRows.push(uniqueImgs.slice(i, i + 2));
+    for (let i = 0; i < imgs.length; i += 2) {
+      imageRows.push(imgs.slice(i, i + 2));
     }
     
     return `<tr>
@@ -676,7 +695,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <td style="padding:10px 8px;border:1px solid #e5e7eb;font-size:10px;vertical-align:top;">
         ${item.description ? `<div style="font-size:10px;line-height:1.4;color:#4b5563;margin-bottom:8px;white-space:pre-wrap;">${protectHyphenatedWords(escapeHtml(item.description))}</div>` : ''}
         ${imageRows.map(row => `
-          <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;break-inside:avoid;page-break-inside:avoid;">
+          <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;margin-top:8px;">
             ${row.map(src => `
               <div style="width:100%;height:180px;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;background:#f9fafb;">
                 <img src="${src}" style="width:100%;height:100%;object-fit:cover;" />
@@ -751,7 +770,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
       <div style="font-weight:600;color:#1f2937;font-size:11px;">Sincerely,</div>
       <div style="font-weight:600;color:#1f2937;font-size:11px;margin-top:24px;">${escapeHtml(companyInfo?.name) || 'Mega Repairing Machinery Equipment LLC'}</div>
     </div>
-    
+
     <!-- Approval Chain Section -->
     <div style="margin-top:12px;padding-top:16px;">
       <table style="width:100%;border-collapse:collapse;font-size:10px;">
@@ -807,23 +826,30 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   <style>
     *{margin:0;padding:0;box-sizing:border-box;overflow-wrap:break-word;word-wrap:break-word;}
     body{font-family:'Segoe UI',Tahoma,sans-serif;background:white;color:#1f2937;line-height:1.6;}
-    .container{width:874px;margin:0 auto;padding:10px;}
+    /* 718px = the real A4-minus-10mm-margins print content width (see
+       PAGE_CONTENT_WIDTH_PX in backend/utils/pdfPaginator.js). The old
+       874px value was WIDER than the actual printable area, so every
+       height Chromium computed while wrapping this content was measured
+       at the wrong width — a likely contributor to the pagination gaps
+       this template used to produce. */
+    .container{width:718px;margin:0 auto;padding:10px;}
     /* Page margins are set by Puppeteer's page.pdf({ margin }) call
        (backend quotationController.js generatePDF) — that's the value that
        actually applies since preferCSSPageSize isn't enabled, so a margin
        here would silently do nothing. Keep only page size in @page. */
     @page{size:A4;}
     /* thead keeps its browser-default display:table-header-group so a long
-       items table that spans multiple PDF pages repeats the column header
-       row at the top of each page automatically — a single <table> flowing
-       naturally like this (rows breaking only between <tr>s, never mid-row)
-       replaces an earlier fixed "first 8 items, then a forced page break"
-       split that didn't account for real row height (long descriptions,
-       item images): whenever real content pushed fewer than 8 rows onto
-       page 1, the leftover rows landed on page 2 with no header at all,
-       and the forced break threw away whatever space was left on that
-       page, which is what produced the large blank gaps between pages. */
-    tr{page-break-inside:avoid;break-inside:avoid;}
+       items table (or a Terms & Conditions table that happens to carry a
+       real <thead>) that spans multiple PDF pages repeats the header row
+       at the top of each continuation page automatically. Page breaks are
+       otherwise left entirely to Chromium's own natural pagination — a
+       custom JS pass that measured every block and forced page breaks
+       between pre-sized groups was tried and reverted (see generatePDF in
+       quotationController.js for why): once .container's width was fixed
+       to match the real printable area and the overly-broad
+       break-inside:avoid rules below were removed, natural pagination
+       already packs pages correctly on its own; the forced-break approach
+       made things worse. */
     @media print{body{margin:0;padding:0;}}
     .terms-content{white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.5; text-indent: 0;margin: 0;padding: 0;}
     /* Minimal subset of Quill's own editor CSS (quill.snow.css/quill.core.css),
@@ -880,7 +906,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        .ql-editor table/td rules) — this document is rendered in an
        isolated Puppeteer page that doesn't load that stylesheet, same
        reason as every other .terms-content rule above. */
-    .terms-content table{border-collapse:collapse;table-layout:fixed;width:100%;margin:6px 0;}
+    .terms-content table{border-collapse:collapse;table-layout:fixed;width:100%;margin:14px 0;}
     .terms-content td,.terms-content th{border:1px solid #cbd5e1;padding:4px 6px;white-space:normal;vertical-align:top;word-wrap:break-word;}
     .terms-content th{font-weight:700;color:#0f172a;background:#f8fafc;}
     /* max-width keeps an inline image (TermsCondition.jsx's image insert)
@@ -890,8 +916,13 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        with a resized image's explicit width+height (ImageResizeHandles)
        silently discarded the saved height on every render, falling back
        to whatever the browser auto-computes from the image's own
-       intrinsic ratio instead — a real, confirmed bug. */
-    .terms-content img{max-width:100%;}
+       intrinsic ratio instead — a real, confirmed bug. display:inline-block
+       and the margin below mirror the editor/viewer's identical rule
+       (TERMS_CONTENT_CSS in richTextConfig.js) — plain top/bottom margin
+       does nothing on an image's default inline display, and without it
+       an inline image sits flush against the paragraph right before/after
+       it, same as the editor did before that rule was added. */
+    .terms-content img{max-width:100%;display:inline-block;margin:10px 6px;}
   </style>
 </head>
 <body>
@@ -948,7 +979,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <!-- Items Table -->
     <div style="margin-bottom:16px;">
       <h3 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">Items Detail</h3>
-      <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      <table class="items-table" style="width:100%;border-collapse:collapse;table-layout:fixed;">
         ${thead}
         <tbody>
           ${itemsWithImages.map((item, i) => renderRow(item, i)).join('')}
@@ -967,7 +998,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <!-- Notes -->
     ${notes ? `
       <div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;break-after:avoid;page-break-after:avoid;">Notes</h3>
+        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Notes</h3>
         <div style="padding:10px;background:#f9fafb;border-radius:6px;white-space:pre-wrap;color:#4b5563;font-size:10px;line-height:1.4;box-decoration-break:clone;-webkit-box-decoration-break:clone;">${protectHyphenatedWords(notes)}</div>
       </div>
     ` : ''}
@@ -975,7 +1006,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
     <!-- Terms & Conditions -->
     ${termsAndConditions ? `
       <div style="margin-bottom:16px;">
-        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;break-after:avoid;page-break-after:avoid;">Terms & Conditions</h3>
+        <h3 style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;color:#0f172a;">Terms & Conditions</h3>
         <div style="padding:12px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;box-decoration-break:clone;-webkit-box-decoration-break:clone;">
           <div class="terms-content" style="white-space:pre-wrap;font-size:10px;color:#4b5563;line-height:1.6;margin:0;padding:0;">${formattedTermsText}</div>
           ${termsImagesHTML}

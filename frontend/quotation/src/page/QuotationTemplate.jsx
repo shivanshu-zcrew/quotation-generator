@@ -971,77 +971,26 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     setExportProgress(10);
     setExportStep("Preparing PDF...");
     setImageCount(totalImageCount);
-    
+
     try {
-      const imageToBase64 = async (source) => {
-        // If it's an S3 key, convert to signed URL first
-        if (typeof source === 'string' && source.startsWith('quotations/')) {
-          const signedUrl = await convertS3KeyToUrl(source);
-          if (!signedUrl) return null;
-          source = signedUrl;
-        }
-        
-        return new Promise((resolve) => {
-          if (!source) {
-            resolve(null);
-            return;
-          }
-          if (typeof source === 'string' && source.startsWith('data:')) {
-            resolve(source);
-            return;
-          }
-          const img = new Image();
-          img.crossOrigin = "Anonymous";
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            canvas.getContext('2d').drawImage(img, 0, 0);
-            resolve(canvas.toDataURL('image/jpeg', 0.8));
-          };
-          img.onerror = () => {
-            console.warn('Failed to load image:', source);
-            resolve(null);
-          };
-          img.src = source;
-        });
-      };
-  
-      setExportProgress(20);
-      setExportStep("Processing item images...");
-      
-      const companySnapshot = typeof selectedCompany === 'object' && selectedCompany?.name 
-        ? selectedCompany 
+      // Item images and Terms & Conditions images are passed through as-is
+      // (raw imagePaths/imageS3Keys, raw section content/gallery images) —
+      // buildPDFHTML (utils/pdfGenerator.js, called below via
+      // downloadQuotationPDF) already does its own S3-to-base64 conversion
+      // for all of these, preferring a server-side fetch over a browser
+      // canvas read. Converting them here too used to be duplicate work
+      // that used ONLY the browser canvas method — which silently fails for
+      // any S3-hosted image, since the bucket sends no CORS headers, and
+      // crossOrigin='anonymous' + canvas.toDataURL() then throws a CORS
+      // error and resolves null. That failure was invisible in the final
+      // PDF (buildPDFHTML's own conversion of the same images from
+      // imageS3Keys still succeeded), but it was real wasted work and a
+      // console full of CORS errors on every export.
+      const companySnapshot = typeof selectedCompany === 'object' && selectedCompany?.name
+        ? selectedCompany
         : companies?.find(c => c._id === selectedCompany || c.code === selectedCompany);
-      
-      // Process items - convert S3 keys to base64 for PDF
-      const processedItems = await Promise.all(quotationItems.map(async (item) => {
-        // Convert S3 keys to signed URLs then to base64
-        const s3ImagePromises = (item.imageS3Keys || []).map(async (s3Key) => {
-          const signedUrl = await convertS3KeyToUrl(s3Key);
-          if (signedUrl) {
-            return await imageToBase64(signedUrl);
-          }
-          return null;
-        });
-        
-        const s3Images = await Promise.all(s3ImagePromises);
-        
-        const allImages = [...s3Images.filter(Boolean)];
-        
-        return {
-          ...item,
-          imagePaths: allImages,
-          name: item.name,
-          description: item.description
-        };
-      }));
-      
-      setExportProgress(40);
-      setExportStep("Processing terms images...");
-      
+
       let allTermsImages = [];
-      
       if (tcSections && tcSections.length > 0) {
         tcSections.forEach((section, sectionIdx) => {
           if (section.images && section.images.length > 0) {
@@ -1058,53 +1007,12 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           }
         });
       }
-      
-      let processedTermsImages = [];
-      if (allTermsImages.length > 0) {
-        processedTermsImages = await Promise.all(allTermsImages.map(async (img) => {
-          let source = img.url;
-          if (img.s3Key && !source?.startsWith('data:')) {
-            source = await convertS3KeyToUrl(img.s3Key);
-          }
-          const base64 = await imageToBase64(source);
-          return {
-            url: base64 || source,
-            fileName: img.fileName,
-            caption: img.caption
-          };
-        }));
-      }
-      
+
+      const termsHTML = tcSections.length > 0 ? sectionsToHTML(tcSections) : '';
+
       setExportProgress(60);
-      setExportStep("Building HTML content...");
-      
-      const sectionsWithBase64Images = await Promise.all(tcSections.map(async (section) => {
-        if (section.images && section.images.length > 0) {
-          const imagesWithBase64 = await Promise.all(
-            section.images.map(async (img) => {
-              let source = img.url;
-              if (img.s3Key && !source?.startsWith('data:')) {
-                source = await convertS3KeyToUrl(img.s3Key);
-              }
-              if (source && !source.startsWith('data:')) {
-                const base64 = await imageToBase64(source);
-                return { ...img, url: base64 || source };
-              }
-              return img;
-            })
-          );
-          return { ...section, images: imagesWithBase64 };
-        }
-        return section;
-      }));
-      
-      const termsHTML = sectionsWithBase64Images.length > 0 
-        ? sectionsToHTML(sectionsWithBase64Images) 
-        : '';
-      
-      setExportProgress(80);
       setExportStep("Generating PDF...");
-      
+
       const pdfQuotation = {
         quotationNumber: quotationNumber,
         date: quotationData.date,
@@ -1129,7 +1037,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         discount: Number(quotationData.discount) || 0,
         notes: quotationData.notes || '',
         currency: { code: selectedCurrency || 'AED' },
-        items: processedItems,
+        items: quotationItems,
         taxPercent: Number(quotationData.tax) || 0,
         discountPercent: Number(quotationData.discount) || 0,
         customerSnapshot: { 
@@ -1146,7 +1054,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           focalPointDesignation: quotationData.ourFocalPointDesignation
         } : { name: companyName },
         termsAndConditions: termsHTML,
-        termsImages: processedTermsImages,
+        termsImages: allTermsImages,
         companyPhone: companyDetails.phone,
         companyEmail: companyDetails.email,
         companyTradeLicense: companyDetails.tradeLicense,

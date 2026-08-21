@@ -119,6 +119,22 @@ class TrackedImage extends BaseImage {
 }
 Quill.register(TrackedImage, true);
 
+// "table"/"image" below render correctly with no icon registration of their
+// own because Quill's own bundled ui/icons module already ships both keys
+// built in — "tidy" (TermsCondition.jsx's paste-cleanup button) is a format
+// Quill has never heard of, so it needs one registered the standard,
+// documented way: mutate the shared icons registry before any toolbar is
+// instantiated. class="ql-stroke" matches every built-in icon's own
+// convention, so it automatically inherits TERMS_TOOLBAR_THEME_CSS's
+// existing stroke-color/hover/active rules below with no new CSS needed.
+const icons = Quill.import("ui/icons");
+icons.tidy = `<svg viewbox="0 0 18 18">
+  <path class="ql-stroke" d="M6,3 L7,6 L10,7 L7,8 L6,11 L5,8 L2,7 L5,6 Z"/>
+  <line class="ql-stroke" x1="12" x2="16" y1="4" y2="4"/>
+  <line class="ql-stroke" x1="12" x2="16" y1="8" y2="8"/>
+  <line class="ql-stroke" x1="12" x2="16" y1="12" y2="12"/>
+</svg>`;
+
 // Quill's toolbar shows the raw whitelist value as the option label by
 // default; give the font/size pickers human-readable labels instead.
 export const TERMS_PICKER_LABEL_CSS = `
@@ -152,9 +168,7 @@ export const TERMS_PICKER_LABEL_CSS = `
 
 // Applies both where content is *edited* (the live Quill editor) and where
 // it's *read* (TermsViewer/CommentableHtml, the PDF-export CSS mirrors this
-// separately). Two fixups Quill's own CSS doesn't cover in this app:
-//  - Tailwind's preflight resets heading font-weight app-wide; Quill's CSS
-//    only restores size, not weight.
+// separately). One fixup Quill's own CSS doesn't cover in this app:
 //  - Quill's persisted/exported HTML for a plain bullet/ordered list
 //    (`quill.getSemanticHTML()`, used for onChange/persistence) is genuine
 //    `<ul>/<ol><li>` with no `data-list` attribute — that attribute only
@@ -167,6 +181,38 @@ export const TERMS_PICKER_LABEL_CSS = `
 // alongside the live editing ReactQuill instance (every call site picks one
 // or the other via `isEditing ? <TermsEditor/> : <TermsViewer/>`, so the two
 // are never mounted at once and this can't bleed into the typing UX).
+// Quill's own base CSS (quill.snow.css) sizes h5/h6 at .83em/.67em —
+// SMALLER than body text (1em) — which is fine for a document that only
+// ever uses h1-h3 (the toolbar's own header picker never offers h4-h6),
+// but the "Auto align" button (TermsCondition.jsx's tidyTermsHtml) generates
+// h4/h5/h6 for nested numbered sections ("1." -> h4, "1.1" -> h5, "1.1.1" ->
+// h6), and a sub-heading rendering smaller than the plain bullet text
+// underneath it reads as backwards, not as a hierarchy. Floor every level
+// at the body size — size alone is enough to read as a heading without
+// forcing bold too (headings are deliberately NOT force-bolded here — see
+// the comment on TERMS_CONTENT_CSS below for why). Exported on its own
+// (not folded directly into TERMS_CONTENT_CSS) so TermsSectionEditor — the
+// live editor, which deliberately doesn't get the rest of
+// TERMS_CONTENT_CSS's rules (see the comment on the block below) — can
+// still reach this one.
+//
+// !important, not just a more specific selector — the rule it overrides,
+// quill.snow.css's own ".ql-snow .ql-editor h5" (specificity 0,2,1), is
+// reachable from two DOM shapes that don't share a common wrapper class:
+// the live editor (TermsSectionEditor) nests .ql-snow/.ql-editor inside its
+// own .terms-quill-wrapper, but the read-only viewer (TermsViewerContent,
+// below) renders a bare `.ql-snow > .ql-editor` with no such wrapper at
+// all. A selector scoped to .terms-quill-wrapper to out-specificity Quill's
+// rule would silently not match in the viewer; !important applies in both
+// without needing to know the ancestor structure. (Confirmed a
+// same-specificity, non-!important version of this rule silently lost to
+// Quill's own in the real app, despite passing in isolation without
+// quill.snow.css loaded alongside it to compete with.)
+export const TERMS_HEADING_SIZE_CSS = `
+  .ql-editor h4 { font-size: 1.15em !important; }
+  .ql-editor h5, .ql-editor h6 { font-size: 1em !important; }
+`;
+
 export const TERMS_CONTENT_CSS = `
   /* Quill's own CSS sets white-space:pre-wrap on .ql-editor itself but never
      resets it back to normal for block children (it only resets margin/
@@ -180,7 +226,22 @@ export const TERMS_CONTENT_CSS = `
      the PDF's .terms-content p (which already does this). */
   .ql-editor p, .ql-editor h1, .ql-editor h2, .ql-editor h3, .ql-editor h4, .ql-editor h5, .ql-editor h6,
   .ql-editor li, .ql-editor blockquote { white-space: normal; }
-  .ql-editor h1, .ql-editor h2, .ql-editor h3, .ql-editor h4, .ql-editor h5, .ql-editor h6 { font-weight: 700; }
+  /* Deliberately NOT forcing font-weight:700 on headings here (an earlier
+     version of this rule did). Root cause, verified directly against this
+     project's real compiled output (vite build, dist/assets/*.css):
+     Tailwind's Preflight resets h1,h2,h3,h4,h5,h6{font-weight:inherit},
+     so a heading's own visible boldness — in BOTH the live editor and here
+     — actually comes from whatever inline <strong>/<b> the pasted content
+     itself carries (or doesn't), never from the <h1-6> tag alone. The live
+     editor never had a rule fighting that, so it already showed exactly
+     what the source content's own formatting says. This rule forcing every
+     heading bold regardless of source content was the one and only thing
+     making the viewer disagree with the editor — e.g. "Auto align"
+     (TermsCondition.jsx's tidyTermsHtml) generates a heading tag for each
+     detected numbered line, and only some of those lines were bold in the
+     original pasted content; forcing them all bold here is what broke
+     "view mode should look exactly like edit mode." */
+  ${TERMS_HEADING_SIZE_CSS}
   /* No height:auto override here on purpose — a CSS rule targeting height
      always beats the HTML height attribute, regardless of specificity, so
      an earlier version of this file forcing height:auto meant a resized
@@ -194,19 +255,48 @@ export const TERMS_CONTENT_CSS = `
      clamp* actually kicking in and disproportionately squashing a
      resized image's height is traded away by not having this rule, which
      is the better trade against a bug that fired on every single reload. */
-  /* list-style-position stays at its default ("outside") here, and
-     padding-left is deliberately left untouched rather than zeroed —
-     Quill's own base CSS already gives every <li> padding-left:1.5em
-     (quill.snow.css), which is exactly the space a native "outside"
-     marker needs to sit in. An earlier version of this rule forced
-     "inside" positioning and zeroed that padding to line the marker up
-     with the text — but "inside" makes the marker part of the text flow,
-     so once a bullet/numbered line wraps, the second line has no reserved
-     indent to fall back on and starts flush against the left edge instead
-     of hanging under the first line's text (the standard Word/Google Docs
-     behavior "outside" gives for free). */
-  .ql-editor ul > li:not([data-list]) { list-style-type: disc; }
-  .ql-editor ol > li:not([data-list]) { list-style-type: decimal; }
+  /* A ::before-generated marker, not list-style-type:disc/decimal — an
+     earlier version of this rule used list-style-type, and every computed
+     style checked out correct (list-style-type:disc, list-item, position:
+     outside, no clipping ancestor — confirmed directly via Chrome DevTools
+     Protocol's CSS.getMatchedStylesForNode against the real running app),
+     yet no marker ever actually painted. Rather than keep chasing why the
+     browser's native list-marker box wasn't rendering in this environment,
+     this switches to the exact technique Quill's own native list items
+     already use successfully in this same app (.ql-ui:before, quill.snow.
+     css) — content-generated via ::before, pulled left with a negative
+     margin into the padding-left space every <li> already reserves — a
+     mechanism fully under this file's own control instead of relying on
+     the browser to paint a marker box correctly.
+     padding-left itself is left untouched (Quill's own base CSS already
+     gives every <li> padding-left:1.5em), and the marker's negative
+     margin-left pulls it back into exactly that reserved space — so a
+     wrapped second line still has a reserved indent to fall back on and
+     hangs under the first line's text, the same "outside"-position benefit
+     the old list-style-type approach was going for (see quill.snow.css's
+     own .ql-ui:before rule, which uses this identical positioning). */
+  .ql-editor ul > li:not([data-list])::before {
+    content: '•';
+    display: inline-block;
+    margin-left: -1.5em;
+    margin-right: 0.3em;
+    text-align: right;
+    white-space: nowrap;
+    width: 1.2em;
+  }
+  .ql-editor ol:not([data-list]) { counter-reset: terms-plain-ol; }
+  .ql-editor ol > li:not([data-list]) {
+    counter-increment: terms-plain-ol;
+  }
+  .ql-editor ol > li:not([data-list])::before {
+    content: counter(terms-plain-ol) '.';
+    display: inline-block;
+    margin-left: -1.5em;
+    margin-right: 0.3em;
+    text-align: right;
+    white-space: nowrap;
+    width: 1.2em;
+  }
   /* Hanging indent (mirrors the PDF's .terms-content p rule): a paragraph's
      first line starts flush left, but a wrapped continuation line aligns
      under that first line's text instead of restarting at the margin.
@@ -216,6 +306,16 @@ export const TERMS_CONTENT_CSS = `
   .ql-editor p[style*="text-align: center"], .ql-editor p[style*="text-align:center"],
   .ql-editor p[style*="text-align: right"], .ql-editor p[style*="text-align:right"],
   .ql-editor p[style*="text-align: justify"], .ql-editor p[style*="text-align:justify"] { padding-left: 0; text-indent: 0; }
+  /* Quill's own base CSS (quill.snow.css) gives table/img zero surrounding
+     margin, so either sits flush against the paragraph right before/after
+     it — mirrored in the PDF's .terms-content rules below. Table is already
+     block-level so vertical margin alone is enough; img is an inline embed
+     by default (quill/formats/image.js), and a plain top/bottom margin does
+     nothing on an inline box, so it's switched to inline-block here first —
+     harmless for an embed that's almost always the only thing on its own
+     line anyway. */
+  .ql-editor table { margin: 14px 0; }
+  .ql-editor img { display: inline-block; margin: 10px 6px; }
 `;
 
 // Keeps the formatting toolbar visible while scrolling through long terms
@@ -252,6 +352,13 @@ export const TERMS_TOOLBAR_THEME_CSS = `
     font-family: inherit;
     font-size: 0.9rem;
   }
+  /* Matches TERMS_CONTENT_CSS's identical rule below (see the comment
+     there) — that one only ever loads in the read-only viewer, never
+     alongside this live-editing instance, so the same spacing needs its
+     own copy here to look consistent while actually typing/inserting a
+     table or image, not just after saving. */
+  .terms-quill-wrapper .ql-editor table { margin: 14px 0; }
+  .terms-quill-wrapper .ql-editor img { display: inline-block; margin: 10px 6px; }
   .terms-quill-wrapper .ql-editor {
     min-height: 180px;
     line-height: 1.7;
@@ -359,8 +466,9 @@ export const TERMS_TOOLBAR_MODULE = [
   [{ color: [] }, { background: [] }],
   [{ list: "ordered" }, { list: "bullet" }, { indent: "-1" }, { indent: "+1" }],
   [{ align: [] }],
-  // ["table"],
-  // ["image"],
+  ["table"],
+  ["image"],
+  // ["tidy"], // "Auto align" button disabled — handler/icon left in place below, just not shown on the toolbar.
 ];
 
 export const TERMS_EDITOR_FORMATS = [

@@ -193,6 +193,192 @@ export function normalizeNonBreakingSpaces(html) {
   return html.replace(/ /g, " ");
 }
 
+// A table row where every cell is blank (no text, no image) — e.g. added
+// from the toolbar and never filled in — has zero rendering height, leaving
+// nothing on screen but its own border stacked against its neighbors': a
+// squashed block of horizontal lines above/below the table with no visible
+// cell content. TermsCondition.jsx's sectionsToHTML strips these too, but
+// only at *save* time — this is the shared render path (every view of
+// Terms & Conditions goes through here: TermsViewer, CommentableHtml, PDF
+// export), so stripping it here also fixes content saved before that
+// existed, or reached here some other way, not just content saved from now
+// on.
+function isTableCellEmpty(cell) {
+  if (cell.querySelector("img")) return false;
+  return (cell.textContent || "").replace(/\u00A0/g, " ").trim().length === 0;
+}
+export function removeEmptyTableRows(container) {
+  container.querySelectorAll("table").forEach((table) => {
+    table.querySelectorAll("tr").forEach((row) => {
+      const cells = Array.from(row.querySelectorAll("td, th"));
+      if (cells.length > 0 && cells.every(isTableCellEmpty)) row.remove();
+    });
+    // A table stripped down to zero rows is its own empty shell — drop it
+    // too, rather than leaving a bare <table style="..."></table> behind.
+    if (table.querySelectorAll("tr").length === 0) table.remove();
+  });
+}
+
+// ============================================================
+// tidyTermsHtml — the "Tidy" toolbar button's transform (TermsCondition.jsx,
+// TermsSectionEditor's modules.toolbar.handlers.tidy). Content pasted from
+// Word/PDFs/webpages typically arrives as a flat run of <p> tags, each
+// wrapped in a <span style="background-color:...;color:...">  carried over
+// from the source document, with section numbers ("1.1 Radiographic
+// Testing (RT)") and bullets ("• Supply of...") as literal typed
+// characters rather than real Quill headings/lists — which is why it
+// doesn't look like a "proper" document: no real indentation, no bullet
+// markers, no heading typography. This only ever touches structure and
+// presentation, never wording — Terms & Conditions is quasi-legal content,
+// so an AI-rewrite approach that could alter wording, even subtly, was
+// deliberately ruled out in favor of this deterministic, byte-for-byte
+// wording-preserving transform.
+// ============================================================
+
+// Every descendant with a style attribute, not just the paragraphs about to
+// be reclassified below — covers table cells and any already-real
+// headings/lists too. Uses the DOM's own CSSStyleDeclaration API rather
+// than a hand-rolled regex against the raw style string, so it's robust to
+// spacing/shorthand variance (Word sometimes emits the `background`
+// shorthand instead of `background-color`). Foreground `color` is
+// deliberately left alone — more conservative default, since an
+// intentionally-colored word/phrase is plausible and shouldn't be silently
+// erased just because most paste-cruft color happens to be boilerplate.
+function stripBackgroundColors(container) {
+  container.querySelectorAll("[style]").forEach((el) => {
+    el.style.removeProperty("background-color");
+    el.style.removeProperty("background");
+    if (el.getAttribute("style").trim() === "") el.removeAttribute("style");
+  });
+}
+
+const BULLET_CHAR_RE = /^[•●▪]\s*/;
+// Anchored to the start of the trimmed text — a stray digit mid-sentence
+// can never match. Requires whitespace after the numeric prefix so "1.1"
+// alone (with nothing following) isn't treated as a heading.
+const NUMBERED_PREFIX_RE = /^(\d+(?:\.\d+)*\.?)\s+(\S.*)$/;
+const getNormalizedText = (el) => (el.textContent || "").replace(/\u00A0/g, " ").trim();
+
+// A body sentence that happens to start with a numeric-looking prefix (e.g.
+// "1.1 million units were produced last year.") is the one false-positive
+// class this can't fully rule out from the numbering pattern alone — these
+// heuristics (capitalized start, no trailing sentence punctuation, a sane
+// length cap) catch the common case. Worst case on a miss is a paragraph
+// cosmetically restyled as a heading with byte-identical wording, undoable
+// with a single Ctrl+Z.
+function looksLikeHeadingTitle(title) {
+  if (title.length === 0 || title.length > 80) return false;
+  if (/[.,;:]$/.test(title)) return false;
+  return /^[A-Z0-9(]/.test(title);
+}
+
+// Only ever inspects <p> tags — real <h1-6>/<ul>/<ol>/<li>/<table>/
+// <blockquote> elements are never reclassified, which is also what makes a
+// second Tidy pass on already-tidied content a no-op (idempotent).
+function classifyBlock(el) {
+  if (!el || el.nodeType !== 1 || el.tagName !== "P") return null;
+  const text = getNormalizedText(el);
+  if (text === "") return el.querySelector("img") ? null : { type: "blank" };
+  if (BULLET_CHAR_RE.test(text)) return { type: "bullet" };
+  const m = text.match(NUMBERED_PREFIX_RE);
+  if (m && looksLikeHeadingTitle(m[2].trim())) {
+    return { type: "heading", depth: m[1].replace(/\.$/, "").split(".").length };
+  }
+  return null;
+}
+
+// Depth 1/2/3+ -> h4/h5/h6, deliberately not h1-h3 — those stay reserved
+// for headings applied manually via the toolbar's own header picker, so
+// auto-generated headings never collide with intentional ones. The literal
+// numbering text ("1.1") is kept as part of the heading's own visible text
+// rather than replaced with Quill's auto-numbered <ol> — preserves the
+// document's own manual-numbering convention exactly as typed.
+function convertToHeading(p, depth) {
+  const tag = depth <= 1 ? "H4" : depth === 2 ? "H5" : "H6";
+  const el = document.createElement(tag);
+  if (p.hasAttribute("style")) el.setAttribute("style", p.getAttribute("style"));
+  while (p.firstChild) el.appendChild(p.firstChild);
+  return el;
+}
+
+// Only ever touches text nodes (TreeWalker(SHOW_TEXT)) — an <img> sitting
+// before or interleaved with the bullet text is never visited here, so it
+// survives untouched in convertToListItem's subsequent child-node move.
+function stripLeadingBulletChar(p) {
+  const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+  let node;
+  // eslint-disable-next-line no-cond-assign
+  while ((node = walker.nextNode())) {
+    if (node.nodeValue.trim() !== "") {
+      node.nodeValue = node.nodeValue.replace(/^[ \u00A0]*[•●▪][ \u00A0]*/, "");
+      break;
+    }
+  }
+}
+
+function convertToListItem(p) {
+  stripLeadingBulletChar(p);
+  const li = document.createElement("li");
+  if (p.hasAttribute("style")) li.setAttribute("style", p.getAttribute("style"));
+  while (p.firstChild) li.appendChild(p.firstChild);
+  return li;
+}
+
+// Single forward walk over a static snapshot of the top-level children.
+// Consecutive bullet paragraphs are grouped into one shared <ul> rather
+// than one <ul> per line. Blank spacer <p><br></p> paragraphs (common
+// between pasted sections) are dropped outright — real headings/lists
+// carry their own CSS margin, so a manual blank line between them is
+// redundant — and dropping one without flushing the list accumulator lets
+// two bullet runs separated only by a spacer merge into a single list.
+function restructureTopLevel(container) {
+  const originalNodes = Array.from(container.childNodes);
+  const fragment = document.createDocumentFragment();
+  let currentList = null;
+  const flushList = () => {
+    if (currentList) {
+      fragment.appendChild(currentList);
+      currentList = null;
+    }
+  };
+
+  originalNodes.forEach((node) => {
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      flushList();
+      fragment.appendChild(node);
+      return;
+    }
+    const cls = classifyBlock(node);
+    if (!cls) {
+      flushList();
+      fragment.appendChild(node);
+      return;
+    }
+    if (cls.type === "blank") return;
+    if (cls.type === "heading") {
+      flushList();
+      fragment.appendChild(convertToHeading(node, cls.depth));
+      return;
+    }
+    if (!currentList) currentList = document.createElement("ul");
+    currentList.appendChild(convertToListItem(node));
+  });
+  flushList();
+
+  container.innerHTML = "";
+  container.appendChild(fragment);
+}
+
+export function tidyTermsHtml(html) {
+  if (!html || html === "<p><br></p>") return html;
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  stripBackgroundColors(container);
+  restructureTopLevel(container);
+  removeEmptyTableRows(container);
+  return container.innerHTML || html;
+}
+
 export function sanitizeTermsHtml(html) {
   if (!html) return "";
   const normalized = normalizeNonBreakingSpaces(html);
@@ -203,6 +389,7 @@ export function sanitizeTermsHtml(html) {
   });
   const container = document.createElement("div");
   container.innerHTML = clean;
+  removeEmptyTableRows(container);
   splitBrSeparatedBlocks(container);
   protectHyphensInTextNodes(container);
   return container.innerHTML;

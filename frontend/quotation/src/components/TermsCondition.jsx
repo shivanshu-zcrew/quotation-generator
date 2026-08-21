@@ -4,7 +4,7 @@ import { Upload, AlertCircle, Trash2 } from "lucide-react";
 import ReactQuill, { Quill } from "react-quill-new";
 import "react-quill-new/dist/quill.snow.css";
 import { CommentableHtml, CommentBadge } from "./ReviewComments";
-import { sanitizeTermsHtml } from "../utils/sanitizeTermsHtml";
+import { sanitizeTermsHtml, removeEmptyTableRows as stripEmptyTableRows, tidyTermsHtml } from "../utils/sanitizeTermsHtml";
 import { uploadTermsImage } from "../utils/imageUpload";
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from "../hooks/useS3Image";
 import { refreshRenderedImages } from "../utils/inlineImages";
@@ -18,6 +18,7 @@ import {
   TERMS_TOOLBAR_THEME_CSS,
   TERMS_TABLE_UI_CSS,
   TERMS_IMAGE_UI_CSS,
+  TERMS_HEADING_SIZE_CSS,
   fixEmptyQuillLines,
 } from "../utils/richTextConfig";
 
@@ -104,24 +105,14 @@ const stripTags = (html) => (html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;
 // every keystroke in the live editor (extractTableSizing/onChange in
 // TermsSectionEditor) — stripping it while still editing would yank a row
 // out from under someone the moment they add it and before they've had a
-// chance to type into it.
-function isTableCellEmpty(cell) {
-  if (cell.querySelector("img")) return false;
-  return stripTags(cell.innerHTML).length === 0;
-}
+// chance to type into it. Shares its actual empty-row/table logic with
+// sanitizeTermsHtml's removeEmptyTableRows (the render-path equivalent of
+// this save-path one — see the comment there) rather than duplicating it.
 function removeEmptyTableRows(html) {
   if (!html || !html.includes("<table")) return html;
   const container = document.createElement("div");
   container.innerHTML = html;
-  container.querySelectorAll("table").forEach((table) => {
-    table.querySelectorAll("tr").forEach((row) => {
-      const cells = Array.from(row.querySelectorAll("td, th"));
-      if (cells.length > 0 && cells.every(isTableCellEmpty)) row.remove();
-    });
-    // A table stripped down to zero rows is its own empty shell — drop it
-    // too, rather than leaving a bare <table style="..."></table> behind.
-    if (table.querySelectorAll("tr").length === 0) table.remove();
-  });
+  stripEmptyTableRows(container);
   return container.innerHTML;
 }
 
@@ -260,6 +251,22 @@ function TableInsertBar({ quill, onClose }) {
     const tableModule = quill.getModule("table");
     if (!tableModule) return;
     quill.focus();
+    // Quill's own insertTable (quill/modules/table.js) inserts the table's
+    // row content at the cursor's raw index with no regard for where on the
+    // current line that is — so clicking "Insert" with the cursor anywhere
+    // in the middle of an existing line (not just at its very start) pulls
+    // whatever text preceded the cursor on that line into the table's first
+    // cell, splitting the line instead of leaving it untouched. Moving the
+    // selection to the END of the current line first (right after its own
+    // trailing newline) before calling insertTable makes the table always
+    // land as a clean new block right after the whole line, regardless of
+    // where in that line the cursor actually was — matching how a "insert
+    // below this line" action is expected to behave, e.g. in Word/Docs.
+    const range = quill.getSelection();
+    if (range) {
+      const [line] = quill.getLine(range.index);
+      if (line) quill.setSelection(line.offset(quill.scroll) + line.length(), 0, "silent");
+    }
     tableModule.insertTable(clamp(rows), clamp(cols));
     onClose();
   };
@@ -851,6 +858,70 @@ function ImageResizeHandles({ quill, imageEl, onDeleted }) {
   );
 }
 
+// Uploads one file through the same S3 pipeline the toolbar's image button
+// uses (compression + presigned PUT — see uploadTermsImage) and inserts it
+// as a tracked embed at `range`. Shared between the toolbar's explicit file
+// picker (handleInlineImageSelected below) and Quill's own built-in
+// drag-and-drop / paste-image handling (the `uploader` module wired up in
+// TermsSectionEditor's `modules`) — without overriding that module, Quill's
+// default uploader handler (quill/modules/uploader.js) reads a dropped or
+// pasted image file straight into a base64 data: URI via FileReader and
+// embeds it verbatim: no compression, no size cap, no data-s3-key (so a
+// later expired-URL refresh has nothing to refresh from — moot for data:
+// URIs, which never expire, but it does mean these images silently skip
+// this app's whole upload/compression pipeline). A single dropped photo
+// straight off a phone can be several MB; base64 grows that by ~33% again,
+// landing directly in the saved termsAndConditions string — multiplied
+// across a few images, that's a multi-MB quotation document, a much slower
+// save/fetch/PDF-export for it, and, in the worst case, a save that fails
+// outright against MongoDB's 16MB document limit. Routing drop/paste
+// through the exact same path as the toolbar button closes that gap:
+// same compression, same size validation, same S3 storage, same tracked
+// data-s3-key.
+async function uploadImageIntoEditor(quill, range, file, { onUploadingChange, onError } = {}) {
+  if (!file.type.startsWith("image/")) {
+    onError?.(`"${file.name}" is not an image.`);
+    return;
+  }
+  onError?.("");
+  onUploadingChange?.(true);
+  try {
+    const key = await uploadTermsImage(file);
+    // A brand-new quotation doesn't exist in the DB yet, so the signed-URL
+    // endpoint's ownership check (canAccessS3Key, quotationController.js)
+    // has nothing to find this key on yet and denies it (403) even though
+    // the upload itself just succeeded — the same gap
+    // handleTermsImagesUpload (QuotationTemplate.jsx, the terms image
+    // gallery) already works around with a local object URL. Mirror that
+    // here: fall back to a local preview of the file just uploaded, still
+    // tagged with its durable data-s3-key, so refreshRenderedImages/
+    // reconcileInlineImages swap in the real signed URL themselves the
+    // first time this content renders again after the quotation is
+    // actually saved (the viewer, a PDF export, or just reopening this
+    // editor) — see the comment on data-s3-key in TermsCondition.jsx.
+    const url = (await convertS3KeyToUrl(key)) || URL.createObjectURL(file);
+    const insertAt = range?.index ?? quill.getLength();
+    quill.insertEmbed(insertAt, "image", url, "user");
+    // insertEmbed only takes a URL — the durable S3 key is attached as a
+    // separate format right after, through Quill's own format API (the
+    // TrackedImage blot registered in richTextConfig.js) rather than a raw
+    // setAttribute call. It has to go through the format system, not just
+    // the DOM: a plain setAttribute is invisible to Quill's own delta
+    // model, and confirmed by inspecting a real saved document, Quill's
+    // internal update cycle (re-deriving its delta from the DOM after any
+    // later format() call, e.g. an ImageResizeHandles resize) silently
+    // drops DOM attributes it doesn't track that way, even though the DOM
+    // mutation looked identical to a tracked one.
+    quill.formatText(insertAt, 1, "data-s3-key", key, "user");
+    quill.setSelection(insertAt + 1, 0, "silent");
+    quill.focus();
+  } catch {
+    onError?.("Failed to upload image. Please try again.");
+  } finally {
+    onUploadingChange?.(false);
+  }
+}
+
 // One Quill instance + its table UI state per section. Kept as its own
 // component (rather than inline in the .map() below) so each section's
 // popover/context-bar state, and the ref to its own Quill instance, stay
@@ -907,10 +978,50 @@ function TermsSectionEditor({ sec, updateSection }) {
           pendingImageRangeRef.current = this.quill.getSelection();
           fileInputRef.current?.click();
         },
+        // Cleans up pasted-content noise (Word/webpage background-color
+        // spans, literal "1.1"/"•" characters standing in for real
+        // headings/lists) — see tidyTermsHtml (sanitizeTermsHtml.js) for
+        // the actual transform. Needs no React state, unlike `table` above,
+        // so it doesn't need the toggleInsertBarRef indirection.
+        tidy() {
+          const quill = this.quill;
+          const tidied = tidyTermsHtml(quill.root.innerHTML);
+          // Resets the history module's merge-window timer so this always
+          // lands as its own dedicated Ctrl+Z step, instead of silently
+          // merging into whatever the user typed just before clicking it.
+          quill.history.cutoff();
+          quill.clipboard.dangerouslyPasteHTML(tidied, "user");
+        },
       },
     },
     table: true,
     clipboard: { matchers: TERMS_CLIPBOARD_MATCHERS },
+    // Overrides Quill's default uploader handler (base64-embeds a dropped/
+    // pasted image directly, no compression or size cap — see the long
+    // comment on uploadImageIntoEditor above) so drag-and-drop and
+    // paste-an-image-from-the-clipboard both go through the same S3 upload
+    // path as the toolbar's image button. setImageUploading/setImageUploadError
+    // are plain useState setters — permanently stable identities, so closing
+    // over them directly here doesn't reintroduce the "new function identity
+    // every render" problem the toggleInsertBarRef indirection above guards
+    // against (that problem is specifically about a closure whose *behavior*
+    // needs to track a changing value across renders; these setters never
+    // change no matter when they're called). `this.quill` is Quill's own
+    // uploader-module binding — same pattern the `image()` toolbar handler
+    // above already uses.
+    uploader: {
+      mimetypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+      handler(range, files) {
+        const quill = this.quill;
+        files.reduce(
+          (chain, file) => chain.then(() => uploadImageIntoEditor(quill, quill.getSelection() || range, file, {
+            onUploadingChange: setImageUploading,
+            onError: setImageUploadError,
+          })),
+          Promise.resolve()
+        );
+      },
+    },
   }));
 
   const refreshInTable = useCallback((quill) => {
@@ -964,6 +1075,19 @@ function TermsSectionEditor({ sec, updateSection }) {
       portalNode.remove();
       setTableBarPortal(null);
     };
+  }, [editor]);
+
+  // Quill's toolbar auto-generates the "tidy" button with no visible label
+  // and aria-label="tidy" (the raw format name) — give it a user-facing
+  // name/tooltip instead. Runs after the toolbar exists (same lookup the
+  // table-bar-portal effect above already uses) rather than trying to set
+  // this via the toolbar's own config, which has no hook for a button's
+  // title/aria-label.
+  useEffect(() => {
+    const tidyButton = editor?.container?.parentElement?.querySelector(".ql-toolbar .ql-tidy");
+    if (!tidyButton) return;
+    tidyButton.title = "Auto align";
+    tidyButton.setAttribute("aria-label", "Auto align");
   }, [editor]);
 
   // Memoized so React attaches this ref exactly once on mount (and detaches
@@ -1048,44 +1172,20 @@ function TermsSectionEditor({ sec, updateSection }) {
     e.target.value = ""; // reset so the same file can be re-picked later
     if (!file || !editor) return;
 
-    if (!file.type.startsWith("image/")) {
-      setImageUploadError(`"${file.name}" is not an image.`);
-      return;
-    }
-
-    setImageUploadError("");
-    setImageUploading(true);
-    try {
-      const key = await uploadTermsImage(file);
-      const url = await convertS3KeyToUrl(key);
-      if (!url) throw new Error("Could not resolve the uploaded image's URL");
-
-      const range = pendingImageRangeRef.current || editor.getSelection() || { index: editor.getLength(), length: 0 };
-      editor.insertEmbed(range.index, "image", url, "user");
-      // insertEmbed only takes a URL — the durable S3 key is attached as a
-      // separate format right after, through Quill's own format API (the
-      // TrackedImage blot registered in richTextConfig.js) rather than a
-      // raw setAttribute call. It has to go through the format system, not
-      // just the DOM: a plain setAttribute is invisible to Quill's own
-      // delta model, and confirmed by inspecting a real saved document,
-      // Quill's internal update cycle (re-deriving its delta from the DOM
-      // after any later format() call, e.g. an ImageResizeHandles resize)
-      // silently drops DOM attributes it doesn't track that way, even
-      // though the DOM mutation looked identical to a tracked one.
-      editor.formatText(range.index, 1, "data-s3-key", key, "user");
-      editor.setSelection(range.index + 1, 0, "silent");
-      editor.focus();
-    } catch {
-      setImageUploadError("Failed to upload image. Please try again.");
-    } finally {
-      setImageUploading(false);
-      pendingImageRangeRef.current = null;
-    }
+    const range = pendingImageRangeRef.current || editor.getSelection() || { index: editor.getLength(), length: 0 };
+    // Cleared unconditionally (not just in the success/failure path below)
+    // so a rejected non-image pick can't leave a stale captured range behind
+    // for the next, unrelated upload to reuse.
+    pendingImageRangeRef.current = null;
+    await uploadImageIntoEditor(editor, range, file, {
+      onUploadingChange: setImageUploading,
+      onError: setImageUploadError,
+    });
   };
 
   return (
     <div className="terms-quill-wrapper" style={{ marginBottom: "1rem", position: "relative" }}>
-      <style>{TERMS_TABLE_UI_CSS}{TERMS_IMAGE_UI_CSS}</style>
+      <style>{TERMS_TABLE_UI_CSS}{TERMS_IMAGE_UI_CSS}{TERMS_HEADING_SIZE_CSS}</style>
       <ReactQuill
         ref={setEditorRef}
         theme="snow"

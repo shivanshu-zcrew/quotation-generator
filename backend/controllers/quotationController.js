@@ -14,6 +14,7 @@ const User = require('../models/user');
 const logger = require('../config/logger');
 const redisService = require('../config/redisService');
 const { sanitizeTerms } = require('../utils/sanitizeTerms');
+const { PDF_PAGE_MARGIN_MM, PAGE_CONTENT_WIDTH_PX } = require('../utils/pdfPaginator');
 
 // Escape regex metacharacters to prevent ReDoS
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -259,30 +260,30 @@ const getBrowser = async () => {
   if (_browser?.isConnected()) return _browser;
 
   try {
-    _browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process',
-      ],
-    });
+    // _browser = await puppeteer.launch({
+    //   headless: true,
+    //   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    //   args: [
+    //     '--no-sandbox',
+    //     '--disable-setuid-sandbox',
+    //     '--disable-dev-shm-usage',
+    //     '--disable-gpu',
+    //     '--no-zygote',
+    //     '--single-process',
+    //   ],
+    // });
 
-  //    _browser = await puppeteer.launch({
-  //   headless: true,
-  //   args: [
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //   ],
-  // });
-  
-    _browser.on('disconnected', () => { 
+         _browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
+
+    _browser.on('disconnected', () => {
       _browser = null;
       logger.warn('Puppeteer browser disconnected');
     });
@@ -456,7 +457,30 @@ function cleanHtmlForZoho(html) {
   if (!html) return '';
   let cleaned = html.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/gi, '');
   cleaned = cleaned.replace(/<img[^>]*>/gi, '');
+
+  // convertHtmlToPlainText's `\s+` -> ' ' collapse (below) swallows a real
+  // newline the same as any other whitespace run, so a table's row/column
+  // breaks have to survive that pass as non-whitespace placeholders and get
+  // turned into real separators afterward -- otherwise a table (this app's
+  // Terms & Conditions table feature) collapses into one undifferentiated
+  // run of words ("A B C D E F" for a 2x3 table), indistinguishable from
+  // ordinary prose once synced into Zoho's plain-text terms field.
+  const CELL_BREAK = String.fromCharCode(1);
+  const ROW_BREAK = String.fromCharCode(2);
+  cleaned = cleaned
+    .replace(/<\/t[hd]>/gi, CELL_BREAK)
+    .replace(/<\/tr>/gi, ROW_BREAK);
+
   let text = convertHtmlToPlainText(cleaned);
+  const cellBreakRe = new RegExp(`\\s*${CELL_BREAK}\\s*`, 'g');
+  const rowBreakRe = new RegExp(`\\s*${ROW_BREAK}\\s*`, 'g');
+  text = text
+    .replace(cellBreakRe, ' | ')
+    .replace(rowBreakRe, '\n')
+    .replace(/ \|\s*\n/g, '\n') // drop a row's trailing " | " before its own line break
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+
   if (text.length > 9500) {
     text = text.substring(0, 9500) + '... (truncated)';
   }
@@ -2583,6 +2607,15 @@ exports.generatePDF = async (req, res) => {
     const browser = await getBrowser();
     page = await browser.newPage();
 
+    // Pinned to the real A4 print content width (see pdfPaginator.js) so
+    // this page's very first layout pass — and therefore every
+    // getBoundingClientRect() measurement the pagination pass below takes —
+    // happens at the same width the content will actually print at. Height
+    // is just "tall enough"; Chromium slices the continuously-laid-out
+    // document into A4 sheets via @page{size:A4} + page.pdf()'s margin
+    // option below regardless of viewport height.
+    await page.setViewport({ width: PAGE_CONTENT_WIDTH_PX, height: 1200, deviceScaleFactor: 1 });
+
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
@@ -2608,7 +2641,25 @@ exports.generatePDF = async (req, res) => {
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 40000 });
     await page.evaluate(() => Promise.all([...document.images].filter((img) => !img.complete).map((img) => new Promise((res) => { img.onload = res; img.onerror = res; })))).catch(() => {});
 
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' } });
+    // A JS-driven "measure everything, force a break wherever a chunk
+    // doesn't fit" pagination pass (runPagination, pdfPaginator.js) was
+    // tried here and reverted — verified empirically (by diffing the exact
+    // production HTML printed with vs. without it) to make pagination
+    // WORSE: forcing break-before:page on an element via JS interacts with
+    // Chromium's print engine differently than content overflowing a page
+    // on its own, and produced large blank gaps a plain, un-forced print of
+    // the same HTML did not have. The real fix for those gaps was simpler
+    // and already landed above: .container's width now matches the actual
+    // A4-minus-margins print area (was 874px, wider than the ~718px
+    // actually printable, which is what made every downstream height
+    // calculation — including Chromium's own — unreliable), and the
+    // scattered break-inside:avoid/page-break-inside:avoid rules that used
+    // to catch unrelated tables (Terms & Conditions' own embedded Quill
+    // tables, the approval-chain footer table) were removed. With the
+    // width corrected, Chromium's native, un-forced pagination already
+    // packs pages tightly on its own — no further intervention needed.
+    const pdfMarginMm = `${PDF_PAGE_MARGIN_MM}mm`;
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: pdfMarginMm, right: pdfMarginMm, bottom: pdfMarginMm, left: pdfMarginMm } });
 
     await page.close();
     page = null;

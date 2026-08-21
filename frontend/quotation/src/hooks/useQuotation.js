@@ -1124,18 +1124,14 @@ const handleSave = useCallback(async () => {
     const taxValue = parseFloat(quotationData.tax) || 0;
     const discountValue = parseFloat(quotationData.discount) || 0;
 
-    let finalTermsAndConditions = "";
-    if (tcSections && tcSections.length > 0) {
-      finalTermsAndConditions = tcSections
-        .map(sec => {
-          let text = "";
-          if (sec.heading?.trim()) text += sec.heading + "\n\n";
-          if (sec.content?.trim()) text += sec.content;
-          return text.trim();
-        })
-        .filter(Boolean)
-        .join("\n\n");
-    }
+    // sectionsToHTML (not a manual heading+content concat) so this save
+    // path gets the same empty-table/empty-row stripping the create path
+    // (QuotationTemplate.jsx/HomeScreen.jsx) already gets — a hand-rolled
+    // version here previously skipped that, so a table added via the
+    // toolbar and left blank (or a blank row left in an otherwise-filled
+    // table) survived every edit-and-save cycle instead of being cleaned
+    // up like it is everywhere else.
+    const finalTermsAndConditions = sectionsToHTML(tcSections);
 
     // Images are uploaded directly to S3 now — send keys only. Legacy
     // imagePaths (old Cloudinary) are preserved if present.
