@@ -676,14 +676,15 @@ async function reconcileInlineImages(editor, originalHtml) {
 }
 
 const MIN_IMAGE_WIDTH_PX = 40;
-// The PDF's own content area is a fixed 874px container with 10px padding,
-// plus the Terms & Conditions section's own 12px padding + 1px border
-// around it (all in pdfGenerator.js) — 874 - 2*10 - 2*12 - 2*1 = 828px is
-// what an image actually has to fit into there. Capped a bit under that
-// (not right at 828) as a margin for anything not accounted for here, so
-// a resize that looks fine in the editor can't end up wider than the PDF
-// page can actually show it.
-const MAX_IMAGE_WIDTH_PX = 800;
+// The PDF's own content area is a fixed 718px container (pdfGenerator.js)
+// with 10px padding, plus the Terms & Conditions section's own 12px
+// padding + 1px border around it — 718 - 2*10 - 2*12 - 2*1 = 672px is what
+// an image actually has to fit into there. The largest a drag-resize (or
+// the initial insert size below) is allowed to reach is capped at 90% of
+// that, not the full 672px, so there's always visible margin around even
+// the largest image the PDF can show, instead of one that exactly touches
+// both edges of the content area.
+const MAX_IMAGE_WIDTH_PX = Math.round(672 * 0.9);
 
 // Corner drag handles shown around an inline image while it's selected (a
 // plain DOM click on the <img> — see TermsSectionEditor's click handler),
@@ -897,6 +898,58 @@ function fileToDataUrl(file) {
   });
 }
 
+// A freshly inserted image renders at its own natural pixel size by
+// default — a photo straight off a phone, or a wide screenshot, is easily
+// wider than the editor's own content area, so it looks like it "covers
+// the whole page" the instant it's dropped in. Scales it down to 60% of
+// its natural size (still large enough to see clearly) the moment it
+// finishes loading, through the exact same imgWidth/imgHeight format
+// commitSize (ImageResizeHandles, below) already uses for a manual drag —
+// so this is just a smaller *starting* size, not a separate size concept;
+// the user can drag it to any other size afterward the normal way. Capped
+// by the same MIN/MAX_IMAGE_WIDTH_PX a manual resize already respects, so
+// an oversized source photo can't produce a starting size wider than the
+// PDF can actually show even at 60%.
+function sizeNewlyInsertedImage(quill, index) {
+  return new Promise((resolve) => {
+    const [blot] = quill.getLeaf(index);
+    const el = blot?.domNode;
+    if (!el || el.tagName !== "IMG") {
+      resolve();
+      return;
+    }
+    const apply = () => {
+      const naturalWidth = el.naturalWidth || el.width;
+      const naturalHeight = el.naturalHeight || el.height;
+      if (!naturalWidth || !naturalHeight) {
+        resolve();
+        return;
+      }
+      const targetWidth = Math.round(
+        Math.min(MAX_IMAGE_WIDTH_PX, Math.max(MIN_IMAGE_WIDTH_PX, naturalWidth * 0.6))
+      );
+      const targetHeight = Math.round(targetWidth * (naturalHeight / naturalWidth));
+      el.setAttribute("width", String(targetWidth));
+      el.setAttribute("height", String(targetHeight));
+      // Re-derives the blot's current index rather than trusting the
+      // captured `index` argument — same reasoning as commitSize below,
+      // since this can run slightly after insertion (waiting on the
+      // image's load event) and the document could, in principle, have
+      // shifted in the meantime.
+      const currentIndex = blot.offset(quill.scroll);
+      quill.formatText(currentIndex, 1, "imgWidth", String(targetWidth), "user");
+      quill.formatText(currentIndex, 1, "imgHeight", String(targetHeight), "user");
+      resolve();
+    };
+    if (el.complete && el.naturalWidth) {
+      apply();
+    } else {
+      el.addEventListener("load", apply, { once: true });
+      el.addEventListener("error", () => resolve(), { once: true });
+    }
+  });
+}
+
 async function uploadImageIntoEditor(quill, range, file, { onUploadingChange, onError } = {}) {
   if (!file.type.startsWith("image/")) {
     onError?.(`"${file.name}" is not an image.`);
@@ -933,6 +986,7 @@ async function uploadImageIntoEditor(quill, range, file, { onUploadingChange, on
     // drops DOM attributes it doesn't track that way, even though the DOM
     // mutation looked identical to a tracked one.
     quill.formatText(insertAt, 1, "data-s3-key", key, "user");
+    await sizeNewlyInsertedImage(quill, insertAt);
     quill.setSelection(insertAt + 1, 0, "silent");
     quill.focus();
   } catch {
