@@ -265,7 +265,29 @@ function TableInsertBar({ quill, onClose }) {
     const range = quill.getSelection();
     if (range) {
       const [line] = quill.getLine(range.index);
-      if (line) quill.setSelection(line.offset(quill.scroll) + line.length(), 0, "silent");
+      if (line) {
+        const target = line.offset(quill.scroll) + line.length();
+        // When the current line is the LAST line in the document, `target`
+        // equals quill.getLength() — one past the very last valid index.
+        // Verified directly (isolated Puppeteer instrumentation, not just
+        // reasoning about it): quill.setSelection() silently clamps any
+        // out-of-range index back inside the current line instead of
+        // erroring, which quietly undid this whole fix for exactly that
+        // case — the table's cells were inserted right before the line's
+        // own closing newline, sweeping the entire line into cell 1 rather
+        // than landing after it. This is also the MOST common case in
+        // practice (a short Terms & Conditions section, or the very first
+        // table added to one). Splitting off a fresh empty line first gives
+        // `target` a real position to land on, exactly mirroring what
+        // already happens for free when a next line already exists — the
+        // original line's own closing newline just gets reused as the new
+        // blank line's closing newline instead, so the original content is
+        // never touched.
+        if (target >= quill.getLength()) {
+          quill.insertText(quill.getLength() - 1, "\n", Quill.sources.USER);
+        }
+        quill.setSelection(target, 0, "silent");
+      }
     }
     tableModule.insertTable(clamp(rows), clamp(cols));
     onClose();

@@ -30,6 +30,20 @@ const escapeHtml = (value) => {
     .replace(/'/g, '&#39;');
 };
 
+// Real rendered pixel width of a string in this PDF's own font stack,
+// measured via an offscreen <canvas> (this whole function runs client-side
+// — see document.createElement usage elsewhere in this file) rather than
+// an estimated per-character-count guess. Used to size the Unit Price/
+// Amount columns to what THIS quotation's actual figures need instead of a
+// single fixed width generous enough for every possible quotation.
+let _measureCanvas = null;
+const measureTextWidth = (text, fontSizePx, fontWeight = 400) => {
+  if (!_measureCanvas) _measureCanvas = document.createElement('canvas');
+  const ctx = _measureCanvas.getContext('2d');
+  ctx.font = `${fontWeight} ${fontSizePx}px 'Segoe UI', Tahoma, sans-serif`;
+  return ctx.measureText(text).width;
+};
+
 /**
  * Safely extract customer name from various data structures
  */
@@ -741,20 +755,46 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   }
 
   // Table header
-  // Unit Price / Amount are widened (and the header labels themselves kept
-  // nowrap) so quotations with values into the millions/billions render
-  // the full unbroken figure — table-layout:fixed locks every row's cell
-  // to these column widths, and the page's global overflow-wrap:break-word
-  // reset otherwise breaks a long unbroken number mid-digit once it no
-  // longer fits (visible on the Grand Total row, which uses a larger font
-  // than the item rows and so needs the most room).
+  // Unit Price / Amount are sized to the widest value THIS quotation
+  // actually displays (measured precisely via measureTextWidth, in the
+  // exact font/size/weight each cell renders with — item rows and the
+  // Subtotal/VAT/Discount rows at 10px/600, the Grand Total row at a
+  // larger 12px/700), rather than a single fixed width generous enough
+  // for every possible quotation regardless of how small its real numbers
+  // are — table-layout:fixed locks every row's cell to these column
+  // widths, and the page's global overflow-wrap:break-word reset would
+  // otherwise break a long unbroken number mid-digit once it no longer
+  // fits, so the computed width always includes this cell's own padding
+  // and a floor wide enough for the column's own header label.
+  const CURRENCY_CELL_PADDING = 16; // matches this row's own 8px + 8px horizontal padding
+  const unitPriceValues = itemsWithImages.map((i) => fmtCurrency(i.unitPrice));
+  const amountValues = [
+    ...itemsWithImages.map((i) => fmtCurrency(i.quantity * i.unitPrice)),
+    fmtCurrency(subtotal),
+  ];
+  if (tax > 0) amountValues.push(fmtCurrency(taxAmt));
+  if (discount > 0) amountValues.push(`-${fmtCurrency(discAmt)}`);
+  const grandTotalWidth = measureTextWidth(fmtCurrency(roundedTotal), 12, 700) + CURRENCY_CELL_PADDING;
+
+  const unitPriceColWidth = Math.ceil(Math.max(
+    60,
+    measureTextWidth('UNIT PRICE', 9, 700) + CURRENCY_CELL_PADDING,
+    ...unitPriceValues.map((v) => measureTextWidth(v, 10, 600) + CURRENCY_CELL_PADDING)
+  ));
+  const amountColWidth = Math.ceil(Math.max(
+    60,
+    measureTextWidth('AMOUNT', 9, 700) + CURRENCY_CELL_PADDING,
+    grandTotalWidth,
+    ...amountValues.map((v) => measureTextWidth(v, 10, 600) + CURRENCY_CELL_PADDING)
+  ));
+
   const thead = `<thead><tr style="background:#0C405A;">
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:40px;white-space:nowrap;">SR#</th>
     <th style="padding:10px 8px;text-align:left;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;">Item Description</th>
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:45px;">Qty</th>
     <th style="padding:10px 8px;text-align:center;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:55px;">Unit</th>
-    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:95px;white-space:nowrap;">Unit Price</th>
-    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:125px;white-space:nowrap;">Amount</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:${unitPriceColWidth}px;white-space:nowrap;">Unit Price</th>
+    <th style="padding:10px 8px;text-align:right;font-size:9px;font-weight:700;color:white;text-transform:uppercase;border:1px solid #0C405A;width:${amountColWidth}px;white-space:nowrap;">Amount</th>
   </tr></thead>`;
 
   const termsImagesHTML = await buildTermsImagesHTML(termsImages);
