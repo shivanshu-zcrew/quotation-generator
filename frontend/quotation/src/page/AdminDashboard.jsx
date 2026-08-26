@@ -201,11 +201,14 @@ const QueryDateBadge = React.memo(({ date, passed }) => (
 ));
 
 // Admin mobile card with updated currency formatting
-const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting }) => {
+const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting, isAdmin }) => {
   const expired  = isExpired(quotation.expiryDate);
   const expiring = !expired && isExpiringSoon(quotation.expiryDate);
   const canAct   = quotation.status === 'ops_approved' || quotation.status === 'pending_admin';
-  const canDelete= DELETABLE.has(quotation.status);
+  // Admins can delete a quotation of any status — the pending/ops_rejected
+  // restriction (DELETABLE) is a non-admin limit only, matching the
+  // backend's own isAdmin bypass in deleteQuotation (quotationController.js).
+  const canDelete= isAdmin || DELETABLE.has(quotation.status);
   const canAward = quotation.status === 'approved' && (quotation.createdBy?.role === 'admin' || quotation.createdBySnapshot?.role === 'admin');
   const queryDatePassed = quotation.queryDate && new Date(quotation.queryDate) < new Date();
   const quoteCurrency = quotation.currency?.code || selectedCurrency;
@@ -254,7 +257,10 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
         <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>Expiry: {fmtDate(quotation.expiryDate)}</span>
       </div>
       <div style={{ fontSize: '0.7rem', color: T.inkFaint, marginBottom: '0.75rem' }}>Created by: {quotation.createdBy?.name || '—'}</div>
-      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
+      {/* Fixed 2-column grid — same reasoning as the desktop table's action
+          cell: up to 4 buttons can show now, and flex-wrap on a narrow
+          mobile card can collapse to one per row instead of pairing up. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.4rem', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
         {canAct && (
           <>
             <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id, quotation.quotationNumber)} icon={Check} label="Approve" size="small" disabled={isApproving} />
@@ -263,7 +269,7 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
         )}
         <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         {canAward && <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => onAward(quotation)} icon={Award} label="Award" size="small" disabled={isAwarding} />}
-        {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onDelete(quotation._id)} icon={Trash2} label="Del" size="small" />}
+        {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onDelete(quotation._id, quotation.status)} icon={Trash2} label="Del" size="small" />}
       </div>
     </div>
   );
@@ -329,7 +335,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   // ── Action state ──────────────────────────────────────────
   const [approveModal, setApproveModal] = useState({ open: false, id: null, quotationNumber: '' });
   const [rejectModal, setRejectModal]   = useState({ open: false, id: null, reason: '' });
-  const [deleteModal, setDeleteModal]   = useState({ open: false, id: null });
+  const [deleteModal, setDeleteModal]   = useState({ open: false, id: null, status: null });
   const [actionLoadingIds, setActionLoadingIds] = useState({});
   const [awardModal, setAwardModal]     = useState({ open: false, quotation: null, busy: false });
 
@@ -522,13 +528,13 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   };
 
   const handleDelete = {
-    open:    useCallback((id) => setDeleteModal({ open: true, id }), []),
-    close:   useCallback(() => setDeleteModal({ open: false, id: null }), []),
+    open:    useCallback((id, status) => setDeleteModal({ open: true, id, status: status || null }), []),
+    close:   useCallback(() => setDeleteModal({ open: false, id: null, status: null }), []),
     confirm: useCallback(async () => {
       setActionLoading(deleteModal.id, 'delete', true);
       try {
         const result = await deleteQuotation(deleteModal.id);
-        if (result?.success) { addToast('Quotation deleted', 'success'); setDeleteModal({ open: false, id: null }); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit }), refreshStats()]); }
+        if (result?.success) { addToast('Quotation deleted', 'success'); setDeleteModal({ open: false, id: null, status: null }); await Promise.all([refreshCompanyQuotations({ status: filters.status, search: filters.search, sortBy: filters.sortBy, sortDir: filters.sortDir, page: currentPage, limit: currentLimit }), refreshStats()]); }
         else addToast(result?.error || 'Failed to delete', 'error');
       } finally { setActionLoading(deleteModal.id, 'delete', false); }
     }, [deleteModal, deleteQuotation, addToast, refreshCompanyQuotations, refreshStats, setActionLoading, filters, currentPage, currentLimit]),
@@ -593,7 +599,9 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
     const expiring = !expired && isExpiringSoon(q.expiryDate);
     const canAct   = q.status === 'ops_approved' || q.status === 'pending_admin';
     const canAward = q.status === 'approved' && (q.createdBy?.role === 'admin' || q.createdBySnapshot?.role === 'admin');
-    const canDelete= DELETABLE.has(q.status);
+    // Admins can delete a quotation of any status — see AdminQuotationCard's
+    // matching comment above.
+    const canDelete= isAdmin || DELETABLE.has(q.status);
     const queryDatePassed = q.queryDate && new Date(q.queryDate) < new Date();
     const createdByName = q.createdBy?.name || q.createdBySnapshot?.name || '—';
     const quoteCurrency = q.currency?.code || selectedCurrency;
@@ -649,7 +657,11 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           )}
         </td>
         <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
-          <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+          {/* Fixed 2-column grid rather than flex-wrap — this column has no
+              explicit width in a 10-column table, so with admins now seeing
+              up to 4 buttons (Approve/Reject/View/Del) it can get squeezed
+              narrow enough that flex-wrap degrades to one button per row. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.35rem', justifyContent: 'center' }}>
             {canAct && (
               <>
                 <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove.open(q._id, q.quotationNumber)} icon={Check} label="Approve" title="Approve" size="small" disabled={isActionLoading(q._id, 'approve')} />
@@ -658,7 +670,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             )}
             <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View" size="small" />
             {canAward && <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAward.open(q)} icon={Award} label="Award" title="Award" size="small" disabled={isActionLoading(q._id, 'award')} />}
-            {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleDelete.open(q._id)} icon={Trash2} label="Del" title="Delete" size="small" disabled={isActionLoading(q._id, 'delete')} />}
+            {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleDelete.open(q._id, q.status)} icon={Trash2} label="Del" title="Delete" size="small" disabled={isActionLoading(q._id, 'delete')} />}
           </div>
         </td>
       </tr>
@@ -694,7 +706,19 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       <ConfirmModal open={rejectModal.open} title="Reject Quotation" message="Provide a reason for rejecting this quotation." confirmLabel="Reject" danger onConfirm={handleReject.confirm} onCancel={handleReject.close} loading={false}>
         <textarea value={rejectModal.reason} onChange={(e) => setRejectModal(p => ({ ...p, reason: e.target.value }))} rows={4} placeholder="Enter rejection reason…" autoFocus style={{ width: '100%', padding: '0.75rem', border: `1.5px solid ${T.line}`, borderRadius: T.radiusSm, fontSize: '0.875rem', fontFamily: FONT_STACK, marginBottom: '0.5rem', resize: 'vertical', outline: 'none', color: T.ink }} />
       </ConfirmModal>
-      <ConfirmModal open={deleteModal.open} title="Delete Quotation" message="This action cannot be undone. The quotation will be permanently removed." confirmLabel="Delete" danger onConfirm={handleDelete.confirm} onCancel={handleDelete.close} loading={isActionLoading(deleteModal.id, 'delete')} />
+      <ConfirmModal open={deleteModal.open} title="Delete Quotation" message="This action cannot be undone. The quotation will be permanently removed." confirmLabel="Delete" danger onConfirm={handleDelete.confirm} onCancel={handleDelete.close} loading={isActionLoading(deleteModal.id, 'delete')}>
+        {deleteModal.status && (
+          DELETABLE.has(deleteModal.status) ? (
+            <div style={{ background: T.accentSoft, border: `1px solid ${T.line}`, borderRadius: T.radiusSm, padding: '0.65rem 0.85rem', fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem' }}>
+              This quotation is currently <strong>{deleteModal.status.replace(/_/g, ' ')}</strong>.
+            </div>
+          ) : (
+            <div style={{ background: '#fdeceb', border: '1px solid #f8c9c5', borderRadius: T.radiusSm, padding: '0.65rem 0.85rem', fontSize: '0.8rem', color: '#8a1f18', marginBottom: '0.5rem' }}>
+              ⚠ This quotation is currently <strong>{deleteModal.status.replace(/_/g, ' ')}</strong> — it's already gone through review. Deleting it removes it entirely, with no way to recover it.
+            </div>
+          )
+        )}
+      </ConfirmModal>
       <AwardModal open={awardModal.open} quotation={awardModal.quotation} onConfirm={handleAward.confirm} onCancel={handleAward.close} loading={awardModal.busy || isActionLoading(awardModal.quotation?._id, 'award')} />
 
       {/* ── HEADER ── */}
@@ -887,7 +911,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                   {(isMobile || uiState.viewMode === 'card') ? (
                     <div style={{ padding: isMobile ? '1rem' : '1.5rem', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2,1fr)', gap: isMobile ? '0.75rem' : '1rem' }}>
                       {safeQ.map((q) => (
-                        <AdminQuotationCard key={q._id} quotation={q} selectedCurrency={selectedCurrency} onView={handleView} onApprove={handleApprove.open} onReject={handleReject.open} onDownload={handleDownload} onDelete={handleDelete.open} onAward={handleAward.open} isExporting={exportingId === q._id} isApproving={isActionLoading(q._id, 'approve')} isRejecting={isActionLoading(q._id, 'reject')} isAwarding={isActionLoading(q._id, 'award')} />
+                        <AdminQuotationCard key={q._id} quotation={q} selectedCurrency={selectedCurrency} onView={handleView} onApprove={handleApprove.open} onReject={handleReject.open} onDownload={handleDownload} onDelete={handleDelete.open} onAward={handleAward.open} isExporting={exportingId === q._id} isApproving={isActionLoading(q._id, 'approve')} isRejecting={isActionLoading(q._id, 'reject')} isAwarding={isActionLoading(q._id, 'award')} isAdmin={isAdmin} />
                       ))}
                     </div>
                   ) : (
