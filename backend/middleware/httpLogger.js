@@ -37,7 +37,15 @@ const requestLogger = (req, res, next) => {
       url: req.originalUrl,
       statusCode: res.statusCode,
       duration: `${duration}ms`,
-      companyId: req.headers['x-company-id']
+      companyId: req.headers['x-company-id'],
+      // Only meaningful with `app.set('trust proxy', 1)` (server.js) — without
+      // it this is nginx's own address for every request, not the real
+      // client. Logged at the same level as the rest of this line (info, not
+      // debug) specifically so it's actually visible in production, where
+      // debug-level logs are filtered out (config/logger.js) — it was
+      // previously only captured in the debug-level request log above,
+      // which meant it was silently never written anywhere in production.
+      ip: req.ip
     });
     
     originalSend.call(this, data);
