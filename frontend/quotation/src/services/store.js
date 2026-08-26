@@ -6,7 +6,7 @@ import {
   customerAPI, itemAPI, quotationAPI, authAPI, adminAPI, opsAPI,
   companyAPI, exchangeRateAPI, getCurrentUser, isAuthenticated,
   setAuthData, clearAuthData, setSelectedCompany as persistSelectedCompany,
-  getSelectedCompany, clearCompanyContext,
+  getSelectedCompany, clearCompanyContext, updateStoredUserName,
 } from './api';
 
 // ==================== UTILITIES ====================
@@ -247,6 +247,17 @@ export const useAppStore = create(
           } finally {
             set(s => ({ operationInProgress: { ...s.operationInProgress, [`deleteUser_${userId}`]: false } }));
           }
+        },
+
+        // Reflects a name sync performed server-side (see updateQuotation/
+        // createQuotation's `updatedUserName` response field) into this
+        // session immediately — patches both the persisted localStorage
+        // copy and the live store, since every other screen reads the
+        // current user's name from one of those two places, not by
+        // re-fetching the account.
+        applyOwnUserNameSync: (name) => {
+          const updated = updateStoredUserName(name);
+          if (updated) set({ user: updated });
         },
 
         handleLogout: () => {
@@ -586,7 +597,11 @@ export const useAppStore = create(
               }
               await get().refetchQuotations();
               await get().refreshDashboardStats();
-              return { success: true, quotation: newQuotation, message: response.data.message, customerContactPersons: response.data.customerContactPersons };
+              return {
+                success: true, quotation: newQuotation, message: response.data.message,
+                customerContactPersons: response.data.customerContactPersons,
+                updatedUserName: response.data.updatedUserName,
+              };
             }
             throw new Error(response?.data?.message || 'Failed to create quotation');
           } catch (error) {
@@ -610,7 +625,11 @@ export const useAppStore = create(
               }));
               await get().refetchQuotations();
               await get().refreshDashboardStats();
-              return { success: true, quotation: updatedQuotation, customerContactPersons: result.data.customerContactPersons };
+              return {
+                success: true, quotation: updatedQuotation,
+                customerContactPersons: result.data.customerContactPersons,
+                updatedUserName: result.data.updatedUserName,
+              };
             }
             throw new Error(result?.data?.message || 'Failed to update quotation');
           } catch (error) {

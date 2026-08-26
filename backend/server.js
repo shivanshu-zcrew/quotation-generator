@@ -15,6 +15,18 @@ const { httpLogger, requestLogger } = require('./middleware/httpLogger');
 
 const app = express();
 
+// nginx (see /etc/nginx/sites-available/quotation.megarme.com on the EC2
+// host) sits directly in front of this process and sets X-Forwarded-For/
+// X-Forwarded-Proto. Without this, Express ignores those headers and
+// req.ip resolves to nginx's own loopback address for every request —
+// which means every rate limiter below (the global 600/min limiter and
+// authRoutes.js's 20-attempts/15min login limiter) keys off ONE shared
+// "IP" for all users combined, instead of limiting each real client
+// independently. `1` trusts exactly one hop (this nginx) rather than the
+// whole X-Forwarded-For chain, since a client could otherwise forge extra
+// hops to spoof req.ip.
+app.set('trust proxy', 1);
+
 // ── Logger setup ───────────────────────────────────────────────────
 // Use HTTP logger middleware
 app.use(httpLogger);
@@ -112,14 +124,21 @@ app.get('/', (req, res) => {
   res.json({ message: 'Quotation System API Running' });
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+// Health check endpoint. Registered at both paths because nginx
+// (sites-available/quotation.megarme.com) only proxies /api/* to this
+// process — bare /health falls through its `location /` block to the
+// frontend's SPA instead, so an uptime monitor pointed at plain /health
+// would only ever confirm the frontend is up, never this backend/its DB
+// connection. /api/health is the one that actually reaches here.
+const healthCheck = (req, res) => {
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
-});
+};
+app.get('/health', healthCheck);
+app.get('/api/health', healthCheck);
 
 // ── Global error handler ──────────────────────────────────────────────────
 app.use((err, req, res, next) => {
@@ -191,7 +210,19 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
     logger.info(`🚀 Server running on port ${PORT}`);
     logger.info(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
-  
+
+  // Node's default keepAliveTimeout (5s) is shorter than the idle-connection
+  // timeout most reverse proxies/load balancers use in front of this server
+  // (commonly 60s, e.g. AWS ALB's default). When the proxy reuses a
+  // keep-alive connection Node has already silently closed on its end, the
+  // proxy sees the connection reset/timeout on an otherwise-healthy request
+  // and returns a bare 502/504 to the client — intermittent, hard to
+  // reproduce, and this is exactly that class of bug. keepAliveTimeout must
+  // exceed the proxy's idle timeout, and Node requires headersTimeout to
+  // exceed keepAliveTimeout.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
   initializeApp().then(() => {
     require('./cron/trnExpiryJob').start();
   });

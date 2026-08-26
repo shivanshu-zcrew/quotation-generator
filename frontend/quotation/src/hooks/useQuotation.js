@@ -31,8 +31,10 @@ export function useQuotation() {
   const { items } = useItems();
   const quotations = useAppStore((state) => state.quotations);
   const updateQuotation = useAppStore((state) => state.updateQuotation);
+  const applyOwnUserNameSync = useAppStore((state) => state.applyOwnUserNameSync);
   const deleteQuotation = useAppStore((state) => state.deleteQuotation);
   const selectedCurrency = useAppStore((state) => state.selectedCurrency);
+  const selectedCompany = useAppStore((state) => state.selectedCompany);
 
   // All useState hooks must be at the top
   const [isEditing, setIsEditing] = useState(false);
@@ -1040,6 +1042,11 @@ export function useQuotation() {
   }, [originalQuotation, signedUrls]);
 
   const validateBeforeSave = useCallback(() => {
+    if (selectedCompany === 'all' || selectedCompany === 'ALL') {
+      showSnack("You have \"All Companies\" selected. Please select a specific company to edit this quotation.", 'error');
+      return false;
+    }
+
     if (!quotationItems.length) {
       showSnack("Add at least one item.", 'error');
       return false;
@@ -1087,7 +1094,7 @@ export function useQuotation() {
     }
 
     return true;
-  }, [quotationItems, quotationData, showSnack]);
+  }, [quotationItems, quotationData, showSnack, selectedCompany]);
 
 // In the handleSave function, update the payload section (around lines 430-470)
 
@@ -1310,6 +1317,13 @@ const handleSave = useCallback(async () => {
       }
 
       showSnack("Quotation updated successfully!", 'success');
+      // The backend syncs the "Name" field back onto the creator's own
+      // account when applicable (see updateQuotation's `updatedUserName`) —
+      // reflect that into this session immediately so the navbar/other
+      // screens show it without requiring a re-login.
+      if (result.updatedUserName) {
+        applyOwnUserNameSync(result.updatedUserName);
+      }
       // Remember this payment terms value for reuse on future quotations —
       // fire-and-forget, must never surface an error or block the already-
       // successful save. There's no dropdown on this edit screen yet (see
@@ -1323,7 +1337,15 @@ const handleSave = useCallback(async () => {
       setNewDocuments([]);
       setFieldErrors({});
     } else {
-      showSnack(result?.error || "Failed to update quotation", 'error');
+      // "Company ID is required" is the backend's raw response when the
+      // x-company-id header is missing/"all" — surface the same friendly
+      // guidance as the pre-flight check above rather than this internal
+      // wording, in case company selection changed mid-edit (e.g. another
+      // tab) and slipped past validateBeforeSave.
+      const message = result?.error === 'Company ID is required'
+        ? 'You have "All Companies" selected. Please select a specific company to edit this quotation.'
+        : (result?.error || "Failed to update quotation");
+      showSnack(message, 'error');
     }
   } catch (err) {
     console.error("Save error:", err);
@@ -1333,7 +1355,7 @@ const handleSave = useCallback(async () => {
   }
 }, [validateBeforeSave, originalQuotation, quotationData, quotationItems, newDocuments,
     internalDocuments, tcSections, termsImages, updateQuotation, showSnack, signedUrls, uploadingImages,
-    customerIdForContacts, selectedTermsTemplateId]);
+    customerIdForContacts, selectedTermsTemplateId, applyOwnUserNameSync]);
 
   const handleDelete = useCallback(async () => {
     if (!window.confirm('Are you sure you want to delete this quotation?')) return;

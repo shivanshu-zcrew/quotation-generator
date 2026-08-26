@@ -297,6 +297,12 @@ const quotationSchema = new mongoose.Schema(
     // References
     ourRef: { type: String, default: "" },
     ourContact: { type: String, default: "" },
+    // Focal point's name, as displayed/edited on this quotation. Defaults to
+    // the creator's account name but can be overridden per-document; kept in
+    // sync with the account name in updateQuotation/createQuotation when the
+    // editor is the quotation's own creator (see resolveScopedCompanyId's
+    // neighboring isCreator checks).
+    ourFocalPoint: { type: String, default: "" },
     // NEW: Our Focal Point Designation (separate from companySnapshot)
     ourFocalPointDesignation: { type: String, default: "" },
     salesManagerEmail: { type: String, default: "" },

@@ -146,6 +146,42 @@ const ReasonBanner = React.memo(({ quotation }) => {
 });
 
 // ============================================================
+// "ALL COMPANIES" EDIT-BLOCKED BANNER
+// ============================================================
+// Editing a quotation always belongs to one specific company, but the
+// header's company selector lets an admin pick "All Companies" (used for
+// list/dashboard views). If that's still selected when they start editing,
+// warn them up front — dismissible per edit session, with a close icon —
+// rather than letting them fill out the form and only find out on Save.
+const AllCompaniesBanner = ({ onDismiss }) => (
+  <div style={{
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: "0.75rem",
+    padding: "0.875rem 1rem",
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    borderRadius: 12,
+    margin: "0.75rem 0",
+  }}>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem" }}>
+      <AlertTriangle size={18} color="#d97706" style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ fontSize: "0.813rem", color: "#92400e", fontWeight: 500, lineHeight: 1.5 }}>
+        You have "All Companies" selected. Please select a specific company from the company switcher to edit this quotation.
+      </span>
+    </div>
+    <button
+      onClick={onDismiss}
+      style={{ background: "transparent", border: "none", cursor: "pointer", padding: 4, flexShrink: 0, color: "#d97706" }}
+      aria-label="Dismiss"
+    >
+      <X size={16} />
+    </button>
+  </div>
+);
+
+// ============================================================
 // REVIEW ACTION BANNER COMPONENT
 // ============================================================
 const ReviewBanner = ({
@@ -446,6 +482,11 @@ export default function ViewQuotationScreen() {
   const [pdfProgress, setPdfProgress] = useState(0);
   const [pdfStep, setPdfStep] = useState('');
   const [showPDFOptions, setShowPDFOptions] = useState(false);
+  const [allCompaniesBannerDismissed, setAllCompaniesBannerDismissed] = useState(false);
+  // Set when the user clicks Edit (or arrives via ?edit=true) while "All
+  // Companies" is selected — blocks entering edit mode and keeps the
+  // warning banner up even though isEditing never becomes true.
+  const [editBlockedByAllCompanies, setEditBlockedByAllCompanies] = useState(false);
 
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
@@ -469,6 +510,20 @@ export default function ViewQuotationScreen() {
   const storeReject = useAppStore(s => s.rejectQuotation);
   const storeOpsApprove = useAppStore(s => s.opsApproveQuotation);
   const storeOpsReject = useAppStore(s => s.opsRejectQuotation);
+  const selectedCompany = useAppStore(s => s.selectedCompany);
+  const isAllCompaniesSelected = selectedCompany === 'all' || selectedCompany === 'ALL';
+
+  // Re-arm the "All Companies" warning banner each time editing starts,
+  // so dismissing it once doesn't silently hide it on a later edit session.
+  useEffect(() => {
+    if (isEditing) setAllCompaniesBannerDismissed(false);
+  }, [isEditing]);
+
+  // Once the user switches off "All Companies" to a specific one, clear the
+  // blocked-edit-attempt flag so the Edit button goes back to working normally.
+  useEffect(() => {
+    if (!isAllCompaniesSelected) setEditBlockedByAllCompanies(false);
+  }, [isAllCompaniesSelected]);
 
   // Item-description text-selection comments staged while a reject/return
   // form is open — same select-text-to-comment interaction as everywhere
@@ -653,13 +708,20 @@ export default function ViewQuotationScreen() {
     if (!originalQuotation || isEditing) return;
     if (searchParams.get('edit') !== 'true') return;
     if (!canEdit()) return;
-    setIsEditing(true);
+    if (isAllCompaniesSelected) {
+      // Don't silently drop into edit mode against "All Companies" — block
+      // it and surface the same warning banner the manual Edit button uses.
+      setEditBlockedByAllCompanies(true);
+      setAllCompaniesBannerDismissed(false);
+    } else {
+      setIsEditing(true);
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete('edit');
       return next;
     }, { replace: true });
-  }, [originalQuotation, isEditing, searchParams, canEdit, setSearchParams, setIsEditing]);
+  }, [originalQuotation, isEditing, searchParams, canEdit, setSearchParams, setIsEditing, isAllCompaniesSelected]);
 
   // Cancel: admin can cancel an approved quotation (revise path).
   // The "Amend" path (cancelling a pre-approval quotation) is hidden for now.
@@ -1085,6 +1147,11 @@ export default function ViewQuotationScreen() {
                         }
                       }
                     });
+                  } else if (isAllCompaniesSelected) {
+                    // Editing is scoped to one company — don't enter edit
+                    // mode against "All Companies", just surface the banner.
+                    setEditBlockedByAllCompanies(true);
+                    setAllCompaniesBannerDismissed(false);
                   } else {
                     // Amendment or regular edit: in-place update
                     setIsEditing(true);
@@ -1174,7 +1241,12 @@ export default function ViewQuotationScreen() {
             </button>
           </div>
         </div>
-        
+
+        {/* "All Companies" selected while editing (or attempting to) — block-and-warn banner */}
+        {(isEditing || editBlockedByAllCompanies) && isAllCompaniesSelected && !allCompaniesBannerDismissed && (
+          <AllCompaniesBanner onDismiss={() => setAllCompaniesBannerDismissed(true)} />
+        )}
+
         {/* Process status — plain-language explanation of where this quotation stands */}
         {!isEditing && getProcessMessage() && (
           <div style={{

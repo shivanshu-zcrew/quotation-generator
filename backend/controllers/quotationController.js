@@ -19,6 +19,17 @@ const { PDF_PAGE_MARGIN_MM, PAGE_CONTENT_WIDTH_PX } = require('../utils/pdfPagin
 // Escape regex metacharacters to prevent ReDoS
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Resolves the company scope for single-document operations. The global
+// header/company selector can leave "all"/"ALL" in the x-company-id header
+// (from list/dashboard views), which is not a real ObjectId — treat it the
+// same as "no company selected" so callers don't pass it into a Mongoose
+// query and blow up with a Cast to ObjectId error.
+const resolveScopedCompanyId = (req, fallback) => {
+  const raw = req.companyId || req.headers['x-company-id'] || fallback;
+  if (!raw || raw === 'all' || raw === 'ALL') return null;
+  return raw;
+};
+
 // ===================== S3 IMPORTS =====================
 const {
   S3Client,
@@ -27,6 +38,17 @@ const {
   GetObjectCommand
 } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const { NodeHttpHandler } = require("@smithy/node-http-handler");
+
+// Neither AWS SDK v3 client below had a request timeout configured — its
+// default NodeHttpHandler has none, so a stalled connection to S3 (network
+// hiccup, S3-side slowness) can hang a request indefinitely instead of
+// failing fast, which is exactly the kind of hang that eventually surfaces
+// upstream as a gateway 504 once some proxy's own timeout gives up waiting.
+const s3RequestHandler = new NodeHttpHandler({
+  connectionTimeout: 5000,
+  requestTimeout: 20000,
+});
 
 // ===================== S3 CLIENT =====================
 const s3Client = new S3Client({
@@ -35,6 +57,7 @@ const s3Client = new S3Client({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
+  requestHandler: s3RequestHandler,
 });
 
 const presignS3Client = new S3Client({
@@ -44,6 +67,7 @@ const presignS3Client = new S3Client({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
   requestChecksumCalculation: "WHEN_REQUIRED",
+  requestHandler: s3RequestHandler,
 });
 
 const S3_BUCKET_NAME = process.env.S3_BUCKET_NAME;
@@ -845,7 +869,7 @@ exports.getQuotation = async (req, res) => {
     if (isAdmin || isOps) {
       query = { _id: req.params.id };
     } else {
-      const companyId = req.companyId || req.headers['x-company-id'] || req.query.companyId;
+      const companyId = resolveScopedCompanyId(req, req.query.companyId);
       if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
       query = { _id: req.params.id, companyId };
     }
@@ -1128,7 +1152,7 @@ exports.createQuotation = async (req, res) => {
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
     tl, trn,  // ← Company's TL and TRN from payload
     customerTaxRegistrationNumber,  // ← Customer's TRN (different from company's trn)
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
+    ourRef, ourContact, ourFocalPoint, salesManagerEmail, paymentTerms, deliveryTerms, ourFocalPointDesignation,
     focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
     quotationImages, termsAndConditions, termsImages, existingTermsImages, internalDocuments, internalDocDescriptions, quotationNumber,
     revisedFrom, revisionNote, termsTemplateId, duplicatedFrom,
@@ -1363,6 +1387,26 @@ exports.createQuotation = async (req, res) => {
     resolvedDuplicatedFrom = duplicatedFrom;
   }
 
+  // The "Name" field in the form's top-right column is the creator's own
+  // name, pre-filled from their account. A brand-new quotation's creator is
+  // always req.user, so unlike updateQuotation there's no ambiguity about
+  // whose account this represents — if they've edited it here, sync it to
+  // their account (User Management) too, since that's where every other
+  // screen reads a user's display name from. Best-effort: a sync failure
+  // must not block quotation creation.
+  let resolvedUserName = req.user.name;
+  if (ourFocalPoint !== undefined) {
+    const trimmedFocalPointName = ourFocalPoint.trim();
+    if (trimmedFocalPointName && trimmedFocalPointName !== req.user.name) {
+      try {
+        await User.findByIdAndUpdate(req.user.id, { name: trimmedFocalPointName }, { runValidators: true });
+        resolvedUserName = trimmedFocalPointName;
+      } catch (err) {
+        logger.warn('Failed to sync focal-point name to user account on quotation create', { error: err.message, userId: req.user.id });
+      }
+    }
+  }
+
   const quotation = new Quotation({
     quotationNumber: resolvedQuotationNumber,
     projectName: projectName?.trim() || '',
@@ -1404,8 +1448,9 @@ exports.createQuotation = async (req, res) => {
     date: date ? new Date(date) : new Date(),
     expiryDate: new Date(expiryDate),
     queryDate: queryDate ? new Date(queryDate) : null,
-    ourRef: ourRef?.trim() || '', 
+    ourRef: ourRef?.trim() || '',
     ourContact: ourContact?.trim() || '',
+    ourFocalPoint: ourFocalPoint?.trim() || resolvedUserName || '',
     ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '',
     salesManagerEmail: salesManagerEmail?.trim() || '',
     paymentTerms: paymentTerms?.trim() || '', 
@@ -1426,7 +1471,7 @@ exports.createQuotation = async (req, res) => {
     termsImages: processedTermsImages,
     internalDocuments: processedInternalDocs,
     createdBy: req.user.id,
-    createdBySnapshot: { name: req.user.name, email: req.user.email, role: req.user.role },
+    createdBySnapshot: { name: resolvedUserName, email: req.user.email, role: req.user.role },
     status: initialStatus,
     storageProvider: 's3',
     revisedFrom: resolvedRevisedFrom,
@@ -1470,12 +1515,12 @@ exports.createQuotation = async (req, res) => {
       : [];
 
     if (requestedEmails.length) {
-      emailService.creatorSubmittedNotifyOps(requestedEmails, quotation, req.user.name, false);
+      emailService.creatorSubmittedNotifyOps(requestedEmails, quotation, resolvedUserName, false);
     } else {
       User.find({ role: 'ops_manager', isActive: true }).select('email').lean()
         .then(ops => {
           const emails = ops.map(o => o.email).filter(e => e);
-          if (emails.length) emailService.creatorSubmittedNotifyOps(emails, quotation, req.user.name, false);
+          if (emails.length) emailService.creatorSubmittedNotifyOps(emails, quotation, resolvedUserName, false);
         })
         .catch(err => logger.warn('[Email] Failed to notify ops of new quotation', { error: err.message }));
     }
@@ -1488,17 +1533,18 @@ exports.createQuotation = async (req, res) => {
       imagesUploaded: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
       termsImagesUploaded: processedTermsImages.length
     },
-    ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons })
+    ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons }),
+    ...(resolvedUserName !== req.user.name && { updatedUserName: resolvedUserName })
   });
 };
 
 exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
-  const companyId = req.companyId || req.headers['x-company-id'];
+  const companyId = resolveScopedCompanyId(req);
   const {
     projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
-    ourRef, ourContact, salesManagerEmail, paymentTerms, deliveryTerms, 
+    ourRef, ourContact, ourFocalPoint, salesManagerEmail, paymentTerms, deliveryTerms,
     tl, trn,  // ← Company's TL and TRN from payload
     customerTaxRegistrationNumber,  // ← Customer's TRN (keep for customer)
     ourFocalPointDesignation, focalPointDesignation, items, taxPercent, discountPercent, notes, remark,
@@ -1843,6 +1889,7 @@ exports.updateQuotation = async (req, res) => {
       }),
       ...(customerDesignation !== undefined && { 'customerSnapshot.designation': customerDesignation?.trim() || '' }),
       ...(customerTradeLicenseNumber !== undefined && { 'customerSnapshot.tradeLicenseNumber': customerTradeLicenseNumber?.trim() || '' }),
+      ...(ourFocalPoint !== undefined && { ourFocalPoint: ourFocalPoint?.trim() || '' }),
       ...(ourFocalPointDesignation !== undefined && { ourFocalPointDesignation: ourFocalPointDesignation?.trim() || '' }),
       ...(focalPointDesignation !== undefined && { 'companySnapshot.focalPointDesignation': focalPointDesignation?.trim() || existingCompanySnapshot.focalPointDesignation || '' }),
       ...(contact !== undefined && { contact: contact?.trim() || '' }),
@@ -1963,6 +2010,26 @@ exports.updateQuotation = async (req, res) => {
     const updated = await Quotation.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
     if (!updated) return res.status(404).json({ message: 'Quotation not found after update' });
 
+    // The "Name" field in the form's top-right column is the editor's own
+    // name, pre-filled from their account. Only sync it back to User
+    // Management when the editor IS this quotation's creator — this field
+    // defaults to whoever created the quotation (see useQuotation.js), so
+    // for a non-creator (admin/ops reviewing someone else's older
+    // quotation) it's just that quotation's own snapshot, never someone
+    // else's account. Best-effort: a sync failure must not fail the save.
+    let updatedUserName = null;
+    if (isCreator && ourFocalPoint !== undefined) {
+      const trimmedFocalPointName = ourFocalPoint.trim();
+      if (trimmedFocalPointName && trimmedFocalPointName !== req.user.name) {
+        try {
+          await User.findByIdAndUpdate(req.user.id, { name: trimmedFocalPointName }, { runValidators: true });
+          updatedUserName = trimmedFocalPointName;
+        } catch (err) {
+          logger.warn('Failed to sync focal-point name to user account after quotation update', { error: err.message, userId: req.user.id });
+        }
+      }
+    }
+
     const populated = await Quotation.findById(updated._id)
       .populate('customerId', 'name email phone address taxTreatment placeOfSupply designation tradeLicenseNumber')
       .populate('createdBy', 'name email designation').populate('opsApprovedBy', 'name email designation')
@@ -2021,7 +2088,8 @@ exports.updateQuotation = async (req, res) => {
         imagesCount: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
         termsImagesCount: finalTermsImages.length
       },
-      ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons })
+      ...(updatedCustomerContactPersons && { customerContactPersons: updatedCustomerContactPersons }),
+      ...(updatedUserName && { updatedUserName })
     });
 
   } catch (err) {
@@ -2092,7 +2160,7 @@ exports.presignItemImageUpload = async (req, res) => {
 exports.updateQueryDate = async (req, res) => {
   try {
     const { queryDate } = req.body;
-    const companyId = req.companyId || req.headers['x-company-id'];
+    const companyId = resolveScopedCompanyId(req);
     if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 
     const quotation = await Quotation.findOne({ _id: req.params.id, companyId });
@@ -2120,7 +2188,7 @@ exports.awardQuotation = async (req, res) => {
   try {
     const { awarded, awardNote } = req.body;
     const quotationId = req.params.id;
-    const companyId = req.companyId || req.headers['x-company-id'];
+    const companyId = resolveScopedCompanyId(req);
 
     if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
     if (typeof awarded !== 'boolean') return res.status(400).json({ success: false, message: '`awarded` (boolean) is required' });
@@ -2659,7 +2727,11 @@ exports.generatePDF = async (req, res) => {
     // width corrected, Chromium's native, un-forced pagination already
     // packs pages tightly on its own — no further intervention needed.
     const pdfMarginMm = `${PDF_PAGE_MARGIN_MM}mm`;
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: pdfMarginMm, right: pdfMarginMm, bottom: pdfMarginMm, left: pdfMarginMm } });
+    // Explicit ceiling (Puppeteer's own default is 30s, same order of
+    // magnitude) so a stuck print job fails fast with a clear error instead
+    // of silently riding the request out toward the frontend's 120s PDF
+    // timeout / any gateway's own timeout in front of this server.
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, timeout: 45000, margin: { top: pdfMarginMm, right: pdfMarginMm, bottom: pdfMarginMm, left: pdfMarginMm } });
 
     await page.close();
     page = null;
@@ -3960,7 +4032,7 @@ exports.cancelQuotation = async (req, res) => {
   try {
     const { id } = req.params;
     const { cancelReason = '' } = req.body;
-    const companyId = req.companyId || req.headers['x-company-id'];
+    const companyId = resolveScopedCompanyId(req);
 
     if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
 

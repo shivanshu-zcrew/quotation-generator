@@ -258,13 +258,54 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// A proxy/load balancer between the browser and the API can occasionally
+// return a bare 502/503/504 (or the connection can just drop, or axios's
+// own 150s timer can fire) — none of these carry a JSON body, so
+// AppError.from/getErrorMessage (store.js) fall through to axios's raw
+// "Request failed with status code 504" and show that verbatim. Sleep
+// helper for the short backoff before the one-shot retry below.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const GATEWAY_TIMEOUT_STATUSES = [502, 503, 504];
+
 // Response interceptor
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 429) {
       console.error('Rate limit hit!', error.response?.data?.message);
       return Promise.reject(new Error('Too many requests. Please wait a moment.'));
+    }
+
+    const status = error.response?.status;
+    const isGatewayTimeout = GATEWAY_TIMEOUT_STATUSES.includes(status);
+    const isClientTimeout = error.code === 'ECONNABORTED';
+    const isNetworkError = !error.response && !isClientTimeout && error.message === 'Network Error';
+
+    if (isGatewayTimeout || isClientTimeout || isNetworkError) {
+      const config = error.config;
+      // Only ever auto-retry a GET — it's the one method safe to replay
+      // blind. A POST/PUT/DELETE that timed out may have already been
+      // applied server-side; silently replaying it risks creating or
+      // mutating data twice, so those always surface the error to the
+      // caller (who already has explicit "Retry"/re-save affordances)
+      // instead of being retried here.
+      const isIdempotentRead = (config?.method || 'get').toLowerCase() === 'get';
+      if (isIdempotentRead && config && !config._retriedAfterTimeout) {
+        config._retriedAfterTimeout = true;
+        try {
+          await sleep(500);
+          return await api(config);
+        } catch {
+          // fall through to the friendly-message rejection below
+        }
+      }
+
+      const friendlyMessage = isGatewayTimeout
+        ? 'The server is taking too long to respond. Please try again in a moment.'
+        : isClientTimeout
+        ? 'The request timed out. Please check your connection and try again.'
+        : 'Unable to reach the server. Please check your internet connection and try again.';
+      return Promise.reject(new Error(friendlyMessage));
     }
 
     if (error.response?.status === 401 && !window.location.pathname.includes("/login")) {
@@ -860,6 +901,19 @@ export const getCurrentUser = () => {
   } catch {
     return null;
   }
+};
+
+// Patches just the name on the persisted session user — used when a
+// quotation save syncs the "Name" field back onto the creator's own
+// account, so the rest of the app (which reads the name from this
+// localStorage copy via getCurrentUser/the store, not from any one
+// quotation) reflects it immediately without requiring a re-login.
+export const updateStoredUserName = (name) => {
+  const current = getCurrentUser();
+  if (!current) return null;
+  const updated = { ...current, name };
+  localStorage.setItem("user", JSON.stringify(updated));
+  return updated;
 };
 
 export const isAuthenticated = () => !!localStorage.getItem("token");

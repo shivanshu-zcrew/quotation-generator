@@ -159,6 +159,7 @@ export default function QuotationTemplate({ customer, selectedItems, selectedCom
 function QuotationTemplateInner({ customer, selectedItems, selectedCompany, selectedCurrency, quotationData: initialQuotationData, onBack }) {
   const navigate = useNavigate();
   const { companies, user } = useAppStore();
+  const applyOwnUserNameSync = useAppStore((state) => state.applyOwnUserNameSync);
   const { addQuotation } = useQuotations();
   
   // Get company details for header display
@@ -935,6 +936,13 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         }
         setTermsImages([]);
         showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
+        // The backend syncs the "Name" field back onto the account when it
+        // differs from the logged-in user's current name (see
+        // createQuotation's `updatedUserName`) — reflect that into this
+        // session immediately so the navbar/other screens show it right away.
+        if (result.updatedUserName) {
+          applyOwnUserNameSync(result.updatedUserName);
+        }
         // Remember this payment terms value for reuse on future quotations —
         // fire-and-forget, the quotation itself already saved successfully
         // and this must never surface an error or block navigation.
@@ -963,7 +971,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       setSaveStep("");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency, uploadingImages]);
+  }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency, uploadingImages, applyOwnUserNameSync]);
 
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
