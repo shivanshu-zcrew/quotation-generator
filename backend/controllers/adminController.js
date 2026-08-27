@@ -156,7 +156,7 @@ exports.getAllOpsQuotations = async (req, res) => {
       toDate,
       page = 1,
       limit = 20,
-      sortBy = 'createdAt',
+      sortBy = 'date',           // quotation's own submitted date, not insertion time
       sortDir = 'desc'
     } = req.query;
 
@@ -806,8 +806,8 @@ exports.getAllQuotationsAdmin = async (req, res) => {
       page = 1,
       limit = 20,
       search = '',
-      sortBy = 'createdAt',     // ← ADD THIS
-      sortDir = 'desc'           // ← ADD THIS
+      sortBy = 'date',           // quotation's own submitted date, not insertion time — see 'Submitted' column
+      sortDir = 'desc'
     } = req.query;
 
     logger.debug('Fetching all quotations for admin', {

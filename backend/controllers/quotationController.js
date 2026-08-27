@@ -630,7 +630,7 @@ exports.getAllQuotations = async (req, res) => {
       if (req.query.to) filter.date.$lte = new Date(req.query.to);
     }
 
-    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'date';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
     // When searching by text, also sort by relevance score so best matches surface first
     const sortObj = req.query.search
@@ -680,7 +680,7 @@ exports.getMyQuotations = async (req, res) => {
       ];
     }
 
-    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'createdAt';
+    const sortField = SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'date';
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1;
     const sortObject = { [sortField]: sortDir, _id: 1 };
 

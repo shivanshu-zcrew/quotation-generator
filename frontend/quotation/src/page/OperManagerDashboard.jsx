@@ -556,7 +556,7 @@ export default function OpsDashboard({ onViewQuotation }) {
   const [activeTab,    setActiveTab]    = useState('all');
   const [searchInput,  setSearchInput]  = useState('');
   const [search,       setSearch]       = useState('');
-  const [sort,         setSort]         = useState({ field: 'createdAt', dir: 'desc' });
+  const [sort,         setSort]         = useState({ field: 'date', dir: 'desc' });
   const [dateFilters, setDateFilters] = useState({ fromDate: '', toDate: '' });
   const [loadingIds,   setLoadingIds]   = useState({});
   const [downloadLoadingId, setDownloadLoadingId] = useState(null);
@@ -648,9 +648,9 @@ export default function OpsDashboard({ onViewQuotation }) {
             page: 1,
             limit: 20,
             status: undefined,
-            search: '', 
-            sortBy: 'createdAt', 
-            sortDir: 'desc' 
+            search: '',
+            sortBy: 'date',
+            sortDir: 'desc'
           }),
           refreshStats()
         ]);
@@ -696,9 +696,9 @@ export default function OpsDashboard({ onViewQuotation }) {
 
   const handleTabChange = useCallback((key) => {
     setActiveTab(key); setSearchInput(''); setSearch('');
-    setSort({ field: 'createdAt', dir: 'desc' });
+    setSort({ field: 'date', dir: 'desc' });
     setUiState(p => ({ ...p, mobileMenuOpen: false }));
-    refreshCompanyQuotations({ page: 1, status: key === 'all' ? undefined : key, search: '', sortBy: 'createdAt', sortDir: 'desc' });
+    refreshCompanyQuotations({ page: 1, status: key === 'all' ? undefined : key, search: '', sortBy: 'date', sortDir: 'desc' });
   }, [refreshCompanyQuotations]);
 
   const handleSort = useCallback((field) => {

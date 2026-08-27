@@ -329,7 +329,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const loadingTimeoutRef = useRef(null);
 
   // ── Filters ───────────────────────────────────────────────
-  const [filters, setFilters] = useState({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc', fromDate: '', toDate: '' });
+  const [filters, setFilters] = useState({ status: null, search: '', sortBy: 'date', sortDir: 'desc', fromDate: '', toDate: '' });
   const [searchInput, setSearchInput] = useState('');
 
   // ── Action state ──────────────────────────────────────────
@@ -357,7 +357,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
       statsLatchRef.current = false;
       tableLatchRef.current = false;
       resetPagination();
-      setFilters({ status: null, search: '', sortBy: 'createdAt', sortDir: 'desc', fromDate: '', toDate: '' });
+      setFilters({ status: null, search: '', sortBy: 'date', sortDir: 'desc', fromDate: '', toDate: '' });
       setSearchInput('');
     }
   }, [selectedCompany, resetPagination]);
@@ -415,10 +415,10 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   // ── Handlers ──────────────────────────────────────────────
   const handleTabChange = useCallback((key) => {
     const newStatus = key === 'all' ? null : key;
-    setFilters(p => ({ ...p, status: newStatus, sortBy: 'createdAt', sortDir: 'desc' }));
+    setFilters(p => ({ ...p, status: newStatus, sortBy: 'date', sortDir: 'desc' }));
     setSearchInput('');
     setUiState(p => ({ ...p, mobileMenuOpen: false }));
-    refreshCompanyQuotations({ status: newStatus, sortBy: 'createdAt', sortDir: 'desc', page: 1, limit: currentLimit, search: '' });
+    refreshCompanyQuotations({ status: newStatus, sortBy: 'date', sortDir: 'desc', page: 1, limit: currentLimit, search: '' });
   }, [refreshCompanyQuotations, currentLimit]);
 
   const handleSearchChange = useCallback((e) => {
