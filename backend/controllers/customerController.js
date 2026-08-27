@@ -478,21 +478,34 @@ exports.createCustomer = async (req, res) => {
     if (company.zohoOrganizationId) {
       try {
         zohoBooksService.setCompany(company._id, company.zohoOrganizationId);
-        zohoResult = await zohoBooksService.createContact({
-          name: customerData.name,
-          companyName: customerData.companyName,
-          email: customerData.email,
-          phone: customerData.phone,
-          address: customerData.address,
-          city: customerData.city,
-          state: customerData.state,
-          zipcode: customerData.zipcode,
-          taxTreatment: customerData.taxTreatment,
-          placeOfSupply: customerData.placeOfSupply,
-          taxRegistrationNumber: customerData.taxRegistrationNumber,
-          currencyCode: customerData.defaultCurrency?.code,
-          contactPersons: customerData.contactPersons
-        });
+
+        // Same reasoning as syncCustomerWithZoho: a contact with this exact
+        // name may already exist in Zoho Books (a real, established
+        // customer, unrelated to this app's own records) — Zoho's create
+        // endpoint rejects that outright instead of returning the existing
+        // contact, which used to fail this entire customer creation.
+        const existing = await zohoBooksService.getAllContacts({ contact_name: customerData.name, bypassCache: true });
+        const exactMatch = existing?.success
+          ? existing.contacts.find(c => c.contact_name?.trim().toLowerCase() === customerData.name.trim().toLowerCase())
+          : null;
+
+        zohoResult = exactMatch
+          ? { success: true, zohoId: exactMatch.contact_id, contact: exactMatch }
+          : await zohoBooksService.createContact({
+              name: customerData.name,
+              companyName: customerData.companyName,
+              email: customerData.email,
+              phone: customerData.phone,
+              address: customerData.address,
+              city: customerData.city,
+              state: customerData.state,
+              zipcode: customerData.zipcode,
+              taxTreatment: customerData.taxTreatment,
+              placeOfSupply: customerData.placeOfSupply,
+              taxRegistrationNumber: customerData.taxRegistrationNumber,
+              currencyCode: customerData.defaultCurrency?.code,
+              contactPersons: customerData.contactPersons
+            });
 
         if (!zohoResult.success) {
           throw new Error(`Zoho creation failed: ${zohoResult.error || 'Unknown error'}`);
@@ -1220,9 +1233,26 @@ exports.syncCustomerWithZoho = async (req, res) => {
     }
 
     const wasNew = !customer.zohoId;
-    const result = customer.zohoId
-      ? await zohoBooksService.updateContact(customer.zohoId, contactData)
-      : await zohoBooksService.createContact(contactData);
+    let result;
+
+    if (customer.zohoId) {
+      result = await zohoBooksService.updateContact(customer.zohoId, contactData);
+    } else {
+      // A contact with this exact name may already exist in Zoho Books —
+      // real, established customers commonly do, unrelated to this app.
+      // Zoho's create endpoint rejects a duplicate name outright rather
+      // than returning the existing contact, so creating blindly here
+      // always failed for any such customer. Search first and link to the
+      // existing contact instead of trying to create a second one.
+      const existing = await zohoBooksService.getAllContacts({ contact_name: customer.name, bypassCache: true });
+      const exactMatch = existing?.success
+        ? existing.contacts.find(c => c.contact_name?.trim().toLowerCase() === customer.name.trim().toLowerCase())
+        : null;
+
+      result = exactMatch
+        ? { success: true, zohoId: exactMatch.contact_id, contact: exactMatch }
+        : await zohoBooksService.createContact(contactData);
+    }
 
     if (result?.success) {
       if (wasNew && result.zohoId) customer.zohoId = result.zohoId;
