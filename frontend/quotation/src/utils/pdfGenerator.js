@@ -3,7 +3,7 @@ import { numberToWords } from './numberToWords';
 import { fmtDate, fmtCurrency } from './formatters';
 import headerImage from '../assets/header.png';
 import { quotationAPI } from '../services/api';
-import { sanitizeTermsHtml, protectHyphenatedWords, preserveRepeatedSpaces, normalizeNonBreakingSpaces } from './sanitizeTermsHtml';
+import { sanitizeTermsHtml, protectHyphenatedWords, preserveRepeatedSpaces, normalizeNonBreakingSpaces, breakLongTokens } from './sanitizeTermsHtml';
 
 import { BASE_URL } from './constants';
 
@@ -548,7 +548,7 @@ const formatTermsText = (text) => {
   // instead of carrying it whole to the next line).
   return cleaned
     .split('\n')
-    .map((line) => `<p>${line.trim() === '' ? '<br>' : protectHyphenatedWords(preserveRepeatedSpaces(normalizeNonBreakingSpaces(line)))}</p>`)
+    .map((line) => `<p>${line.trim() === '' ? '<br>' : protectHyphenatedWords(preserveRepeatedSpaces(breakLongTokens(normalizeNonBreakingSpaces(line))))}</p>`)
     .join('');
 };
 
@@ -897,19 +897,45 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        Puppeteer page that doesn't load that stylesheet — keeps rich-text
        terms content (headings/lists/blockquote/links) looking the same as
        the in-app editor and viewer. */
-    /* Hanging indent: a paragraph's first line starts at the left edge
-       (text-indent cancels the padding), but if it wraps, the continuation
-       line(s) align under that first line's text instead of restarting at
-       the margin — matters for manually-typed "1. ...", "2. ..." points,
-       which are plain paragraphs with no real list semantics to hang off.
-       Skipped for center/right/justify-aligned paragraphs: an asymmetric
-       left-only padding visibly throws off centering/right-edge alignment
-       on any paragraph that actually wraps, and a hanging indent has no
-       meaning for those alignments anyway. */
-    .terms-content p{margin:0 0 6px;white-space:normal;padding-left:1.5em;text-indent:-1.5em;}
-    .terms-content p[style*="text-align: center"],.terms-content p[style*="text-align:center"],
-    .terms-content p[style*="text-align: right"],.terms-content p[style*="text-align:right"],
-    .terms-content p[style*="text-align: justify"],.terms-content p[style*="text-align:justify"]{padding-left:0;text-indent:0;}
+    /* No hanging indent on plain <p> (an earlier version indented wrapped
+       continuation lines under the first line, mirrored from richTextConfig
+       .js's TERMS_CONTENT_CSS — see that file for the same removal). That
+       rule never reached the live Quill editor (this PDF/the read-only
+       viewer are the only places it loaded), so a paragraph's wrapped line
+       sat flush left while typing but shifted in the moment it was
+       exported — a real WYSIWYG mismatch, confirmed directly comparing the
+       editor against an actual PDF export side by side. */
+    .terms-content p{margin:0 0 6px;white-space:normal;}
+    /* Undoes the page's global overflow-wrap:break-word reset (see the
+       *{...} rule above) for prose text specifically. Chromium has a
+       documented quirk where overflow-wrap:break-word combined with
+       text-align:justify makes it prefer splitting a word mid-character
+       over wrapping it whole to the next line, even when the whole word
+       fits — content pasted from a justified Word/PDF source (Quill
+       preserves that alignment as an inline style) hit this constantly,
+       producing PDFs where ordinary words ("Optional" -> "Op"/"tional")
+       were split apart despite looking correct in the live editor, which
+       never loads that global reset. Every genuine break opportunity this
+       relies on is already restored upstream (protectHyphenatedWords/
+       preserveRepeatedSpaces/normalizeNonBreakingSpaces in
+       sanitizeTermsHtml.js), so normal word wrapping is safe here; the
+       narrower .terms-content td/th rule below keeps its own explicit
+       break-word since table columns are fixed-width and can't just push
+       an oversized word to a wider "next line" the way a paragraph can.
+       Also covers every inline formatting tag sanitizeTermsHtml.js allows
+       (span/strong/b/em/i/u/s/a) — overflow-wrap doesn't fall back to an
+       ancestor's value here the way a normal inherited property would:
+       the universal *{...} reset above matches these tags directly, and a
+       directly-matched rule always wins over an inherited one regardless
+       of specificity, so a bold/colored/linked run of text sitting inside
+       one of these tags would otherwise keep breaking mid-word even with
+       its parent <p> fixed above. */
+    .terms-content p,.terms-content li,.terms-content blockquote,
+    .terms-content h1,.terms-content h2,.terms-content h3,
+    .terms-content h4,.terms-content h5,.terms-content h6,
+    .terms-content span,.terms-content strong,.terms-content b,
+    .terms-content em,.terms-content i,.terms-content u,
+    .terms-content s,.terms-content a{overflow-wrap:normal;word-break:normal;}
     .terms-content h1,.terms-content h2,.terms-content h3,.terms-content h4,.terms-content h5,.terms-content h6{margin:10px 0 6px;font-weight:700;color:#0f172a;white-space:normal;}
     .terms-content h1{font-size:18px;} .terms-content h2{font-size:15px;} .terms-content h3{font-size:13px;}
     .terms-content h4{font-size:11px;} .terms-content h5{font-size:10px;} .terms-content h6{font-size:9px;}

@@ -109,6 +109,41 @@ export function protectHyphenatedWords(text) {
   return text.replace(/-(?=[A-Za-z0-9])/g, "-⁠");
 }
 
+// The PDF/print CSS deliberately does NOT set overflow-wrap:break-word on
+// prose text (.terms-content p/li/h1-6/blockquote/span/... in pdfGenerator.js)
+// — Chromium has a documented quirk where that combined with text-align:
+// justify (common on content pasted from a justified Word/PDF source, which
+// Quill preserves as an inline style) makes it split ordinary words mid-
+// character to tighten justification, even when the whole word fits on the
+// next line. Without that CSS safety net, though, a token with NO whitespace
+// anywhere in it has no break opportunity at all and would run straight off
+// the printable page edge — confirmed directly (an isolated Puppeteer PDF
+// export test): text overflowing the page width there isn't just visually
+// clipped, whole characters are missing from the exported PDF's actual text
+// layer, permanently. Realistic prose (even long hyphenated compounds,
+// already handled above) never approaches this length; this only ever fires
+// on pathological input — a long tracking/reference code, a bare URL, or
+// accidentally-deleted spaces. A zero-width space (U+200B) is a real,
+// standards-defined break opportunity, invisible when unused — inserting
+// one every SOFT_BREAK_CHUNK characters restores a safe fallback wrap point
+// for exactly that case without reintroducing overflow-wrap's justify bug:
+// unlike break-word's forced "split anywhere" behavior, a ZWSP is just an
+// ordinary candidate break point to the line-breaking algorithm, so it
+// doesn't get abused for tighter justification the way break-word does.
+const LONG_TOKEN_RE = /\S{60,}/g;
+const SOFT_BREAK_CHUNK = 20;
+export function breakLongTokens(text) {
+  if (!text) return text;
+  return text.replace(LONG_TOKEN_RE, (token) => {
+    let out = "";
+    for (let i = 0; i < token.length; i += SOFT_BREAK_CHUNK) {
+      if (i > 0) out += "​";
+      out += token.slice(i, i + SOFT_BREAK_CHUNK);
+    }
+    return out;
+  });
+}
+
 // HTML always collapses a run of 2+ regular space characters down to a
 // single space, and trims a run of spaces sitting at the very start/end of
 // a block down to nothing — in every browser, unrelated to any CSS here.
@@ -131,8 +166,10 @@ function protectHyphensInTextNodes(container) {
   while ((node = walker.nextNode())) textNodes.push(node);
 
   // Pass 1: repeated spaces and hyphens fully inside one text node.
+  // breakLongTokens runs first, on the raw pasted text, before either of
+  // the others touch it — see its own comment for why it's needed at all.
   textNodes.forEach((n) => {
-    n.nodeValue = protectHyphenatedWords(preserveRepeatedSpaces(n.nodeValue));
+    n.nodeValue = protectHyphenatedWords(preserveRepeatedSpaces(breakLongTokens(n.nodeValue)));
   });
 
   // Pass 2: hyphens sitting at a text-node BOUNDARY. Pasted content (or a

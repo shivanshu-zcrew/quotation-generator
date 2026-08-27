@@ -297,15 +297,16 @@ export const TERMS_CONTENT_CSS = `
     white-space: nowrap;
     width: 1.2em;
   }
-  /* Hanging indent (mirrors the PDF's .terms-content p rule): a paragraph's
-     first line starts flush left, but a wrapped continuation line aligns
-     under that first line's text instead of restarting at the margin.
-     Skipped for center/right/justify — asymmetric left-only padding visibly
-     breaks those alignments once a paragraph actually wraps. */
-  .ql-editor p { padding-left: 1.5em; text-indent: -1.5em; }
-  .ql-editor p[style*="text-align: center"], .ql-editor p[style*="text-align:center"],
-  .ql-editor p[style*="text-align: right"], .ql-editor p[style*="text-align:right"],
-  .ql-editor p[style*="text-align: justify"], .ql-editor p[style*="text-align:justify"] { padding-left: 0; text-indent: 0; }
+  /* No hanging indent on plain <p> here (an earlier version of this rule
+     added one, mirrored in the PDF's .terms-content p — see pdfGenerator.js
+     for the same removal there). It only ever applied in the read-only
+     TermsViewer/PDF, never in the live editor below (TERMS_CONTENT_CSS is
+     deliberately not loaded alongside ReactQuill — see the comment on this
+     export), so a paragraph's wrapped line sat flush left while typing but
+     shifted in under the first line the moment it was saved and viewed or
+     exported — a real WYSIWYG mismatch, confirmed directly against a real
+     PDF export and the in-app viewer side by side. Removed here instead of
+     added to the editor so both places match what's actually typed. */
   /* Quill's own base CSS (quill.snow.css) gives table/img zero surrounding
      margin, so either sits flush against the paragraph right before/after
      it — mirrored in the PDF's .terms-content rules below. Table is already
