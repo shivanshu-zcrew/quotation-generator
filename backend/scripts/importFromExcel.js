@@ -22,6 +22,16 @@
  *   Lost                 → not_awarded
  *   Pending              → pending
  *   Rejected             → rejected
+ *   Cancelled            → cancelled
+ *
+ * Quotation numbering:
+ *   The sheet's "Quote #" is from a different system (e.g. Zoho) and does
+ *   NOT match this app's own format. Each imported quotation gets a fresh
+ *   number generated in the app's real format (<companyCode>-<timestamp>-
+ *   <random3digits>, matching QuotationTemplate.jsx) — the original Quote #
+ *   is preserved in the quotation's `ourRef` field for traceability, and is
+ *   also what re-running this script checks against to skip already-
+ *   imported rows.
  */
 
 const mongoose = require('mongoose');
@@ -60,6 +70,8 @@ const STATUS_MAP = {
   'rejected':     'rejected',
   'not awarded':  'not_awarded',
   'approved':     'approved',
+  'cancelled':    'cancelled',
+  'canceled':     'cancelled',
 };
 
 // ─── Static AED exchange rates (fallback when API is unreachable) ─────────────
@@ -81,7 +93,10 @@ const AED_RATES = {
 
 function mapStatus(raw) {
   if (!raw) return 'approved';
-  return STATUS_MAP[String(raw).toLowerCase().trim()] ?? 'approved';
+  const mapped = STATUS_MAP[String(raw).toLowerCase().trim()];
+  if (mapped) return mapped;
+  console.log(`      ⚠️   Unrecognized status "${raw}" — defaulting to approved. Add it to STATUS_MAP if that's wrong.`);
+  return 'approved';
 }
 
 function parseDate(value) {
@@ -99,6 +114,19 @@ function toNumber(value) {
 
 function round3(n) {
   return Math.round(n * 1000) / 1000;
+}
+
+// Matches the app's own client-side format exactly (see
+// frontend/quotation/src/page/QuotationTemplate.jsx's quotationNumber
+// useState initializer): `<companyCode>-<timestamp>-<random3digits>`. The
+// source spreadsheet's "Quote #" values are from a different system
+// (Zoho's own SAL-QTN-… numbering) and don't match what this app actually
+// generates — `seq` nudges the timestamp forward per row so numbers stay
+// unique even if two rows are processed within the same millisecond.
+function generateQuotationNumber(companyCode, seq) {
+  const timestamp = Date.now() + seq;
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  return `${companyCode}-${timestamp}-${random}`;
 }
 
 /**
@@ -204,13 +232,18 @@ async function run() {
   let imported = 0, skipped = 0, errors = 0;
 
   // ── Process each quotation group ─────────────────────────────────────────
-  for (const quoteNumber of order) {
+  for (let i = 0; i < order.length; i++) {
+    const quoteNumber = order[i];
     const { headerRow, itemRows } = groups.get(quoteNumber);
 
     try {
       // ── Duplicate check ──
+      // Keyed on ourRef (the original historical Quote #), not
+      // quotationNumber — the latter is now freshly generated per run (see
+      // generateQuotationNumber below), so it can never collide with a
+      // prior import attempt and would defeat re-run safety if used here.
       const exists = await Quotation.findOne(
-        { quotationNumber: quoteNumber, companyId: company._id },
+        { ourRef: quoteNumber, companyId: company._id },
         { _id: 1 }
       ).lean();
       if (exists) {
@@ -218,6 +251,8 @@ async function run() {
         skipped++;
         continue;
       }
+
+      const newQuotationNumber = generateQuotationNumber(company.code, i);
 
       // ── Customer ──────────────────────────────────────────────────────────
       const customerName  = String(col(headerRow, 'Customer Name', 'Customer', 'Client', 'CustomerName') || '').trim();
@@ -271,13 +306,40 @@ async function run() {
         if (userCache.has(userKey)) {
           createdByUser = userCache.get(userKey);
         } else {
-          const found = await User.findOne({
-            name:     { $regex: `^${createdByName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+          const escapedName = createdByName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+          let found = await User.findOne({
+            name:     { $regex: `^${escapedName}$`, $options: 'i' },
             isActive: true,
           }).select('_id name email role').lean();
 
+          // Historical exports often only recorded a first name (e.g.
+          // "Nitish") while real accounts are saved with a full name (e.g.
+          // "Nitish Kumar") — fall back to "starts with this as a whole
+          // first word" before giving up to admin. Only auto-resolve when
+          // exactly one account matches; multiple matches are genuinely
+          // ambiguous and left for manual resolution rather than guessing.
+          let ambiguous = false;
+          if (!found) {
+            const candidates = await User.find({
+              name:     { $regex: `^${escapedName}\\b`, $options: 'i' },
+              isActive: true,
+            }).select('_id name email role').lean();
+
+            if (candidates.length === 1) found = candidates[0];
+            else if (candidates.length > 1) ambiguous = true;
+          }
+
           createdByUser = found || adminUser;
-          if (!found) console.log(`      ⚠️   User "${createdByName}" not found — using admin`);
+          if (!found) {
+            console.log(
+              ambiguous
+                ? `      ⚠️   "${createdByName}" matches multiple users — using admin. Resolve manually if needed.`
+                : `      ⚠️   User "${createdByName}" not found — using admin`
+            );
+          } else if (found.name.toLowerCase() !== userKey) {
+            console.log(`      ℹ️   "${createdByName}" matched to full name "${found.name}"`);
+          }
           userCache.set(userKey, createdByUser);
         }
       }
@@ -415,7 +477,8 @@ async function run() {
           focalPointDesignation: '',
         },
         currency,
-        quotationNumber: quoteNumber,
+        quotationNumber: newQuotationNumber,
+        ourRef:          quoteNumber, // original historical Quote # — kept for traceability and re-run de-duplication
         customerId:      customer._id,
         customerSnapshot: {
           name:          customerName,
@@ -462,7 +525,7 @@ async function run() {
       // ── Save (or preview) ─────────────────────────────────────────────────
       if (DRY_RUN) {
         console.log(
-          `  🔵  ${quoteNumber.padEnd(22)} | ${customerName.padEnd(28)} | ${currInfo.code} ${finalTotal.toFixed(2).padStart(12)} | ${items.length} item(s) | ${status}`
+          `  🔵  ${quoteNumber} → ${newQuotationNumber} | ${customerName.padEnd(28)} | ${currInfo.code} ${finalTotal.toFixed(2).padStart(12)} | ${items.length} item(s) | ${status}`
         );
         imported++;
         continue;
@@ -470,7 +533,7 @@ async function run() {
 
       await Quotation.create(doc);
       console.log(
-        `  ✅  ${quoteNumber.padEnd(22)} | ${customerName.padEnd(28)} | ${currInfo.code} ${finalTotal.toFixed(2).padStart(12)} | ${items.length} item(s) | ${status}`
+        `  ✅  ${quoteNumber} → ${newQuotationNumber} | ${customerName.padEnd(28)} | ${currInfo.code} ${finalTotal.toFixed(2).padStart(12)} | ${items.length} item(s) | ${status}`
       );
       imported++;
 
