@@ -90,10 +90,16 @@ async function run() {
   }
 
   // ── Step 1: sync every distinct not-yet-Zoho-linked customer ───────────
-  const customersById = new Map();
-  for (const q of targets) {
-    if (q.customerId?._id) customersById.set(q.customerId._id.toString(), q.customerId);
-  }
+  // quotation.customerId comes back already populated into a full object by
+  // the Quotation schema's own pre-find hook (same as companyId/createdBy),
+  // using a FIXED field selection that doesn't include zohoId — an explicit
+  // .populate('customerId', ...) here can't override that. Re-fetch each
+  // customer directly instead, so zohoId is actually read correctly rather
+  // than always coming back undefined (which made every customer look
+  // unsynced regardless of their real state).
+  const customerIds = [...new Set(targets.map(q => q.customerId?._id?.toString()).filter(Boolean))];
+  const freshCustomers = await Customer.find({ _id: { $in: customerIds } });
+  const customersById = new Map(freshCustomers.map(c => [c._id.toString(), c]));
   const unsynced = [...customersById.values()].filter(c => !c.zohoId);
 
   console.log(`👥  Distinct customers referenced: ${customersById.size}`);
