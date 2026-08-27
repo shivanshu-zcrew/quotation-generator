@@ -36,7 +36,16 @@ const companyArg = (() => {
   return i !== -1 ? args[i + 1] : null;
 })();
 
-const normalize = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+// Loose normalize — beyond case/whitespace, also strips common legal
+// suffixes and a trailing " - 1"/" - 2" disambiguator (the app's own
+// pattern for "this name already exists" during customer creation), so
+// e.g. "Descon Engineering Ltd" and "DESCON ENGINEERING" group together.
+const normalize = (s) => s.toLowerCase()
+  .replace(/[.,\-–—]/g, ' ')
+  .replace(/\b(llc|l l c|fze|fzco|fzc|ltd|limited|co|company|inc|the)\b/g, ' ')
+  .replace(/\s*-?\s*\d+\s*$/, '')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 async function run() {
   if (!companyArg) {
