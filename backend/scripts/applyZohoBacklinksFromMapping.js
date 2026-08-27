@@ -93,7 +93,10 @@ async function run() {
     }
 
     // ── Link the customer first (only once per distinct customer) ────────
-    const customerId = quotation.customerId?.toString();
+    // quotation.customerId comes back already populated into a full object
+    // (Quotation schema's pre-find hook auto-populates it, same as
+    // companyId/createdBy) — not a raw ObjectId, so it needs unwrapping.
+    const customerId = quotation.customerId?._id?.toString();
     if (customerId && !customersDone.has(customerId)) {
       customersDone.add(customerId);
       const customer = await Customer.findById(customerId);
