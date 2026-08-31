@@ -4,6 +4,7 @@ import { fmtDate, fmtCurrency } from './formatters';
 import headerImage from '../assets/header.png';
 import { quotationAPI } from '../services/api';
 import { sanitizeTermsHtml, protectHyphenatedWords, preserveRepeatedSpaces, normalizeNonBreakingSpaces, breakLongTokens } from './sanitizeTermsHtml';
+import { extractPrimaryFontFamily } from './richTextConfig';
 
 import { BASE_URL } from './constants';
 
@@ -799,6 +800,10 @@ export const buildPDFHTML = async (quotation, options = {}) => {
 
   const termsImagesHTML = await buildTermsImagesHTML(termsImages);
   const formattedTermsText = formatTermsText(await resolveInlineImages(termsAndConditions));
+  const documentFontFamily = extractPrimaryFontFamily(formattedTermsText);
+  const bodyFontFamily = documentFontFamily
+    ? `${documentFontFamily}, 'Segoe UI', Tahoma, sans-serif`
+    : `'Segoe UI', Tahoma, sans-serif`;
 
   // Company footer
   const companyInfo = companySnapshot;
@@ -865,7 +870,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
   <meta charset="UTF-8">
   <style>
     *{margin:0;padding:0;box-sizing:border-box;overflow-wrap:break-word;word-wrap:break-word;}
-    body{font-family:'Segoe UI',Tahoma,sans-serif;background:white;color:#1f2937;line-height:1.6;}
+    body{font-family:${bodyFontFamily};background:white;color:#1f2937;line-height:1.6;}
     /* 718px = the real A4-minus-10mm-margins print content width (see
        PAGE_CONTENT_WIDTH_PX in backend/utils/pdfPaginator.js). The old
        874px value was WIDER than the actual printable area, so every

@@ -14,6 +14,7 @@ import { validateQuantity, validatePrice, validatePercentage } from '../utils/qt
 import { fmtDate, fmtCurrency } from '../utils/formatters';
 import { useAppStore } from '../services/store';
 import { validatePhoneNumber } from '../utils/quotationUtils';
+import { extractPrimaryFontFamily } from '../utils/richTextConfig';
 
 // ============================================================
 // CONSTANTS
@@ -248,6 +249,7 @@ const styles = {
     fontSize: '0.8125rem',
     color: '#6b7280',
     lineHeight: '1.4',
+    whiteSpace: 'pre-wrap',
   },
   imageGrid: {
     marginTop: '0.75rem',
@@ -903,6 +905,19 @@ export default function QuotationLayout({
   const { selectedCurrency } = useCompanyCurrency();
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
 
+  // Mirrors pdfGenerator.js's own extraction (see richTextConfig.js) so the
+  // on-screen quotation — both while creating/editing and in the read-only
+  // view — matches the exported PDF: a font picked in the Terms &
+  // Conditions toolbar becomes the whole document's font here too, not just
+  // the Terms & Conditions text it was applied to.
+  const documentFontFamily = useMemo(() => {
+    for (const section of tcSections || []) {
+      const font = extractPrimaryFontFamily(section?.content);
+      if (font) return font;
+    }
+    return null;
+  }, [tcSections]);
+
   // Review-comment props shared by CommentableText/CommentBadge instances,
   // keyed by target so callers just spread `commentsFor('item', qi.id)`.
   // For item targets while a reject/return review is active (lineCommentMode),
@@ -1025,10 +1040,12 @@ export default function QuotationLayout({
   const taxPresets = getTaxPresets();
 
   const hasSavedTax = (Number(quotationData.tax) || 0) > 0 || (Number(taxAmount) || 0) > 0;
-  const hasSavedDiscount = (Number(quotationData.discount) || 0) > 0 || (Number(discountAmount) || 0) > 0;
- 
-  const showTaxSection = taxPresets.length > 0 || hasSavedTax || hasSavedDiscount;
-  const showTaxRow = showTaxSection || hasSavedTax;
+
+  // VAT is only offered when the customer's tax treatment yields presets (or
+  // a tax value was already saved before the customer's treatment changed).
+  // Discount is independent of VAT registration and must always be editable.
+  const showVatField = taxPresets.length > 0 || hasSavedTax;
+  const showTaxRow = showVatField;
 
   const defaultTaxValue = useMemo(() => {
     if (taxPresets.length === 0) {
@@ -1521,7 +1538,8 @@ export default function QuotationLayout({
       customerTaxTreatment={customerTaxTreatment}
       customerPlaceOfSupply={customerPlaceOfSupply}
       customerContactPersons={customerContactPersons}
-      showTaxSection={showTaxSection}
+      documentFontFamily={documentFontFamily}
+      showVatField={showVatField}
       showTaxRow={showTaxRow}
       taxPresets={taxPresets}
       defaultTaxValue={defaultTaxValue}
@@ -1556,7 +1574,7 @@ export default function QuotationLayout({
   }
 
   return (
-    <div className="quotation-content" style={styles.container}>
+    <div className="quotation-content" style={{ ...styles.container, ...(documentFontFamily ? { fontFamily: documentFontFamily } : {}) }}>
       <div style={styles.headerImageContainer}>
         <img src={headerImage} alt="Company Header" style={styles.headerImage} />
       </div>
@@ -1660,25 +1678,27 @@ export default function QuotationLayout({
         <span style={{ fontWeight: '500', color: '#374151' }}>{amountInWords}</span>
       </div>
 
-      {isEditing && showTaxSection && (
+      {isEditing && (
         <div className="no-print" style={styles.taxSection}>
           <h4 style={styles.taxSectionTitle}>Tax & Discount</h4>
           <div style={styles.taxGrid}>
-            <div>
-              <label style={styles.inputLabel}>VAT (%)</label>
-              <select
-                onChange={handleTaxChange}
-                value={quotationData.tax?.toString() ?? defaultTaxValue}
-                style={inputStyle}
-              >
-                {taxPresets.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              {headerErrors.tax && <div style={styles.fieldError}>⚠ {headerErrors.tax}</div>}
-            </div>
+            {showVatField && (
+              <div>
+                <label style={styles.inputLabel}>VAT (%)</label>
+                <select
+                  onChange={handleTaxChange}
+                  value={quotationData.tax?.toString() ?? defaultTaxValue}
+                  style={inputStyle}
+                >
+                  {taxPresets.map((preset) => (
+                    <option key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+                {headerErrors.tax && <div style={styles.fieldError}>⚠ {headerErrors.tax}</div>}
+              </div>
+            )}
             <div>
               <label style={styles.inputLabel}>Discount (%)</label>
               <ValidatedInput

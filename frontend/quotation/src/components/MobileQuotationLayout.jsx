@@ -744,7 +744,7 @@ const MobileQuotationLayout = ({
   customerTaxTreatment = 'non_vat_registered',
   customerPlaceOfSupply = 'Dubai',
   customerContactPersons = [],
-  showTaxSection = false,
+  showVatField = false,
   taxPresets = [],
   defaultTaxValue = '0',
   handleTaxChange,
@@ -775,6 +775,7 @@ const MobileQuotationLayout = ({
   onEditComment,
   onResolveComment,
   onDeleteComment,
+  documentFontFamily,
 }) => {
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'error' });
 
@@ -865,7 +866,7 @@ const MobileQuotationLayout = ({
   const displayCurrency = selectedCurrency || quotationData.currency?.code || 'AED';
  
   return (
-    <div style={styles.container}>
+    <div style={{ ...styles.container, ...(documentFontFamily ? { fontFamily: documentFontFamily } : {}) }}>
       {/* Header Image */}
       <div style={styles.headerImage}>
         <img src={headerImage} alt="Header" style={styles.headerImageImg} />
@@ -981,7 +982,7 @@ const MobileQuotationLayout = ({
           <span>Subtotal ({displayCurrency})</span>
           <span>{fmtCurrency(subtotal)}</span>
         </div>
-        {showTaxSection && (
+        {showVatField && (
           <div style={styles.totalRow}>
             <span>VAT ({quotationData.tax || 0}%)</span>
             <span>{fmtCurrency(taxAmount)}</span>
@@ -1002,24 +1003,26 @@ const MobileQuotationLayout = ({
       </div>
 
       {/* Tax & Discount Edit */}
-      {isEditing && showTaxSection && (
+      {isEditing && (
         <div style={styles.taxEditSection}>
           <h4 style={styles.taxTitle}>Tax & Discount</h4>
           <div style={styles.taxGrid}>
-            <div>
-              <label style={styles.inputLabel}>VAT (%)</label>
-              <select
-                onChange={handleTaxChange}
-                value={quotationData.tax?.toString() ?? defaultTaxValue}
-                style={inputStyle}
-              >
-                {taxPresets.map(preset => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {showVatField && (
+              <div>
+                <label style={styles.inputLabel}>VAT (%)</label>
+                <select
+                  onChange={handleTaxChange}
+                  value={quotationData.tax?.toString() ?? defaultTaxValue}
+                  style={inputStyle}
+                >
+                  {taxPresets.map(preset => (
+                    <option key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label style={styles.inputLabel}>Discount (%)</label>
               <ValidatedInput
@@ -1295,6 +1298,7 @@ const styles = {
   itemDescription: {
     fontSize: '0.8rem',
     color: '#6b7280',
+    whiteSpace: 'pre-wrap',
   },
   itemRow: {
     display: 'flex',

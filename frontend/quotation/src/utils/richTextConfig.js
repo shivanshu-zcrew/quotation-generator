@@ -423,7 +423,27 @@ export const TERMS_TOOLBAR_THEME_CSS = `
     padding-left: 6px;
   }
   .terms-quill-wrapper .ql-picker.ql-header { width: 88px; }
-  .terms-quill-wrapper .ql-picker.ql-font { width: 92px; }
+  /* 92px (this app's original override, narrower than Quill's own 108px
+     default) only ever fit the raw whitelist values Quill would show on its
+     own (single words like "serif"/"arial") — TERMS_PICKER_LABEL_CSS above
+     relabels them as human-readable text, and the two-word labels ("Sans
+     Serif", "Courier New") don't fit in 92px, so the label's ::before text
+     visibly spills out past the box's right edge/border instead of wrapping
+     or clipping (neither Quill's base CSS nor this file set overflow
+     handling on the label). Widened to fit "Courier New", the longest
+     label, plus the dropdown arrow Quill renders inside the label on the
+     right; text-overflow/nowrap/hidden added as a safety net so any future,
+     even-longer label degrades to a clean ellipsis instead of overflowing
+     again. */
+  .terms-quill-wrapper .ql-picker.ql-font { width: 132px; }
+  .terms-quill-wrapper .ql-picker.ql-font .ql-picker-label::before {
+    display: inline-block;
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
   .terms-quill-wrapper .ql-picker.ql-size { width: 52px; }
   .terms-quill-wrapper .ql-picker-options {
     border-radius: 8px;
@@ -458,6 +478,21 @@ const EMPTY_BLOCK_RE = /<(p|h[1-6]|li)((?:\s+[^>]*)?)><\/\1>/g;
 export function fixEmptyQuillLines(html) {
   if (!html) return html;
   return html.replace(EMPTY_BLOCK_RE, "<$1$2><br></$1>");
+}
+
+// Quill writes a font picked from the toolbar's Font picker as an inline
+// font-family style on the affected text (FontStyle above). Both the PDF
+// export and the on-screen quotation (create/edit + view) want that same
+// choice to drive the WHOLE document's font, not just the Terms &
+// Conditions text it was literally applied to — pulling out the first
+// font-family found in the Terms & Conditions HTML is the one signal both
+// places key off of. Shared here so pdfGenerator.js's PDF template and
+// QuotationLayout.jsx's on-screen rendering can't drift into two different
+// extraction rules.
+const FONT_FAMILY_RE = /font-family:\s*([^;"']+)/i;
+export function extractPrimaryFontFamily(html) {
+  const match = html && html.match(FONT_FAMILY_RE);
+  return match ? match[1].trim() : null;
 }
 
 export const TERMS_TOOLBAR_MODULE = [
