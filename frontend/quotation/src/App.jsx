@@ -15,6 +15,7 @@ import OpsDashboard from './page/OperManagerDashboard';
 import UserManagementScreen from './page/UserManagementScreen';
 import UserQuotationStatsPage from './page/UserQuotationStatsPage';
 import CompanyManagementScreen from './page/CompanyManagementScreen';
+import UpdateAvailableBanner from './components/UpdateAvailableBanner';
 
 const getUser = () => useAppStore.getState().user;
 
@@ -221,6 +222,7 @@ export default function App() {
   useInitializeApp();
   return (
     <BrowserRouter>
+      <UpdateAvailableBanner />
       <AppContent />
     </BrowserRouter>
   );

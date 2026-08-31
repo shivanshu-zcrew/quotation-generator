@@ -906,36 +906,43 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        exported — a real WYSIWYG mismatch, confirmed directly comparing the
        editor against an actual PDF export side by side. */
     .terms-content p{margin:0 0 6px;white-space:normal;}
-    /* Undoes the page's global overflow-wrap:break-word reset (see the
-       *{...} rule above) for prose text specifically. Chromium has a
-       documented quirk where overflow-wrap:break-word combined with
-       text-align:justify makes it prefer splitting a word mid-character
-       over wrapping it whole to the next line, even when the whole word
-       fits — content pasted from a justified Word/PDF source (Quill
-       preserves that alignment as an inline style) hit this constantly,
-       producing PDFs where ordinary words ("Optional" -> "Op"/"tional")
-       were split apart despite looking correct in the live editor, which
-       never loads that global reset. Every genuine break opportunity this
-       relies on is already restored upstream (protectHyphenatedWords/
-       preserveRepeatedSpaces/normalizeNonBreakingSpaces in
-       sanitizeTermsHtml.js), so normal word wrapping is safe here; the
-       narrower .terms-content td/th rule below keeps its own explicit
-       break-word since table columns are fixed-width and can't just push
-       an oversized word to a wider "next line" the way a paragraph can.
-       Also covers every inline formatting tag sanitizeTermsHtml.js allows
-       (span/strong/b/em/i/u/s/a) — overflow-wrap doesn't fall back to an
-       ancestor's value here the way a normal inherited property would:
-       the universal *{...} reset above matches these tags directly, and a
+    /* Default: keep break-word as a real safety net, undoing the page's
+       global overflow-wrap:break-word reset (the *{...} rule above) only
+       for word-break — never overflow-wrap. A previous version of this
+       rule turned overflow-wrap off for ALL prose unconditionally, which
+       went too far: it was meant to fix one specific Chromium quirk (see
+       the justify-scoped rule below) but ended up removing the only thing
+       stopping a line that's simply too wide — for any reason a bold run,
+       a substituted fallback font, anything not anticipated here — from
+       running straight off the printable page instead of wrapping. Every
+       genuine break opportunity is already restored upstream
+       (protectHyphenatedWords/preserveRepeatedSpaces/
+       normalizeNonBreakingSpaces/breakLongTokens in sanitizeTermsHtml.js),
+       so break-word here only ever engages as a last resort, same as the
+       narrower .terms-content td/th rule below already does for table
+       cells. Also covers every inline formatting tag sanitizeTermsHtml.js
+       allows (span/strong/b/em/i/u/s/a) — overflow-wrap doesn't fall back
+       to an ancestor's value the way a normal inherited property would: the
+       universal *{...} reset above matches these tags directly, and a
        directly-matched rule always wins over an inherited one regardless
-       of specificity, so a bold/colored/linked run of text sitting inside
-       one of these tags would otherwise keep breaking mid-word even with
-       its parent <p> fixed above. */
-    .terms-content p,.terms-content li,.terms-content blockquote,
-    .terms-content h1,.terms-content h2,.terms-content h3,
-    .terms-content h4,.terms-content h5,.terms-content h6,
-    .terms-content span,.terms-content strong,.terms-content b,
-    .terms-content em,.terms-content i,.terms-content u,
-    .terms-content s,.terms-content a{overflow-wrap:normal;word-break:normal;}
+       of specificity. */
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a){overflow-wrap:break-word;word-break:normal;}
+    /* Chromium has a documented quirk where overflow-wrap:break-word
+       combined with text-align:justify makes it prefer splitting a word
+       mid-character over wrapping it whole to the next line, even when the
+       whole word fits — content pasted from a justified Word/PDF source
+       (Quill preserves that alignment as an inline style on the block
+       element) hit this constantly, producing PDFs where ordinary words
+       ("Optional" -> "Op"/"tional") were split apart despite looking
+       correct in the live editor, which never loads that global reset.
+       Scoped narrowly to justified blocks (and everything inside them,
+       since Quill only ever writes text-align on the block element itself,
+       never on a nested span) rather than turned off everywhere — that was
+       the actual bug in the previous version of this rule. */
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"],
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"],
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"] *,
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"] *{overflow-wrap:normal;word-break:normal;}
     .terms-content h1,.terms-content h2,.terms-content h3,.terms-content h4,.terms-content h5,.terms-content h6{margin:10px 0 6px;font-weight:700;color:#0f172a;white-space:normal;}
     .terms-content h1{font-size:18px;} .terms-content h2{font-size:15px;} .terms-content h3{font-size:13px;}
     .terms-content h4{font-size:11px;} .terms-content h5{font-size:10px;} .terms-content h6{font-size:9px;}
