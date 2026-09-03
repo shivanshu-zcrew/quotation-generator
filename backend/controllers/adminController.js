@@ -6,6 +6,7 @@ const { Customer } = require('../models/customer');
 const User = require('../models/user');
 const emailService = require('../utils/emailService');
 const redisService = require('../config/redisService');
+const { isAdminCreatedQuotation } = require('./quotationController');
 
 // Invalidate all stats caches affected by a quotation status change
 const invalidateQuotationStats = (quotation) => {
@@ -92,6 +93,16 @@ exports.getOpsPendingQuotations = async (req, res) => {
     });
 
     const query = { status: 'pending' };
+    // Matches getAllOpsQuotations' own exclusion (and applied the same way,
+    // unconditionally rather than only when the caller is ops_manager) —
+    // this is "the ops queue" regardless of who's looking at it. Without
+    // this, an admin-created quotation that cycles back to plain 'pending'
+    // (cancel -> 'amended' -> editing resets it to 'pending', see
+    // updateQuotation) would resurface here and hand an ops manager the ID
+    // they'd otherwise have to guess to reach opsApproveQuotation/
+    // opsRejectQuotation, even though every other ops-facing list/detail
+    // endpoint keeps admin-created quotations invisible to them.
+    query['createdBySnapshot.role'] = { $ne: 'admin' };
     const opsCompanyId = req.headers['x-company-id'];
     if (opsCompanyId && mongoose.Types.ObjectId.isValid(opsCompanyId)) {
       query.companyId = new mongoose.Types.ObjectId(opsCompanyId);
@@ -338,6 +349,18 @@ exports.opsApproveQuotation = async (req, res) => {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
+    // Same stealth rule quotationController.js enforces everywhere else —
+    // admin-created quotations are invisible to ops managers no matter how
+    // they're reached. Status alone can't stand in for this: an admin's own
+    // quotation can legitimately cycle back to 'pending' (cancel -> 'amended'
+    // -> editing it resets to 'pending' — see updateQuotation), at which
+    // point it would otherwise satisfy this endpoint's own status check
+    // below and let an ops manager who'd retained/guessed the ID silently
+    // approve it out from under the admin who created it.
+    if (req.user.role === 'ops_manager' && isAdminCreatedQuotation(existing)) {
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
+
     if (existing.status !== 'pending') {
       logger.warn(`Cannot approve quotation with status ${existing.status}`, {
         quotationId: existing._id,
@@ -445,6 +468,18 @@ exports.opsRejectQuotation = async (req, res) => {
         quotationId: req.params.id,
         userId: req.user?.id
       });
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
+
+    // Same stealth rule quotationController.js enforces everywhere else —
+    // admin-created quotations are invisible to ops managers no matter how
+    // they're reached. Status alone can't stand in for this: an admin's own
+    // quotation can legitimately cycle back to 'pending' (cancel -> 'amended'
+    // -> editing it resets to 'pending' — see updateQuotation), at which
+    // point it would otherwise satisfy this endpoint's own status check
+    // below and let an ops manager who'd retained/guessed the ID silently
+    // reject it out from under the admin who created it.
+    if (req.user.role === 'ops_manager' && isAdminCreatedQuotation(existing)) {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 

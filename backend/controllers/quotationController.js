@@ -184,8 +184,49 @@ const getSignedFileUrl = async (key, expiresIn = 3600) => {
 // the bucket just by knowing/guessing its key.
 const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// How long presignItemImageUpload's Redis record of "who reserved this key"
+// stays valid — long enough to cover a realistic edit session between
+// uploading an image and actually clicking Save (matches the 3600s
+// expiresIn convention every signed-URL fetch in this file already uses),
+// short enough that a key abandoned mid-edit (create/update never
+// completes) doesn't stay accessible to its uploader forever either — see
+// canAccessS3Key's `!owner` branch.
+const PENDING_UPLOAD_TTL_SECONDS = 3600;
+
+// Admin-created quotations skip ops review entirely and are exclusively
+// admin's business — ops managers must never see, read, write, or
+// otherwise act on them, not even by guessing/bookmarking an ID (this is
+// the same rule getQuotation originally established). Centralized here so
+// every ops_manager-facing endpoint in this file enforces the exact same
+// condition instead of each hand-copying it — three call sites had already
+// silently drifted from it (still granting ops managers full read/write
+// access) before this helper existed, simply because the check was never
+// in one place to begin with.
+const isAdminCreatedQuotation = (quotation) => quotation?.createdBySnapshot?.role === 'admin';
+// Exported so adminController.js's ops-facing endpoints (opsApproveQuotation/
+// opsRejectQuotation) can enforce the exact same rule instead of a separate
+// hand-copy — see those functions for why a quotation admin created can
+// still reach `status: 'pending'` (cancel → 'amended' → edit resets to
+// 'pending') and so isn't safely excluded by status alone.
+exports.isAdminCreatedQuotation = isAdminCreatedQuotation;
+
+// Sends the 404 itself (mirroring getQuotation's original "reads as doesn't
+// exist, not exists-but-hidden" stealth design) and reports whether it did,
+// so a call site is just `if (denyAdminCreatedToOps(req, quotation, res))
+// return;` right after the quotation is fetched — one line instead of
+// re-typing the condition, status code and message shape at every endpoint.
+// `plain: true` matches the two oldest call sites' `{ message }` response
+// shape (no `success` field); everything added since uses the newer
+// `{ success: false, message }` shape other endpoints in this file already
+// use, so this keeps both without silently normalizing either one.
+const denyAdminCreatedToOps = (req, quotation, res, { plain = false } = {}) => {
+  if (req.user.role !== 'ops_manager' || !isAdminCreatedQuotation(quotation)) return false;
+  res.status(404).json(plain ? { message: 'Quotation not found' } : { success: false, message: 'Quotation not found' });
+  return true;
+};
+
 const canAccessS3Key = async (key, req) => {
-  if (req.user.role === 'admin' || req.user.role === 'ops_manager') return true;
+  if (req.user.role === 'admin') return true;
 
   const owner = await Quotation.findOne({
     $or: [
@@ -201,9 +242,54 @@ const canAccessS3Key = async (key, req) => {
       // them fail to render both in the app and in generated PDFs.
       { termsAndConditions: { $regex: escapeRegExp(key) } },
     ],
-  }).select('companyId createdBy').lean();
+  }).select('companyId createdBy createdBySnapshot revisedFrom').lean();
 
-  if (!owner) return false; // unrecognized key — deny by default
+  // Not attached to any saved quotation yet — either a brand-new upload
+  // still sitting in an open, unsaved edit session (item/T&C image upload
+  // hits S3 and this signed-URL lookup immediately, before the quotation is
+  // ever saved — see uploadItemImage's caller in useQuotation.js), or a
+  // genuinely unrecognized key. An earlier version of this simply allowed
+  // any authenticated user through here (reasoning: keys are unguessable),
+  // which was true for a guessing attacker but missed a worse case: an
+  // upload can end up orphaned forever — not just for the few minutes of an
+  // edit session — if the surrounding create/update request fails or is
+  // abandoned after the S3 PUT succeeds (createQuotation uploads images
+  // before it ever constructs/saves the Quotation document), or if
+  // deleteQuotation's best-effort S3 cleanup silently fails. An orphaned
+  // key then never gets an `owner` and would stay open to any authenticated
+  // user, any role, any company, indefinitely — including another
+  // company's sensitive attachment. Check who actually reserved this key
+  // instead (presignItemImageUpload records it) — this is the one
+  // remaining case that must be denied by default rather than allowed by
+  // default, since there's no `owner` document whose role/company to
+  // reason about at all.
+  if (!owner) {
+    const uploaderId = await redisService.get(`pending-upload:${key}`);
+    return !!uploaderId && uploaderId === req.user.id;
+  }
+
+  if (isAdminCreatedQuotation(owner)) {
+    // Mirrors getQuotation's isOriginalCreator carve-out: an admin-created
+    // quotation is still visible to the ORIGINAL creator when it's actually
+    // a revision admin made on their behalf after cancelling their prior
+    // quotation (see getQuotation's isOriginalCreator comment) — that
+    // visibility is intentional there, and ops managers are deliberately
+    // NOT included in it, same as there. Without this, the quotation page
+    // would load fine for that creator but every one of its images/
+    // documents would 403, since they all resolve through this function.
+    if (req.user.role !== 'ops_manager' && owner.revisedFrom) {
+      const original = await Quotation.findById(owner.revisedFrom).select('createdBy').lean();
+      if (original?.createdBy?.toString() === req.user.id) return true;
+    }
+    // Without this, this S3-key lookup would happily hand back the actual
+    // image/document bytes to anyone in the same company (ops managers
+    // unconditionally, everyone else via the companyId match below) even
+    // though they can never find or open the quotation itself through the
+    // normal getQuotation/getAllOpsQuotations paths.
+    return false;
+  }
+
+  if (req.user.role === 'ops_manager') return true;
 
   // The schema's pre(/^find/) hook auto-populates companyId/createdBy on
   // every query including this one, so these come back as full objects,
@@ -898,13 +984,10 @@ exports.getQuotation = async (req, res) => {
     // Admin-created quotations (skip ops review, created straight to
     // 'pending_admin') are only visible to admins — ops managers and
     // creators shouldn't see them at all, not even by guessing/bookmarking
-    // the URL. 404 (not 403) so it reads as "doesn't exist" rather than
-    // revealing that something is being withheld. This does NOT apply to
-    // the original creator viewing a revision admin made on their behalf
-    // (isOriginalCreator) — that visibility is intentional, see above.
-    if (isOps && quotation.createdBySnapshot?.role === 'admin') {
-      return res.status(404).json({ message: 'Quotation not found' });
-    }
+    // the URL. This does NOT apply to the original creator viewing a
+    // revision admin made on their behalf (isOriginalCreator) — that
+    // visibility is intentional, see above.
+    if (denyAdminCreatedToOps(req, quotation, res, { plain: true })) return;
 
     // If this quotation is cancelled, tell the client whether it's already
     // been revised, so the UI can hide/disable "Edit & Revise" instead of
@@ -1597,6 +1680,17 @@ exports.updateQuotation = async (req, res) => {
 
     if (!isAdmin && !isOpsManager && !isCreator) return res.status(403).json({ message: 'Not authorized to update this quotation' });
 
+    // Ahead of every other check below (including the rejected-quotation
+    // check next, which would otherwise leak the quotation's status to an
+    // ops manager who should never even know it's there) — unconditional on
+    // status. An earlier version of this only blocked the 'pending_admin'
+    // status specifically, which covers an admin-created quotation only in
+    // its initial state — once admin rejects their own quotation (moving it
+    // to 'rejected', still generically editable below), that narrow check no
+    // longer matched and an ops manager who'd guessed/retained the ID could
+    // silently overwrite the content of a quotation they could never view.
+    if (denyAdminCreatedToOps(req, existing, res, { plain: true })) return;
+
     const currentStatus = existing.status;
 
     // Once a reviewer rejects/returns a quotation, only the creator (or admin)
@@ -1627,8 +1721,22 @@ exports.updateQuotation = async (req, res) => {
         newStatus = 'pending_admin';
       } else { newStatus = currentStatus; }
     } else if (isOpsManager) {
+      // Saving an edit must never itself be the approval — approval is a
+      // separate, explicit action (opsApproveQuotation/opsRejectQuotation in
+      // adminController.js, surfaced as the "Approve & Forward to Admin" /
+      // "Return for Revision" buttons on ViewQuotationScreen's review
+      // banner). An earlier version of this branch set newStatus to
+      // 'ops_approved' here, so simply saving an edit silently forwarded the
+      // quotation to admin as a side effect — the ops manager lost the
+      // ability to keep revising (ops_approved isn't in editableStatuses
+      // below) and got no chance to actually click Approve, and admins were
+      // never even notified since that email only fires from the dedicated
+      // approve endpoint. Keep the status unchanged on a plain save so the
+      // review banner (which only shows for status 'pending') stays put and
+      // the ops manager can save as many times as needed, then approve
+      // separately when actually ready.
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
-        newStatus = 'ops_approved';
+        newStatus = 'pending';
       } else if (currentStatus === 'rejected' && isCreator) {
         newStatus = 'pending';
       } else if (currentStatus === 'ops_approved') {
@@ -1640,6 +1748,16 @@ exports.updateQuotation = async (req, res) => {
       } else if (currentStatus === 'rejected') {
         newStatus = 'pending';
       } else { newStatus = currentStatus; }
+    }
+
+    // Once a quotation reaches admin for final review — whether ops-approved
+    // and escalated, or self-created straight to pending_admin — only admin
+    // may edit it. 'pending_admin' stays in editableStatuses below for the
+    // creator (who may still need to fix something before admin acts), so
+    // this needs its own check ahead of that shared gate rather than just
+    // removing 'pending_admin' from the list outright.
+    if (isOpsManager && currentStatus === 'pending_admin') {
+      return res.status(400).json({ message: `Cannot edit quotation with status: ${currentStatus}` });
     }
 
     // 'cancelled'/'amended' are editable by all three roles (creator/ops/admin) so include them here.
@@ -2148,7 +2266,21 @@ exports.presignItemImageUpload = async (req, res) => {
     const expiresIn = 300;
     // Use the checksum-free presign client (requestChecksumCalculation: "WHEN_REQUIRED")
     const uploadUrl = await getSignedUrl(presignS3Client, command, { expiresIn });
- 
+
+    // Records who reserved this key so canAccessS3Key can recognize a
+    // pre-save preview request (the frontend fetches a signed URL for the
+    // key immediately after upload, before the quotation is ever saved —
+    // see useQuotation.js's image upload handler) as belonging to THIS
+    // uploader specifically, not "any authenticated user" — see the
+    // PENDING_UPLOAD_TTL comment on canAccessS3Key for why this matters.
+    // Best-effort: if Redis is unavailable this silently no-ops (matching
+    // every other redisService call in this file) and the pre-save preview
+    // just won't resolve until the key is actually attached to a saved
+    // quotation, same as if the key were never recognized at all — it does
+    // not fail the upload itself.
+    redisService.set(`pending-upload:${key}`, req.user.id, PENDING_UPLOAD_TTL_SECONDS)
+      .catch((err) => logger.warn('Failed to record pending-upload ownership', { key, error: err.message }));
+
     return res.status(200).json({ success: true, uploadUrl, key, expiresIn });
   } catch (err) {
     logger.error(`Presign image upload error: ${err.message}`);
@@ -3626,6 +3758,10 @@ exports.addInternalDocuments = async (req, res) => {
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to add documents to this quotation' });
     }
+    // This is a write path: without it, an ops manager who can no longer
+    // even see an admin-created quotation could still silently attach
+    // documents to it.
+    if (denyAdminCreatedToOps(req, quotation, res)) return;
 
     const processedDocuments = await uploadMultipleInternalDocumentsFromBase64(
       documents,
@@ -3652,7 +3788,7 @@ exports.addInternalDocuments = async (req, res) => {
 exports.getInternalDocuments = async (req, res) => {
   try {
     const { id } = req.params;
-    const quotation = await Quotation.findById(id).select('internalDocuments quotationNumber company.code createdBy').lean();
+    const quotation = await Quotation.findById(id).select('internalDocuments quotationNumber company.code createdBy createdBySnapshot').lean();
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const isAdmin = req.user.role === 'admin';
@@ -3662,6 +3798,7 @@ exports.getInternalDocuments = async (req, res) => {
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
     }
+    if (denyAdminCreatedToOps(req, quotation, res)) return;
 
     res.status(200).json({
       success: true,
@@ -3679,7 +3816,7 @@ exports.getInternalDocuments = async (req, res) => {
 exports.getInternalDocumentById = async (req, res) => {
   try {
     const { id, docId } = req.params;
-    const quotation = await Quotation.findById(id).select('internalDocuments').lean();
+    const quotation = await Quotation.findById(id).select('internalDocuments createdBy createdBySnapshot').lean();
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const isAdmin = req.user.role === 'admin';
@@ -3688,6 +3825,12 @@ exports.getInternalDocumentById = async (req, res) => {
 
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to view internal documents' });
+    }
+    // Mirrors getQuotation's stealth rule for admin-created quotations — 404
+    // (not the 403 above) so this reads as "doesn't exist" rather than
+    // "exists but you can't have it," same as opening the quotation itself.
+    if (isOps && isAdminCreatedQuotation(quotation)) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
     const document = quotation.internalDocuments?.find(doc => doc._id.toString() === docId);
@@ -3768,6 +3911,14 @@ exports.addReviewComment = async (req, res) => {
     const isOps = req.user.role === 'ops_manager';
     if (!isAdmin && !isOps) {
       return res.status(403).json({ success: false, message: 'Only ops manager or admin can add review comments' });
+    }
+    // Mirrors getQuotation's stealth rule for admin-created quotations — 404
+    // (not the 403 above) so this reads as "doesn't exist" rather than
+    // "exists but you can't touch it." This is a write path: without it, an
+    // ops manager who can no longer even see an admin-created quotation
+    // could still silently attach a review comment to it.
+    if (isOps && isAdminCreatedQuotation(quotation)) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
     quotation.reviewComments.push({
@@ -3885,6 +4036,12 @@ exports.getInternalDocumentDownloadUrl = async (req, res) => {
     if (!isAdmin && !isOps && !isCreator) {
       return res.status(403).json({ success: false, message: 'Not authorized to download internal documents' });
     }
+    // Mirrors getQuotation's stealth rule for admin-created quotations — 404
+    // (not the 403 above) so this reads as "doesn't exist" rather than
+    // "exists but you can't have it," same as opening the quotation itself.
+    if (isOps && isAdminCreatedQuotation(quotation)) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
+    }
 
     const document = quotation.internalDocuments?.id(docId);
     if (!document) return res.status(404).json({ success: false, message: 'Document not found' });
@@ -3992,16 +4149,19 @@ exports.getBatchSignedUrls = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Maximum 20 keys per batch' });
     }
 
-    const urls = {};
+    // Parallelized, not a sequential for-await loop — canAccessS3Key now
+    // does a real DB lookup per key for every role (it used to short-circuit
+    // instantly for ops_manager; see the function's own comments for why
+    // that changed), so up to 20 keys awaited one at a time here would mean
+    // up to 40 serial round-trips (access check + signed-URL fetch) per
+    // batch request instead of running independently.
+    const entries = await Promise.all(keys.map(async (key) => {
+      if (!key || !(await canAccessS3Key(key, req))) return null;
+      const signedUrl = await getSignedFileUrl(key, expiresIn);
+      return signedUrl ? [key, signedUrl] : null;
+    }));
 
-    for (const key of keys) {
-      if (key && (await canAccessS3Key(key, req))) {
-        const signedUrl = await getSignedFileUrl(key, expiresIn);
-        if (signedUrl) {
-          urls[key] = signedUrl;
-        }
-      }
-    }
+    const urls = Object.fromEntries(entries.filter(Boolean));
 
     res.json({ success: true, urls });
   } catch (err) {
@@ -4038,6 +4198,17 @@ exports.cancelQuotation = async (req, res) => {
 
     const quotation = await Quotation.findOne({ _id: id, companyId });
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    // Mirrors getQuotation's stealth rule for admin-created quotations — 404
+    // ahead of every other check below (including the status checks, which
+    // would otherwise leak the quotation's existence and current status to
+    // an ops manager who should never even know it's there). This is a
+    // write path: without it, an ops manager could still silently cancel/
+    // pause an admin-created quotation they can no longer see.
+    if (req.user.role === 'ops_manager' && isAdminCreatedQuotation(quotation)) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
+    }
+
     if (quotation.status === 'cancelled' || quotation.status === 'amended') {
       return res.status(400).json({ success: false, message: 'Quotation is already cancelled' });
     }

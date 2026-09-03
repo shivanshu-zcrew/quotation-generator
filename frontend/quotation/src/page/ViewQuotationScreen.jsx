@@ -189,6 +189,7 @@ const ReviewBanner = ({
   onApprove, onReject, isApproving, isRejecting,
   showRejectForm, setShowRejectForm, rejectReason, setRejectReason,
   bannerStyle, onGoToDashboard, pendingLineCommentCount = 0,
+  disabled = false,
 }) => (
   <div style={{
     ...bannerStyle,
@@ -226,7 +227,23 @@ const ReviewBanner = ({
 
     {/* Body */}
     <div style={{ padding: '1rem 1.25rem', background: '#f0f9ff' }}>
-      {!showRejectForm ? (
+      {disabled ? (
+        // Approving/rejecting acts on the last-SAVED copy on the server —
+        // now that saving no longer auto-approves (see updateQuotation's
+        // isOpsManager branch), this banner stays visible for the whole
+        // time an edit is in progress, not just for the instant between
+        // save and approve. Without this guard, clicking Approve/Return
+        // while mid-edit would silently discard any unsaved changes still
+        // sitting in the form (the button acts on originalQuotation, not
+        // the draft state) instead of erroring or warning about it.
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          fontSize: '0.85rem', color: '#0369a1', fontWeight: 600,
+        }}>
+          <AlertCircle size={16} />
+          Save or cancel your edits first — approving/returning acts on the last saved version.
+        </div>
+      ) : !showRejectForm ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap' }}>
           <button
             onClick={onApprove}
@@ -519,6 +536,22 @@ export default function ViewQuotationScreen() {
     if (isEditing) setAllCompaniesBannerDismissed(false);
   }, [isEditing]);
 
+  // Entering edit mode hides the review banner's approve/reject buttons
+  // behind a "finish editing first" notice (see ReviewBanner's `disabled`
+  // branch) — if the reject form was left open with a half-typed reason,
+  // reset it here rather than leaving that draft silently stranded with no
+  // indication it still exists once editing ends. A plain useEffect on
+  // isEditing (matching the banner-dismiss effect above) rather than
+  // resetting inline in the Edit button's onClick, since there's a second
+  // way into edit mode — the ?edit=true auto-enter effect below — that
+  // would otherwise miss this reset.
+  useEffect(() => {
+    if (isEditing) {
+      setShowRejectForm(false);
+      setRejectReason('');
+    }
+  }, [isEditing]);
+
   // Once the user switches off "All Companies" to a specific one, clear the
   // blocked-edit-attempt flag so the Edit button goes back to working normally.
   useEffect(() => {
@@ -696,6 +729,14 @@ export default function ViewQuotationScreen() {
     // which 400s a creator/ops_manager save attempt on 'ops_approved'. Without
     // this check the Edit button renders for everyone but fails for them on save.
     if (status === 'ops_approved' && user?.role !== 'admin') {
+      return false;
+    }
+    // Once it's with admin for final review — whether ops-approved-then-
+    // escalated or self-created straight to pending_admin — it's exclusively
+    // admin's to edit. Ops managers keep read-only visibility (see
+    // getAllOpsQuotations' 'createdBySnapshot.role' filter) but not edit
+    // access here; matches the backend's updateQuotation gate below.
+    if (status === 'pending_admin' && user?.role === 'ops_manager') {
       return false;
     }
     return true;
@@ -1153,7 +1194,9 @@ export default function ViewQuotationScreen() {
                     setEditBlockedByAllCompanies(true);
                     setAllCompaniesBannerDismissed(false);
                   } else {
-                    // Amendment or regular edit: in-place update
+                    // Amendment or regular edit: in-place update. (The
+                    // reject-form reset for entering edit mode lives in the
+                    // isEditing effect above, not here — see its comment.)
                     setIsEditing(true);
                   }
                 }}
@@ -1352,6 +1395,7 @@ export default function ViewQuotationScreen() {
                 bannerStyle={styles.reviewBanner}
                 onGoToDashboard={handleGoToDashboard}
                 pendingLineCommentCount={pendingLineComments.length}
+                disabled={isEditing}
               />
             );
           }
@@ -1382,6 +1426,7 @@ export default function ViewQuotationScreen() {
                 bannerStyle={styles.reviewBanner}
                 onGoToDashboard={handleGoToDashboard}
                 pendingLineCommentCount={pendingLineComments.length}
+                disabled={isEditing}
               />
             );
           }
