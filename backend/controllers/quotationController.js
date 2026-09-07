@@ -279,7 +279,13 @@ const canAccessS3Key = async (key, req) => {
     // documents would 403, since they all resolve through this function.
     if (req.user.role !== 'ops_manager' && owner.revisedFrom) {
       const original = await Quotation.findById(owner.revisedFrom).select('createdBy').lean();
-      if (original?.createdBy?.toString() === req.user.id) return true;
+      // createdBy comes back populated (the schema's pre(/^find/) hook runs
+      // regardless of .select()) — a plain object, not an ObjectId, so
+      // .toString() on it is "[object Object]" and never matches req.user.id.
+      // Unwrap ._id first, same as every other createdBy comparison in this
+      // file already does.
+      const originalCreatorId = original?.createdBy?._id || original?.createdBy;
+      if (originalCreatorId?.toString() === req.user.id) return true;
     }
     // Without this, this S3-key lookup would happily hand back the actual
     // image/document bytes to anyone in the same company (ops managers
@@ -949,18 +955,20 @@ exports.getQuotation = async (req, res) => {
     const isAdmin = req.user.role === 'admin';
     const isOps   = req.user.role === 'ops_manager';
 
-    // Admins and ops managers can view any quotation regardless of company context.
-    // Creators must belong to the same company as the quotation.
-    let query;
-    if (isAdmin || isOps) {
-      query = { _id: req.params.id };
-    } else {
-      const companyId = resolveScopedCompanyId(req, req.query.companyId);
-      if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
-      query = { _id: req.params.id, companyId };
-    }
-
-    const quotation = await fullPopulate(Quotation.findOne(query)).lean();
+    // Every role looks up a specific quotation by ID alone — company
+    // scoping only ever meant something for filtering LISTS, not for a
+    // single already-known document, and it's the ownership checks below
+    // (isCreator/isAdmin/isOps/isOriginalCreator) that actually gate
+    // access, entirely independent of company. An earlier version of this
+    // additionally required creators' currently-selected company to match
+    // this quotation's own — but every role here can see and pick from
+    // every company (see getCompanies, unrestricted by role), so that
+    // match was never a real boundary, just an accidental way for a
+    // perfectly legitimate quotation to 404 whenever the requester's
+    // selected company (a UI convenience carried in the x-company-id
+    // header) didn't happen to match — most commonly via a direct email
+    // link, which carries no company context at all.
+    const quotation = await fullPopulate(Quotation.findById(req.params.id)).lean();
     if (!quotation) return res.status(404).json({ message: 'Quotation not found' });
 
     const isCreator = quotation.createdBy && quotation.createdBy._id?.toString() === req.user.id;
@@ -975,7 +983,15 @@ exports.getQuotation = async (req, res) => {
     let isOriginalCreator = false;
     if (!isAdmin && !isOps && !isCreator && quotation.revisedFrom) {
       const original = await Quotation.findById(quotation.revisedFrom).select('createdBy').lean();
-      isOriginalCreator = !!(original?.createdBy && original.createdBy.toString() === req.user.id);
+      // createdBy comes back populated (the schema's pre(/^find/) hook runs
+      // regardless of .select()) — a plain object, not an ObjectId, so
+      // comparing it with .toString() directly was always "[object Object]"
+      // and never matched req.user.id: this carve-out has never actually
+      // granted access, confirmed directly (a real revision + real original
+      // creator still got 403). Unwrap ._id first, same as every other
+      // createdBy comparison in this file already does.
+      const originalCreatorId = original?.createdBy?._id || original?.createdBy;
+      isOriginalCreator = !!(originalCreatorId && originalCreatorId.toString() === req.user.id);
     }
 
     if (!isAdmin && !isOps && !isCreator && !isOriginalCreator)
@@ -1623,7 +1639,6 @@ exports.createQuotation = async (req, res) => {
 
 exports.updateQuotation = async (req, res) => {
   const { id } = req.params;
-  const companyId = resolveScopedCompanyId(req);
   const {
     projectName, scopeOfWork, currencyCode, customerName, customerId, customer, contact, customerCountry,
     customerDesignation, customerTradeLicenseNumber, date, expiryDate, queryDate,
@@ -1658,20 +1673,43 @@ exports.updateQuotation = async (req, res) => {
   }
   
   const compressedPayloadSize = JSON.stringify({ ...req.body, quotationImages: compressedQuotationImages, termsImages: compressedTermsImages, internalDocuments: compressedInternalDocuments }).length;
-  
-  if (!companyId) return res.status(400).json({ message: 'Company ID is required' });
+
+  const isAdmin = req.user?.role === 'admin';
+  const isOpsManager = req.user?.role === 'ops_manager';
+
   if (!items?.length) return res.status(400).json({ message: 'At least one item is required' });
 
   const dateErr = validateDates(date, expiryDate);
   if (dateErr) return res.status(400).json({ message: dateErr });
 
   try {
-    const existing = await Quotation.findOne({ _id: id, companyId });
+    // Every role saves a specific quotation by ID alone — same reasoning
+    // as getQuotation (see its comment): company scoping only ever meant
+    // something for filtering LISTS, and the ownership check right below
+    // (isCreator/isAdmin/isOpsManager) is what actually gates who may save.
+    // An earlier version of this required the requester's currently-
+    // selected company (from the x-company-id header) to exactly match
+    // this quotation's own — first only relaxed for admin/ops, then found
+    // to affect creators too. Every role here can see and pick from every
+    // company (see getCompanies, unrestricted by role), so that match was
+    // never a real boundary — just an accidental way for a legitimate save
+    // to 404 as "Quotation not found" whenever the requester's selected
+    // company didn't happen to match, most commonly via a direct email
+    // link (see emailService.js), which carries no company context at all.
+    const existing = await Quotation.findById(id);
     if (!existing) return res.status(404).json({ message: 'Quotation not found' });
 
-    const isAdmin = req.user?.role === 'admin';
-    const isOpsManager = req.user?.role === 'ops_manager';
-    
+    // This quotation's ACTUAL company — deliberately never derived from the
+    // x-company-id request header (see the lookup above for why that's no
+    // longer used at all here). Every remaining use of `companyId` in this
+    // function (fetching the Company doc for the snapshot, revision-number
+    // counting, the stats-cache invalidation key) needs to mean "this
+    // quotation's company," so declaring it here — rather than fixing each
+    // call site individually — makes that automatic. Unwrapped via ._id: the
+    // schema's pre(/^find/) hook auto-populates companyId on every query
+    // (see canAccessS3Key for the same unwrap, same reason).
+    const companyId = existing.companyId?._id || existing.companyId;
+
     let isCreator = false;
     if (existing.createdBy) {
       const creatorId = existing.createdBy._id || existing.createdBy;
@@ -4192,12 +4230,25 @@ exports.cancelQuotation = async (req, res) => {
   try {
     const { id } = req.params;
     const { cancelReason = '' } = req.body;
-    const companyId = resolveScopedCompanyId(req);
 
-    if (!companyId) return res.status(400).json({ success: false, message: 'Company ID is required' });
-
-    const quotation = await Quotation.findOne({ _id: id, companyId });
+    // Only admin and ops manager can ever reach this endpoint (see the role
+    // check below — there's no creator path here at all), and both
+    // routinely work across companies, so — same as getQuotation and
+    // updateQuotation — the quotation is looked up by _id alone, never
+    // forced to match whatever company happens to be selected in their UI
+    // right now. Requiring an exact match here (the previous version of
+    // this lookup) meant Cancel could 404 on a perfectly valid quotation
+    // just because the wrong company was selected — the same bug
+    // updateQuotation had, fixed there for the "Quotation not found" on
+    // Save report; fixed here too since it's the identical pattern.
+    const quotation = await Quotation.findById(id);
     if (!quotation) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    // This quotation's ACTUAL company — used below only for the stats-cache
+    // invalidation key, never for locating the document (see above).
+    // Unwrapped via ._id: the schema's pre(/^find/) hook auto-populates
+    // companyId on every query (see canAccessS3Key for the same unwrap).
+    const companyId = quotation.companyId?._id || quotation.companyId;
 
     // Mirrors getQuotation's stealth rule for admin-created quotations — 404
     // ahead of every other check below (including the status checks, which
