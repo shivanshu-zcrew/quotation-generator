@@ -1,7 +1,7 @@
 // components/HomePageComponent/QuotationCard.jsx
 import React from 'react';
 import { Calendar, Eye, Edit2, Award, Trash2 } from 'lucide-react';
-import { StatusBadge, RejectionNote, ActionBtn } from '../SharedComponents';
+import { StatusBadge, RejectionNote, ActionBtn, RowActionsMenu } from '../SharedComponents';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../../utils/formatters';
 import { DELETABLE } from '../../utils/constants';
 
@@ -141,7 +141,7 @@ const QuotationCard = React.memo(({
           {customerName}
         </div>
         {quotation.projectName && (
-          <div style={{ fontSize: '0.76rem', color: T.inkSoft, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div title={quotation.projectName} style={{ fontSize: '0.76rem', color: T.inkSoft, marginTop: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {quotation.projectName}
           </div>
         )}
@@ -182,12 +182,10 @@ const QuotationCard = React.memo(({
         ) : (
           <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
         )}
-        {canAward && (
-          <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onAward(quotation)} icon={Award} label="Outcome" size="small" />
-        )}
-        {canDelete && (
-          <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onDelete(quotation)} icon={Trash2} label="Del" size="small" />
-        )}
+        <RowActionsMenu actions={[
+          canAward && { key: 'award', label: 'Outcome', icon: Award, bg: '#e3f5ee', color: '#0f7a52', onClick: () => onAward(quotation) },
+          canDelete && { key: 'delete', label: 'Delete', icon: Trash2, bg: '#fdeceb', color: '#c1352b', onClick: () => onDelete(quotation) },
+        ]} />
         {quotation.createdBy?.name && (
           <span style={{ marginLeft: 'auto', fontSize: '0.64rem', color: T.inkFaint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '40%' }}>
             {quotation.createdBy.name}

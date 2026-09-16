@@ -1,43 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Users, Package, Plus, Trash2, Eye, Download, FileText,
   TrendingUp, AlertCircle, LogOut, Loader, Search, X,
-  CheckCircle, RefreshCw, Clock, Award, Ban,
+  CheckCircle, RefreshCw, Clock, Award, Ban, MoreVertical,
   ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
   ThumbsUp, ThumbsDown, Building2, DollarSign
 } from 'lucide-react';
 import { STATUS_CONFIG, PAGE_SIZE_OPTIONS } from '../utils/constants';
-
-// ============================================================
-// DESIGN TOKENS — refined minimal (neutral light)
-// Kept in sync with HomeScreen's T object.
-// ============================================================
-const T = {
-  canvas: "#f6f7f8",
-  surface: "#ffffff",
-  ink: "#1b1d1e",
-  inkSoft: "#646a6e",
-  inkFaint: "#9aa0a4",
-  line: "#e8eaec",
-  lineSoft: "#f0f1f3",
-  accent: "#2563c4",
-  accentSoft: "#e6f0fb",
-  accentInk: "#1d63c4",
-  // vivid status hues (cool chrome, readable states)
-  red: "#c1352b",
-  redSoft: "#fdeceb",
-  redLine: "#f8d6d2",
-  green: "#0f7a52",
-  greenSoft: "#e3f5ee",
-  greenLine: "#c3ebda",
-  blueInk: "#1d63c4",
-  blueSoft: "#e6f0fb",
-  blueLine: "#c9defa",
-  shadow: "0 1px 2px rgba(20,22,24,0.04), 0 8px 24px -12px rgba(20,22,24,0.10)",
-  radius: 16,
-};
-
-const SHIMMER = `linear-gradient(90deg, ${T.lineSoft} 25%, ${T.line} 50%, ${T.lineSoft} 75%)`;
+import { T, SHIMMER } from '../styles/theme';
 
 export const StatusBadge = React.memo(({ status }) => {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.draft;
@@ -121,6 +91,59 @@ export const ActionBtn = React.memo(({ bg, color, onClick, disabled, title, icon
   </button>
 ));
 ActionBtn.displayName = 'ActionBtn';
+
+// Groups every row action beyond the primary "View" into a single kebab
+// menu instead of a row of colored pill buttons — keeps the row/card
+// action area from turning into an icon-clutter grid as more role-gated
+// actions (Approve/Reject/Award/Delete/Edit) become available.
+export const RowActionsMenu = React.memo(({ actions }) => {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleOutside = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const handleEscape = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open]);
+
+  const visibleActions = (actions || []).filter(Boolean);
+  if (visibleActions.length === 0) return null;
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="More actions"
+        style={{ width: 28, height: 28, border: `1px solid ${T.line}`, borderRadius: 8, background: open ? T.canvas : T.surface, color: T.inkSoft, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}
+      >
+        <MoreVertical size={15} />
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: T.shadow, minWidth: 160, zIndex: 50, padding: 4 }}>
+          {visibleActions.map((a) => (
+            <button
+              key={a.key}
+              onClick={() => { setOpen(false); a.onClick(); }}
+              disabled={a.disabled}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '0.55rem 0.65rem', border: 'none', background: 'transparent', color: a.color, fontSize: '0.78rem', fontWeight: 600, cursor: a.disabled ? 'not-allowed' : 'pointer', opacity: a.disabled ? 0.5 : 1, borderRadius: 6, textAlign: 'left', fontFamily: 'inherit' }}
+              onMouseEnter={(e) => { if (!a.disabled) e.currentTarget.style.backgroundColor = a.bg; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              <a.icon size={13} /> {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+RowActionsMenu.displayName = 'RowActionsMenu';
 
 export const SortHeader = React.memo(({ label, field, sort, onSort, align }) => {
   const active = sort.field === field;
@@ -209,9 +232,11 @@ export const PaginationBar = React.memo(({ total, page, limit, onPage, onLimit }
 });
 PaginationBar.displayName = 'PaginationBar';
 
-export const SkeletonRow = React.memo(() => (
+const SKELETON_CELL_WIDTHS = [80, 130, 80, 80, 100, 60, 100, 120];
+
+export const SkeletonRow = React.memo(({ columns = SKELETON_CELL_WIDTHS.length }) => (
   <tr style={{ borderBottom: `1px solid ${T.lineSoft}` }}>
-    {[80, 130, 80, 80, 100, 60, 100, 120].map((w, j) => (
+    {Array.from({ length: columns }, (_, j) => SKELETON_CELL_WIDTHS[j % SKELETON_CELL_WIDTHS.length]).map((w, j) => (
       <td key={j} style={{ padding: '1rem' }}>
         <div style={{ height: 14, width: w, borderRadius: 6, background: SHIMMER, backgroundSize: '200% 100%', animation: 'hs-shimmer 1.4s ease infinite' }} />
       </td>

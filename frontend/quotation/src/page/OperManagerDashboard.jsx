@@ -18,6 +18,7 @@ import {
   RejectionNote,
   StatCard,
   ActionBtn,
+  RowActionsMenu,
   SortHeader,
   SkeletonRow,
   ConfirmModal,
@@ -31,35 +32,23 @@ import { DEBOUNCE_MS, PAGE_SIZE_OPTIONS } from '../utils/constants';
 import { fmtCurrency, fmtDate, isExpired, isExpiringSoon } from '../utils/formatters';
 import AwardModal from '../components/AwardModal';
 import QuotationFilterBar from '../components/QuotationFilterBar';
+import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
+import { T, FONT_STACK } from '../styles/theme';
 
 // Helper function to format amount without currency symbol
 const formatAmount = (amount) => {
-  return (amount || 0).toLocaleString('en-AE', { 
-    minimumFractionDigits: 2, 
-    maximumFractionDigits: 2 
+  return (amount || 0).toLocaleString('en-AE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
 };
 
-// ============================================================
-// DESIGN TOKENS — identical to HomeScreen
-// ============================================================
-const T = {
-  canvas:     '#f6f7f8',
-  surface:    '#ffffff',
-  ink:        '#1b1d1e',
-  inkSoft:    '#646a6e',
-  inkFaint:   '#9aa0a4',
-  line:       '#e8eaec',
-  lineSoft:   '#f0f1f3',
-  accent:     '#2563c4',
-  accentSoft: '#e6f0fb',
-  accentInk:  '#1d63c4',
-  shadow:     '0 1px 2px rgba(20,22,24,0.04), 0 8px 24px -12px rgba(20,22,24,0.10)',
-  radius:     16,
-  radiusSm:   10,
-};
-
-const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+// Long customer/project names would otherwise wrap across several lines and
+// blow up row height (both in the table and in cards) — clip to one line
+// with a `title` tooltip carrying the full value instead.
+const TRUNCATE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+// Project names get a little more room than a single line before clipping.
+const CLAMP_2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
 
 // ============================================================
 // STATUS CONFIG — ops-specific states
@@ -438,16 +427,16 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         </div>
       </div>
 
-      <div style={{ marginBottom: '0.5rem' }}>
-        <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>
+      <div style={{ marginBottom: '0.5rem', minWidth: 0 }}>
+        <div title={quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'} style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem', ...TRUNCATE }}>
           {quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}
         </div>
-        {quotation.contact && <div style={{ fontSize: '0.72rem', color: T.inkFaint, marginTop: 2 }}>{quotation.contact}</div>}
+        {quotation.contact && <div style={{ fontSize: '0.72rem', color: T.inkFaint, marginTop: 2, ...TRUNCATE }}>{quotation.contact}</div>}
         <RejectionNote quotation={quotation} />
       </div>
 
       {quotation.projectName && (
-        <div style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem' }}>{quotation.projectName}</div>
+        <div title={quotation.projectName} style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem', ...CLAMP_2 }}>{quotation.projectName}</div>
       )}
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.6rem', fontSize: '0.72rem', color: T.inkSoft, flexWrap: 'wrap' }}>
@@ -460,17 +449,13 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
         Created by: {quotation.createdBy?.name || '—'}
       </div>
 
-      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
         <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        {canAct && (
-          <>
-            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation)} icon={Check} label="Approve" size="small" disabled={isApproving} />
-            <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onReject(quotation)} icon={X} label="Reject" size="small" disabled={isRejecting} />
-          </>
-        )}
-        {canAward && (
-          <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => onAward(quotation)} icon={Award} label="Award" size="small" disabled={isAwarding} />
-        )}
+        <RowActionsMenu actions={[
+          canAct && { key: 'approve', label: 'Approve', icon: Check, bg: '#e3f5ee', color: '#0f7a52', onClick: () => onApprove(quotation), disabled: isApproving },
+          canAct && { key: 'reject', label: 'Reject', icon: X, bg: '#fdeceb', color: '#c1352b', onClick: () => onReject(quotation), disabled: isRejecting },
+          canAward && { key: 'award', label: 'Award', icon: Award, bg: '#efe9fb', color: '#6d28d9', onClick: () => onAward(quotation), disabled: isAwarding },
+        ]} />
       </div>
     </div>
   );
@@ -478,29 +463,16 @@ const OpsQuotationCard = React.memo(({ quotation, selectedCurrency, onView, onAp
 OpsQuotationCard.displayName = 'OpsQuotationCard';
 
 // ============================================================
-// RESPONSIVE HOOK
-// ============================================================
-const useMediaQuery = (query) => {
-  const [matches, setMatches] = useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia(query).matches : false
-  );
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia(query);
-    const h = (e) => setMatches(e.matches);
-    mq.addEventListener('change', h);
-    return () => mq.removeEventListener('change', h);
-  }, [query]);
-  return matches;
-};
-
-// ============================================================
 // MAIN DASHBOARD
 // ============================================================
 export default function OpsDashboard({ onViewQuotation }) {
   const navigate = useNavigate();
-  const isMobile = useMediaQuery('(max-width: 768px)');
-  const isTablet = useMediaQuery('(max-width: 1100px)');
+  const isMobile   = useMediaQuery(`(max-width: ${BREAKPOINTS.mobile}px)`);
+  // Below this width the table's own minWidth no longer fits inside the
+  // page's container once padding/scrollbar are accounted for, so cards
+  // are forced rather than left as a user-toggleable choice that can
+  // strand the table in a horizontally-scrolling state.
+  const isCompact  = useMediaQuery(`(max-width: ${BREAKPOINTS.compact}px)`);
 
   const [uiState, setUiState] = useState({ mobileMenuOpen: false, viewMode: 'table' });
   const [awardModal, setAwardModal] = useState({ open: false, quotation: null, loading: false });
@@ -618,10 +590,6 @@ export default function OpsDashboard({ onViewQuotation }) {
     changeLimit(20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' }));
-  }, [isMobile, isTablet]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -837,6 +805,11 @@ export default function OpsDashboard({ onViewQuotation }) {
     borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap',
     position: 'sticky', top: 0, zIndex: 1,
   };
+  // Actions stays pinned to the right edge of the scroll container while
+  // the rest of the row scrolls underneath it — so on any width where the
+  // table still needs horizontal scroll, the buttons never scroll away.
+  const stickyActionTh = { ...thStyle, position: 'sticky', right: 0, top: 0, zIndex: 2, borderLeft: '1px solid #d0d4d8' };
+  const stickyActionTd = { padding: '0.85rem 1rem', verticalAlign: 'middle', position: 'sticky', right: 0, backgroundColor: T.surface, borderLeft: '1px solid #d0d4d8' };
 
   const isRefreshing = tableLatchRef.current && quotationsLoading;
   const showEmptyState = tableLatchRef.current && !quotationsLoading && safeQ.length === 0;
@@ -1067,7 +1040,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                 onApply={handleApplyFilters}
               />
 
-              <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} />
+              <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} isCompact={isCompact} />
             </div>
           </div>
 
@@ -1093,7 +1066,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}
+                  {[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} columns={9} />)}
                 </tbody>
               </table>
             </div>
@@ -1116,7 +1089,7 @@ export default function OpsDashboard({ onViewQuotation }) {
               ) : (
                 <>
                   {/* Card view */}
-                  {(isMobile || uiState.viewMode === 'card') ? (
+                  {(isMobile || isCompact || uiState.viewMode === 'card') ? (
                     <div style={{ padding: isMobile ? '1rem' : '1.5rem', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2,1fr)', gap: isMobile ? '0.75rem' : '1rem' }}>
                       {safeQ.map(q => (
                         <OpsQuotationCard
@@ -1149,7 +1122,7 @@ export default function OpsDashboard({ onViewQuotation }) {
                             <SortHeader label="Created By" field="createdBy"       sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} />
                             <th style={{ ...thStyle, textAlign: 'center' }}>Items</th>
                             <SortHeader label="Total"      field="total"           sort={{ field: sort.field, dir: sort.dir }} onSort={handleSort} align="right" />
-                            <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
+                            <th style={{ ...stickyActionTh, textAlign: 'center' }}>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1172,8 +1145,8 @@ export default function OpsDashboard({ onViewQuotation }) {
                                   </div>
                                 </td>
                                 <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
-                                  <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
-                                  {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2 }}>{q.contact}</div>}
+                                  <div title={q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'} style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem', maxWidth: 200, ...TRUNCATE }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
+                                  {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2, maxWidth: 200, ...TRUNCATE }}>{q.contact}</div>}
                                   <RejectionNote quotation={q} />
                                 </td>
                                 <td style={{ padding: '1rem', fontSize: '0.8rem', color: T.inkSoft, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{fmtDate(q.date)}</td>
@@ -1211,18 +1184,14 @@ export default function OpsDashboard({ onViewQuotation }) {
                                     </div>
                                   )}
                                 </td>
-                                <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
-                                  <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                                <td style={stickyActionTd}>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                     <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View quotation" />
-                                    {canAct && (
-                                      <>
-                                        <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove.open(q)} icon={Check} label="Approve" title="Approve" disabled={isOp(q._id, 'approve')} />
-                                        <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleReject.open(q)} icon={X} label="Reject" title="Reject" disabled={isOp(q._id, 'reject')} />
-                                      </>
-                                    )}
-                                    {canAward && (
-                                      <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAwardOpen(q)} icon={Award} label="Award" title="Mark awarded" disabled={isOp(q._id, 'award')} />
-                                    )}
+                                    <RowActionsMenu actions={[
+                                      canAct && { key: 'approve', label: 'Approve', icon: Check, bg: '#e3f5ee', color: '#0f7a52', onClick: () => handleApprove.open(q), disabled: isOp(q._id, 'approve') },
+                                      canAct && { key: 'reject', label: 'Reject', icon: X, bg: '#fdeceb', color: '#c1352b', onClick: () => handleReject.open(q), disabled: isOp(q._id, 'reject') },
+                                      canAward && { key: 'award', label: 'Award', icon: Award, bg: '#efe9fb', color: '#6d28d9', onClick: () => handleAwardOpen(q), disabled: isOp(q._id, 'award') },
+                                    ]} />
                                   </div>
                                 </td>
                               </tr>

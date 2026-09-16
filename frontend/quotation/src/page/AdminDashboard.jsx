@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 
 import { useAppStore, useCompanyQuotations } from '../services/store';
+import { useMediaQuery, BREAKPOINTS } from '../hooks/useMediaQuery';
+import { T, FONT_STACK } from '../styles/theme';
 import { useCustomersList, useAdminStats, useCompanyContext, useUserRole } from '../hooks/customHooks';
 import { CompanyCurrencySelector, CompanyCurrencyDisplay, useCompanyCurrency } from '../components/CompanyCurrencySelector';
 import { downloadQuotationPDF } from '../utils/pdfGenerator';
@@ -16,6 +18,7 @@ import useToast, { ToastContainer } from '../hooks/useToast';
 import {
   RejectionNote,
   ActionBtn,
+  RowActionsMenu,
   SortHeader,
   SkeletonRow,
   ConfirmModal,
@@ -39,32 +42,18 @@ import QuotationFilterBar from '../components/QuotationFilterBar';
 
 // Helper function to format amount without currency symbol
 const formatAmount = (amount) => {
-  return (amount || 0).toLocaleString('en-AE', { 
-    minimumFractionDigits: 2, 
-    maximumFractionDigits: 2 
+  return (amount || 0).toLocaleString('en-AE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
 };
 
-// ============================================================
-// DESIGN TOKENS — identical to HomeScreen / OpsDashboard
-// ============================================================
-const T = {
-  canvas:     '#f6f7f8',
-  surface:    '#ffffff',
-  ink:        '#1b1d1e',
-  inkSoft:    '#646a6e',
-  inkFaint:   '#9aa0a4',
-  line:       '#e8eaec',
-  lineSoft:   '#f0f1f3',
-  accent:     '#2563c4',
-  accentSoft: '#e6f0fb',
-  accentInk:  '#1d63c4',
-  shadow:     '0 1px 2px rgba(20,22,24,0.04), 0 8px 24px -12px rgba(20,22,24,0.10)',
-  radius:     16,
-  radiusSm:   10,
-};
-
-const FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+// Long customer/project names would otherwise wrap across several lines and
+// blow up row height (both in the table and in cards) — clip to one line
+// with a `title` tooltip carrying the full value instead.
+const TRUNCATE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+// Project names get a little more room than a single line before clipping.
+const CLAMP_2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
 
 // ============================================================
 // STATUS CONFIG
@@ -172,18 +161,6 @@ const ShimmerStatsCard = ({ isMobile }) => {
 // ============================================================
 // RESPONSIVE HOOK
 // ============================================================
-const useMediaQuery = (query) => {
-  const [matches, setMatches] = useState(() => typeof window !== 'undefined' ? window.matchMedia(query).matches : false);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia(query);
-    const h = (e) => setMatches(e.matches);
-    mq.addEventListener ? mq.addEventListener('change', h) : mq.addListener(h);
-    return () => mq.removeEventListener ? mq.removeEventListener('change', h) : mq.removeListener(h);
-  }, [query]);
-  return matches;
-};
-
 // ============================================================
 // SUB-COMPONENTS
 // ============================================================
@@ -194,11 +171,18 @@ const ExpiryBadge = React.memo(({ type }) => {
   return <span style={{ fontSize: '0.6rem', fontWeight: 600, color: cfg.color, background: cfg.bg, padding: '1px 6px', borderRadius: 999, border: `1px solid ${cfg.border}` }}>{cfg.label}</span>;
 });
 
-const QueryDateBadge = React.memo(({ date, passed }) => (
-  <span style={{ background: passed ? '#fdeceb' : '#fff7e6', color: passed ? '#c1352b' : '#b45309', padding: '0.25rem 0.7rem', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-     {fmtDate(date)}{passed && ' ⚠'}
-  </span>
-));
+const QueryDateBadge = React.memo(({ date, passed }) => {
+  const Icon = passed ? AlertCircle : Calendar;
+  return (
+    <span
+      title={passed ? 'Follow-up overdue' : 'Follow-up date'}
+      style={{ background: passed ? '#fdeceb' : '#fff7e6', color: passed ? '#c1352b' : '#b45309', border: `1px solid ${passed ? '#f8d6d2' : '#fde9c8'}`, padding: '0.28rem 0.7rem', borderRadius: 999, fontSize: '0.74rem', fontWeight: 600, letterSpacing: '0.01em', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap', cursor: 'help' }}
+    >
+      <Icon size={12} style={{ opacity: 0.85, flexShrink: 0 }} />
+      {fmtDate(date)}
+    </span>
+  );
+});
 
 // Admin mobile card with updated currency formatting
 const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selectedCurrency, onView, onApprove, onReject, onDownload, onDelete, isExporting, isApproving, isRejecting, isAdmin }) => {
@@ -245,31 +229,26 @@ const AdminQuotationCard = React.memo(({ quotation, onAward, isAwarding, selecte
           )}
         </div>
       </div>
-      <div style={{ marginBottom: '0.5rem' }}>
-        <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}</div>
-        {quotation.contact && <div style={{ fontSize: '0.72rem', color: T.inkFaint, marginTop: 2 }}>{quotation.contact}</div>}
+      <div style={{ marginBottom: '0.5rem', minWidth: 0 }}>
+        <div title={quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'} style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem', ...TRUNCATE }}>{quotation.customerSnapshot?.name || quotation.customer || quotation.customerId?.name || 'N/A'}</div>
+        {quotation.contact && <div style={{ fontSize: '0.72rem', color: T.inkFaint, marginTop: 2, ...TRUNCATE }}>{quotation.contact}</div>}
         <RejectionNote quotation={quotation} />
       </div>
-      {quotation.projectName && <div style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem' }}>{quotation.projectName}</div>}
+      {quotation.projectName && <div title={quotation.projectName} style={{ fontSize: '0.8rem', color: T.inkSoft, marginBottom: '0.5rem', ...CLAMP_2 }}>{quotation.projectName}</div>}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.6rem', fontSize: '0.72rem', color: T.inkSoft, flexWrap: 'wrap' }}>
         {quotation.queryDate && <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}> <span style={{ color: queryDatePassed ? '#c1352b' : '#b45309', fontWeight: 500 }}>Follow-up: {fmtDate(quotation.queryDate)}{queryDatePassed && ' ⚠'}</span></div>}
         <span>Submitted: {fmtDate(quotation.date)}</span>
         <span style={{ color: expired ? '#c1352b' : expiring ? '#b45309' : T.inkSoft, fontWeight: expired || expiring ? 600 : 400 }}>Expiry: {fmtDate(quotation.expiryDate)}</span>
       </div>
       <div style={{ fontSize: '0.7rem', color: T.inkFaint, marginBottom: '0.75rem' }}>Created by: {quotation.createdBy?.name || '—'}</div>
-      {/* Fixed 2-column grid — same reasoning as the desktop table's action
-          cell: up to 4 buttons can show now, and flex-wrap on a narrow
-          mobile card can collapse to one per row instead of pairing up. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.4rem', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
-        {canAct && (
-          <>
-            <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => onApprove(quotation._id, quotation.quotationNumber)} icon={Check} label="Approve" size="small" disabled={isApproving} />
-            <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onReject(quotation._id)} icon={X} label="Reject" size="small" disabled={isRejecting} />
-          </>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: `1px solid ${T.lineSoft}`, paddingTop: '0.75rem' }}>
         <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => onView(quotation._id)} icon={Eye} label="View" size="small" />
-        {canAward && <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => onAward(quotation)} icon={Award} label="Award" size="small" disabled={isAwarding} />}
-        {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => onDelete(quotation._id, quotation.status)} icon={Trash2} label="Del" size="small" />}
+        <RowActionsMenu actions={[
+          canAct && { key: 'approve', label: 'Approve', icon: Check, bg: '#e3f5ee', color: '#0f7a52', onClick: () => onApprove(quotation._id, quotation.quotationNumber), disabled: isApproving },
+          canAct && { key: 'reject', label: 'Reject', icon: X, bg: '#fdeceb', color: '#c1352b', onClick: () => onReject(quotation._id), disabled: isRejecting },
+          canAward && { key: 'award', label: 'Award', icon: Award, bg: '#efe9fb', color: '#6d28d9', onClick: () => onAward(quotation), disabled: isAwarding },
+          canDelete && { key: 'delete', label: 'Delete', icon: Trash2, bg: '#fdeceb', color: '#c1352b', onClick: () => onDelete(quotation._id, quotation.status) },
+        ]} />
       </div>
     </div>
   );
@@ -281,8 +260,12 @@ AdminQuotationCard.displayName = 'AdminQuotationCard';
 // ============================================================
 export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   const navigate  = useNavigate();
-  const isMobile  = useMediaQuery('(max-width: 768px)');
-  const isTablet  = useMediaQuery('(max-width: 1100px)');
+  const isMobile   = useMediaQuery(`(max-width: ${BREAKPOINTS.mobile}px)`);
+  // Below this width the table's own minWidth no longer fits inside the
+  // page's maxWidth:1400 container once padding/scrollbar are accounted
+  // for, so cards are forced rather than left as a user-toggleable choice
+  // that can strand the table in a horizontally-scrolling state.
+  const isCompact  = useMediaQuery(`(max-width: ${BREAKPOINTS.compact}px)`);
 
   const [uiState, setUiState] = useState({ mobileMenuOpen: false, viewMode: 'table' });
   const [exportFilters, setExportFilters] = useState({ showFilters: false, fromDate: '', toDate: '', status: 'all' });
@@ -405,7 +388,6 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   // identity changes with the store's limit) and clobber the user's pick.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { changeLimit(20); }, []);
-  useEffect(() => { if (isMobile || isTablet) setUiState(p => ({ ...p, viewMode: 'card' })); }, [isMobile, isTablet]);
   useEffect(() => { isMountedRef.current = true; return () => { isMountedRef.current = false; if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current); if (searchTimer.current) clearTimeout(searchTimer.current); }; }, []);
 
   // ── Op helpers ────────────────────────────────────────────
@@ -591,6 +573,13 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
   };
 
   const thStyle = { padding: '0.85rem 1rem', fontSize: '0.68rem', fontWeight: 600, color: T.inkFaint, textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left', borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 1 };
+  // Actions stays pinned to the right edge of the scroll container while
+  // the rest of the row scrolls underneath it — so on any width where the
+  // table still needs horizontal scroll, the buttons never scroll away.
+  // A tinted background + solid border reads as a distinct "frozen" panel
+  // rather than an ordinary column divider.
+  const stickyActionTh = { ...thStyle, position: 'sticky', right: 0, top: 0, zIndex: 2, borderLeft: '1px solid #d0d4d8' };
+  const stickyActionTd = { padding: '0.85rem 1rem', verticalAlign: 'middle', position: 'sticky', right: 0, backgroundColor: T.surface, borderLeft: '1px solid #d0d4d8' };
 
   // ── Table row renderer with updated currency formatting ───
   const renderTableRow = (q) => {
@@ -617,11 +606,11 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
           </div>
         </td>
         <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
-          <div style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem' }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
-          {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2 }}>{q.contact}</div>}
+          <div title={q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'} style={{ fontWeight: 600, color: T.ink, fontSize: '0.875rem', maxWidth: 200, ...TRUNCATE }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || 'N/A'}</div>
+          {q.contact && <div style={{ fontSize: '0.75rem', color: T.inkFaint, marginTop: 2, maxWidth: 200, ...TRUNCATE }}>{q.contact}</div>}
         </td>
         <td style={{ padding: '1rem', verticalAlign: 'middle' }}>
-          <div style={{ fontSize: '0.875rem', color: T.inkSoft }}>{q.projectName || '—'}</div>
+          <div title={q.projectName || ''} style={{ fontSize: '0.875rem', color: T.inkSoft, maxWidth: 220, ...CLAMP_2 }}>{q.projectName || '—'}</div>
         </td>
         <td style={{ padding: '1rem', verticalAlign: 'middle', textAlign: 'center' }}>
           {q.queryDate ? <QueryDateBadge date={q.queryDate} passed={queryDatePassed} /> : <span style={{ color: T.inkFaint }}>—</span>}
@@ -656,21 +645,15 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             </div>
           )}
         </td>
-        <td style={{ padding: '0.85rem 1rem', verticalAlign: 'middle' }}>
-          {/* Fixed 2-column grid rather than flex-wrap — this column has no
-              explicit width in a 10-column table, so with admins now seeing
-              up to 4 buttons (Approve/Reject/View/Del) it can get squeezed
-              narrow enough that flex-wrap degrades to one button per row. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.35rem', justifyContent: 'center' }}>
-            {canAct && (
-              <>
-                <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => handleApprove.open(q._id, q.quotationNumber)} icon={Check} label="Approve" title="Approve" size="small" disabled={isActionLoading(q._id, 'approve')} />
-                <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleReject.open(q._id)} icon={X} label="Reject" title="Reject" size="small" disabled={isActionLoading(q._id, 'reject')} />
-              </>
-            )}
+        <td style={stickyActionTd}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
             <ActionBtn bg={T.accentSoft} color={T.accentInk} onClick={() => handleView(q._id)} icon={Eye} label="View" title="View" size="small" />
-            {canAward && <ActionBtn bg="#efe9fb" color="#6d28d9" onClick={() => handleAward.open(q)} icon={Award} label="Award" title="Award" size="small" disabled={isActionLoading(q._id, 'award')} />}
-            {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => handleDelete.open(q._id, q.status)} icon={Trash2} label="Del" title="Delete" size="small" disabled={isActionLoading(q._id, 'delete')} />}
+            <RowActionsMenu actions={[
+              canAct && { key: 'approve', label: 'Approve', icon: Check, bg: '#e3f5ee', color: '#0f7a52', onClick: () => handleApprove.open(q._id, q.quotationNumber), disabled: isActionLoading(q._id, 'approve') },
+              canAct && { key: 'reject', label: 'Reject', icon: X, bg: '#fdeceb', color: '#c1352b', onClick: () => handleReject.open(q._id), disabled: isActionLoading(q._id, 'reject') },
+              canAward && { key: 'award', label: 'Award', icon: Award, bg: '#efe9fb', color: '#6d28d9', onClick: () => handleAward.open(q), disabled: isActionLoading(q._id, 'award') },
+              canDelete && { key: 'delete', label: 'Delete', icon: Trash2, bg: '#fdeceb', color: '#c1352b', onClick: () => handleDelete.open(q._id, q.status), disabled: isActionLoading(q._id, 'delete') },
+            ]} />
           </div>
         </td>
       </tr>
@@ -874,7 +857,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                 toDate={filters.toDate}
                 onApply={handleApplyFilters}
               />
-              <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} />
+              <ViewToggle view={uiState.viewMode} onViewChange={(v) => setUiState(p => ({ ...p, viewMode: v }))} isMobile={isMobile} isCompact={isCompact} />
             </div>
           </div>
 
@@ -893,7 +876,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
             <div style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
                 <thead>{['Quote #','Customer','Project','Query Date','Submitted','Expiry','Status','Created By','Total','Actions'].map(h => <th key={h} style={thStyle}>{h}</th>)}</thead>
-                <tbody>{[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} />)}</tbody>
+                <tbody>{[0,1,2,3,4,5,6].map(i => <SkeletonRow key={i} columns={10} />)}</tbody>
               </table>
             </div>
           ) : (
@@ -908,7 +891,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                 </div>
               ) : (
                 <>
-                  {(isMobile || uiState.viewMode === 'card') ? (
+                  {(isMobile || isCompact || uiState.viewMode === 'card') ? (
                     <div style={{ padding: isMobile ? '1rem' : '1.5rem', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2,1fr)', gap: isMobile ? '0.75rem' : '1rem' }}>
                       {safeQ.map((q) => (
                         <AdminQuotationCard key={q._id} quotation={q} selectedCurrency={selectedCurrency} onView={handleView} onApprove={handleApprove.open} onReject={handleReject.open} onDownload={handleDownload} onDelete={handleDelete.open} onAward={handleAward.open} isExporting={exportingId === q._id} isApproving={isActionLoading(q._id, 'approve')} isRejecting={isActionLoading(q._id, 'reject')} isAwarding={isActionLoading(q._id, 'award')} isAdmin={isAdmin} />
@@ -928,7 +911,7 @@ export default function AdminDashboard({ onNavigate, onViewQuotation }) {
                             <SortHeader label="Status"      field="status"          sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />
                             <SortHeader label="Created By"  field="createdby"       sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />
                             <SortHeader label="Total"       field="total"           sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} align="right" />
-                            <th style={{ ...thStyle, textAlign: 'center' }}>Actions</th>
+                            <th style={{ ...stickyActionTh, textAlign: 'center' }}>Actions</th>
                           </tr>
                         </thead>
                         <tbody>{safeQ.map(renderTableRow)}</tbody>

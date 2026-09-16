@@ -2,8 +2,8 @@
 import React from 'react';
 import { LayoutGrid, List } from 'lucide-react';
 
-const ViewToggle = React.memo(({ view, onViewChange, isMobile }) => {
-  if (isMobile) return null;
+const ViewToggle = React.memo(({ view, onViewChange, isMobile, isCompact = false }) => {
+  if (isMobile || isCompact) return null;
 
   return (
     <div style={{

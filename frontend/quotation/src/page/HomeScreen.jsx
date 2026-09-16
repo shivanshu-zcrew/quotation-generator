@@ -45,6 +45,7 @@ import {
   RejectionNote,
   Toast,
   ActionBtn,
+  RowActionsMenu,
   SortHeader,
   SkeletonRow,
   ConfirmModal,
@@ -72,49 +73,8 @@ import { htmlToSections, sectionsToHTML } from "../components/TermsCondition";
 import LoadingOverlay from "../components/LoadingOverlay";
 
 import { useDashboardStats } from "../hooks/useDashboardStats";
-
-// ============================================================
-// DESIGN TOKENS — refined minimal (neutral light)
-// Clean neutral off-white (not cream), true-grey text scale,
-// hairline borders, one soft shadow, a muted sage accent.
-// ============================================================
-const T = {
-  canvas: "#f6f7f8",      // neutral off-white page
-  surface: "#ffffff",     // cards / table
-  ink: "#1b1d1e",         // near-black, neutral
-  inkSoft: "#646a6e",     // muted grey
-  inkFaint: "#9aa0a4",    // faint labels
-  line: "#e8eaec",        // hairline borders
-  lineSoft: "#f0f1f3",    // softer dividers
-  accent: "#2563c4",      // clean cool blue
-  accentSoft: "#e6f0fb",
-  accentInk: "#1d63c4",
-  shadow: "0 1px 2px rgba(20,22,24,0.04), 0 8px 24px -12px rgba(20,22,24,0.10)",
-  radius: 16,
-  radiusSm: 10,
-};
-
-const FONT_STACK =
-  "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-
-const useMediaQuery = (query) => {
-  const [matches, setMatches] = useState(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia(query).matches;
-    }
-    return false;
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia(query);
-    const handler = (e) => setMatches(e.matches);
-    mediaQuery.addEventListener("change", handler);
-    return () => mediaQuery.removeEventListener("change", handler);
-  }, [query]);
-
-  return matches;
-};
+import { useMediaQuery, BREAKPOINTS } from "../hooks/useMediaQuery";
+import { T, FONT_STACK } from "../styles/theme";
 
 // Cool but vivid status palette — each state clearly distinct and readable.
 const STATUS_CONFIG = {
@@ -312,6 +272,13 @@ const ShimmerStatsCard = ({ isMobile }) => {
   );
 };
 
+// Long customer/project names would otherwise wrap across several lines and
+// blow up row height (both in the table and in cards) — clip to one line
+// with a `title` tooltip carrying the full value instead.
+const TRUNCATE = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+// Project names get a little more room than a single line before clipping.
+const CLAMP_2 = { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", textOverflow: "ellipsis" };
+
 // Helper function to get currency symbol
 const getCurrencySymbol = (currencyCode) => {
   const symbols = {
@@ -329,8 +296,12 @@ const getCurrencySymbol = (currencyCode) => {
 };
 
 export default function HomeScreen({ onNavigate, onViewQuotation }) {
-  const isMobile = useMediaQuery("(max-width: 768px)");
-  const isTablet = useMediaQuery("(max-width: 1100px)");
+  const isMobile  = useMediaQuery(`(max-width: ${BREAKPOINTS.mobile}px)`);
+  // Below this width the table's own minWidth no longer fits inside the
+  // page's container once padding/scrollbar are accounted for, so cards
+  // are forced rather than left as a user-toggleable choice that can
+  // strand the table in a horizontally-scrolling state.
+  const isCompact = useMediaQuery(`(max-width: ${BREAKPOINTS.compact}px)`);
   useEffect(() => {
     console.log("🟪 HomeScreen MOUNT");
     return () => console.log("🟪 HomeScreen UNMOUNT");
@@ -399,8 +370,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
 
   const { company: currentCompany, selectedCurrency, refreshCompanyData } = useCompanyCurrency();
 
-  const hasMountedRef = useRef(false);
-
   const statsReady = dashboardStats?._selectionId != null;
   const tableReady = quotationsInitialized;
 
@@ -436,14 +405,6 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     changeLimit(20);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!hasMountedRef.current) {
-      hasMountedRef.current = true;
-      return;
-    }
-    if (isMobile || isTablet) setUiState((prev) => ({ ...prev, viewMode: "card" }));
-  }, [isMobile, isTablet]);
 
   const addToast = useCallback((message, type = "info") => {
     const id = ++toastIdRef.current;
@@ -703,6 +664,11 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
     borderBottom: `1px solid ${T.line}`, backgroundColor: T.surface, whiteSpace: "nowrap",
     position: "sticky", top: 0, zIndex: 1,
   };
+  // Actions stays pinned to the right edge of the scroll container while
+  // the rest of the row scrolls underneath it — so on any width where the
+  // table still needs horizontal scroll, the buttons never scroll away.
+  const stickyActionTh = { ...thStyle, position: "sticky", right: 0, top: 0, zIndex: 2, borderLeft: "1px solid #d0d4d8" };
+  const stickyActionTd = { padding: "0.85rem 1rem", verticalAlign: "middle", position: "sticky", right: 0, backgroundColor: T.surface, borderLeft: "1px solid #d0d4d8" };
 
   const SkeletonLoader = () => (
     <div style={{ overflowX: "auto", width: "100%", WebkitOverflowScrolling: "touch" }}>
@@ -715,7 +681,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
           </tr>
         </thead>
         <tbody>
-          {[0, 1, 2, 3, 4, 5, 6].map((i) => (<SkeletonRow key={i} />))}
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => (<SkeletonRow key={i} columns={9} />))}
         </tbody>
       </table>
     </div>
@@ -906,7 +872,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                 onApply={handleApplyFilters}
               />
 
-              <ViewToggle view={uiState.viewMode} onViewChange={(view) => setUiState((prev) => ({ ...prev, viewMode: view }))} isMobile={isMobile} />
+              <ViewToggle view={uiState.viewMode} onViewChange={(view) => setUiState((prev) => ({ ...prev, viewMode: view }))} isMobile={isMobile} isCompact={isCompact} />
             </div>
           </div>
 
@@ -938,7 +904,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                 </div>
               ) : (
                 <>
-                  {isMobile || uiState.viewMode === "card" ? (
+                  {isMobile || isCompact || uiState.viewMode === "card" ? (
                     <>
                       <div style={{ padding: isMobile ? "0.75rem" : "1rem", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: isMobile ? "0.75rem" : "1rem" }}>
                         {safeQ.map((q) => (
@@ -973,7 +939,7 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                               <SortHeader label="Expiry" field="expiryDate" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />
                               <SortHeader label="Total" field="total" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} align="right" />
                               <SortHeader label="Status" field="status" sort={{ field: filters.sortBy, dir: filters.sortDir }} onSort={handleSort} />
-                              <th style={{ ...thStyle, textAlign: "center" }}>Actions</th>
+                              <th style={{ ...stickyActionTh, textAlign: "center" }}>Actions</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1001,17 +967,21 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
                                     </div>
                                   </td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}>
-                                    <div style={{ fontWeight: 600, color: T.ink, fontSize: "0.875rem" }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || "N/A"}</div>
-                                    {q.contact && <div style={{ fontSize: "0.75rem", color: T.inkFaint, marginTop: 2 }}>{q.contact}</div>}
+                                    <div title={q.customerSnapshot?.name || q.customer || q.customerId?.name || "N/A"} style={{ fontWeight: 600, color: T.ink, fontSize: "0.875rem", maxWidth: 200, ...TRUNCATE }}>{q.customerSnapshot?.name || q.customer || q.customerId?.name || "N/A"}</div>
+                                    {q.contact && <div style={{ fontSize: "0.75rem", color: T.inkFaint, marginTop: 2, maxWidth: 200, ...TRUNCATE }}>{q.contact}</div>}
                                     <RejectionNote quotation={q} />
                                   </td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}>
-                                    <div style={{ fontSize: "0.875rem", color: T.inkSoft }}>{q.projectName || "—"}</div>
+                                    <div title={q.projectName || ""} style={{ fontSize: "0.875rem", color: T.inkSoft, maxWidth: 220, ...CLAMP_2 }}>{q.projectName || "—"}</div>
                                   </td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle", textAlign: "center" }}>
                                     {q.queryDate ? (
-                                      <span style={{ background: queryDatePassed ? "#fdeceb" : "#fff7e6", color: queryDatePassed ? "#c1352b" : "#b45309", padding: "0.25rem 0.7rem", borderRadius: 999, fontSize: "0.75rem", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
-                                        <Calendar size={12} /> {fmtDate(q.queryDate)} {queryDatePassed && "⚠"}
+                                      <span
+                                        title={queryDatePassed ? "Follow-up overdue" : "Follow-up date"}
+                                        style={{ background: queryDatePassed ? "#fdeceb" : "#fff7e6", color: queryDatePassed ? "#c1352b" : "#b45309", border: `1px solid ${queryDatePassed ? "#f8d6d2" : "#fde9c8"}`, padding: "0.28rem 0.7rem", borderRadius: 999, fontSize: "0.74rem", fontWeight: 600, letterSpacing: "0.01em", display: "inline-flex", alignItems: "center", gap: "0.35rem", whiteSpace: "nowrap", cursor: "help" }}
+                                      >
+                                        {queryDatePassed ? <AlertCircle size={12} style={{ opacity: 0.85, flexShrink: 0 }} /> : <Calendar size={12} style={{ opacity: 0.85, flexShrink: 0 }} />}
+                                        {fmtDate(q.queryDate)}
                                       </span>
                                     ) : (
                                       <span style={{ color: T.inkFaint }}>—</span>
@@ -1043,15 +1013,17 @@ export default function HomeScreen({ onNavigate, onViewQuotation }) {
   )}
 </td>
                                   <td style={{ padding: "1rem", verticalAlign: "middle" }}><EnhancedStatusBadge status={q.status} quotation={q} /></td>
-                                  <td style={{ padding: "0.85rem 1rem", verticalAlign: "middle" }} onClick={(e) => e.stopPropagation()}>
-                                    <div style={{ display: "flex", gap: "0.3rem", justifyContent: "center", flexWrap: "wrap" }}>
+                                  <td style={stickyActionTd} onClick={(e) => e.stopPropagation()}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem" }}>
                                       {isDraft ? (
                                         <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onViewQuotation(q._id, { edit: true })} icon={Edit2} label="Edit" title="Continue editing this draft" />
                                       ) : (
                                         <ActionBtn bg="#e6f0fb" color="#1d63c4" onClick={() => onViewQuotation(q._id)} icon={Eye} label="View" title="View quotation" />
                                       )}
-                                      {canAward && <ActionBtn bg="#e3f5ee" color="#0f7a52" onClick={() => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation: q, busy: false } }))} icon={Award} label="Award" title="Mark awarded / not awarded" />}
-                                      {canDelete && <ActionBtn bg="#fdeceb" color="#c1352b" onClick={() => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation: q, busy: false } }))} icon={Trash2} label="Del" title="Delete quotation" />}
+                                      <RowActionsMenu actions={[
+                                        canAward && { key: 'award', label: 'Award', icon: Award, bg: '#e3f5ee', color: '#0f7a52', onClick: () => setModalsState((prev) => ({ ...prev, awardModal: { open: true, quotation: q, busy: false } })) },
+                                        canDelete && { key: 'delete', label: 'Delete', icon: Trash2, bg: '#fdeceb', color: '#c1352b', onClick: () => setModalsState((prev) => ({ ...prev, deleteModal: { open: true, quotation: q, busy: false } })) },
+                                      ]} />
                                     </div>
                                    </td>
                                 </tr>
