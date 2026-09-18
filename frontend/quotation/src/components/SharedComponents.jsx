@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Users, Package, Plus, Trash2, Eye, Download, FileText,
   TrendingUp, AlertCircle, LogOut, Loader, Search, X,
@@ -98,17 +99,40 @@ ActionBtn.displayName = 'ActionBtn';
 // actions (Approve/Reject/Award/Delete/Edit) become available.
 export const RowActionsMenu = React.memo(({ actions }) => {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
+  const [menuPos, setMenuPos] = useState(null);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  // Rendered into document.body (below) rather than inline: every row's
+  // sticky Actions cell is its own stacking context, so an inline dropdown
+  // from one row gets painted over by the next row's sticky cell. A portal
+  // sidesteps that entirely — position is computed from the button's own
+  // on-screen rect instead of relying on CSS containment.
+  const openMenu = () => {
+    const rect = btnRef.current.getBoundingClientRect();
+    setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+    setOpen(true);
+  };
 
   useEffect(() => {
     if (!open) return;
-    const handleOutside = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const handleOutside = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false);
+    };
     const handleEscape = (e) => { if (e.key === 'Escape') setOpen(false); };
+    // Any scroll (page or the table's own horizontal scroll container)
+    // invalidates the computed position, so just close rather than track it.
+    const handleScroll = () => setOpen(false);
     document.addEventListener('mousedown', handleOutside);
     document.addEventListener('keydown', handleEscape);
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', handleScroll);
     return () => {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleEscape);
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', handleScroll);
     };
   }, [open]);
 
@@ -116,16 +140,17 @@ export const RowActionsMenu = React.memo(({ actions }) => {
   if (visibleActions.length === 0) return null;
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
+    <>
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={btnRef}
+        onClick={() => (open ? setOpen(false) : openMenu())}
         title="More actions"
         style={{ width: 28, height: 28, border: `1px solid ${T.line}`, borderRadius: 8, background: open ? T.canvas : T.surface, color: T.inkSoft, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}
       >
         <MoreVertical size={15} />
       </button>
-      {open && (
-        <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: T.shadow, minWidth: 160, zIndex: 50, padding: 4 }}>
+      {open && menuPos && createPortal(
+        <div ref={menuRef} style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, boxShadow: T.shadow, minWidth: 160, zIndex: 1000, padding: 4 }}>
           {visibleActions.map((a) => (
             <button
               key={a.key}
@@ -138,9 +163,10 @@ export const RowActionsMenu = React.memo(({ actions }) => {
               <a.icon size={13} /> {a.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 });
 RowActionsMenu.displayName = 'RowActionsMenu';
