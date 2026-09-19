@@ -416,6 +416,21 @@ export function tidyTermsHtml(html) {
   return container.innerHTML || html;
 }
 
+// Pasted content (web pages, chat UIs, Word) often carries inline
+// word-break:break-all / overflow-wrap:anywhere / white-space:pre etc. An
+// inline style beats every stylesheet rule, so it silently overrides the PDF's
+// word-wrapping CSS and splits ordinary words mid-character at line ends
+// ("back-c/harged"). Drop those line-breaking properties; wrapping is owned
+// by the PDF/viewer stylesheet, never by pasted inline styles.
+function stripLineBreakStyles(container) {
+  container.querySelectorAll("[style]").forEach((el) => {
+    ["word-break", "overflow-wrap", "word-wrap", "hyphens", "line-break", "white-space"].forEach((prop) =>
+      el.style.removeProperty(prop)
+    );
+    if (el.getAttribute("style").trim() === "") el.removeAttribute("style");
+  });
+}
+
 export function sanitizeTermsHtml(html) {
   if (!html) return "";
   const normalized = normalizeNonBreakingSpaces(html);
@@ -426,6 +441,7 @@ export function sanitizeTermsHtml(html) {
   });
   const container = document.createElement("div");
   container.innerHTML = clean;
+  stripLineBreakStyles(container);
   removeEmptyTableRows(container);
   splitBrSeparatedBlocks(container);
   protectHyphensInTextNodes(container);

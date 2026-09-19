@@ -932,6 +932,9 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        directly-matched rule always wins over an inherited one regardless
        of specificity. */
     .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a){overflow-wrap:break-word;word-break:normal;}
+    /* Belt-and-braces with sanitizeTermsHtml's stripLineBreakStyles: never let
+       a leftover inline word-break:break-all split words mid-character. */
+    .terms-content *{word-break:normal !important;hyphens:manual !important;}
     /* Chromium has a documented quirk where overflow-wrap:break-word
        combined with text-align:justify makes it prefer splitting a word
        mid-character over wrapping it whole to the next line, even when the
