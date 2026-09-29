@@ -2839,10 +2839,14 @@ exports.generatePDF = async (req, res) => {
 
   const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
   let page = null;
+  // Hoisted out of try{} (same reason `page` is) so the catch block below
+  // can still reach it — a const inside try{} isn't visible in catch{}.
+  let browserRef = null;
 
   await acquirePdfSlot();
   try {
     const browser = await getBrowser();
+    browserRef = browser;
     page = await browser.newPage();
 
     // Pinned to the real A4 print content width (see pdfPaginator.js) so
@@ -2917,6 +2921,38 @@ exports.generatePDF = async (req, res) => {
 
   } catch (err) {
     if (page) await page.close().catch(() => {});
+    // A page.setContent/page.pdf() TIMEOUT (Puppeteer's TimeoutError —
+    // "Timed out after waiting Xms") means Chromium's renderer itself went
+    // unresponsive, not just this one page. This browser is launched with
+    // --single-process/--no-zygote (see getBrowser() above) specifically to
+    // fit a resource-constrained host, but the tradeoff is every tab shares
+    // ONE OS process — once that process's main thread is stuck, closing
+    // just this page (above) can't recover it, isConnected() on the CDP
+    // websocket keeps reporting true regardless (that's a separate control
+    // channel from the renderer that's actually wedged), and getBrowser()
+    // would keep handing this same zombie instance to every future
+    // request — confirmed exactly this in production: one request timed
+    // out and EVERY PDF request after it timed out identically until the
+    // container was manually restarted. Force-discard the browser here so
+    // the next request spawns a completely fresh one instead — turns "the
+    // whole server is down until someone restarts it" into "this one
+    // request failed."
+    if (err.name === 'TimeoutError' || /timed out/i.test(err.message || '')) {
+      logger.warn('PDF generation timed out — discarding the shared Puppeteer browser instance so the next request starts fresh');
+      if (browserRef && browserRef === _browser) {
+        _browser = null;
+        // Not awaited — best-effort, fire-and-forget. A wedged
+        // --single-process browser may not respond to the graceful CDP
+        // close (Browser.close) at all, so awaiting it here would just
+        // trade one hang for another on the NEXT request's critical path.
+        // SIGKILL fallback in case close() itself never resolves.
+        const stale = browserRef;
+        const killTimer = setTimeout(() => {
+          try { stale.process()?.kill('SIGKILL'); } catch { /* already gone */ }
+        }, 5000);
+        stale.close().then(() => clearTimeout(killTimer)).catch(() => {});
+      }
+    }
     releasePdfSlot();
     logger.error(`PDF generation error: ${err.message}`);
     res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
