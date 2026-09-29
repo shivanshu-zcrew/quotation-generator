@@ -226,6 +226,33 @@ export const TERMS_CONTENT_CSS = `
      the PDF's .terms-content p (which already does this). */
   .ql-editor p, .ql-editor h1, .ql-editor h2, .ql-editor h3, .ql-editor h4, .ql-editor h5, .ql-editor h6,
   .ql-editor li, .ql-editor blockquote { white-space: normal; }
+  /* Mirrors the PDF's .terms-content :is(p,li,...){overflow-wrap:break-word}
+     safety net (pdfGenerator.js) — that one is set DIRECTLY on each tag, not
+     left to inherit from a shared ancestor. This viewer only ever had
+     .ql-editor{word-wrap:break-word} from quill.core.css to fall back on,
+     which — being inherited rather than a direct rule — silently loses to
+     any more-specific descendant selector, including a leftover inline
+     style DOMPurify's allowlist doesn't block for (color/font-family/etc are
+     genuine Quill formats, but content that reached this field without ever
+     passing through Quill's own clipboard converter — an older import, or
+     HTML written directly via the API — can carry stray CSS Quill itself
+     would never emit, the same root cause as the word-break splitting bug
+     this same file's sanitizeTermsHtml.js works around). Also caps width so
+     a pasted absolute-width span/div can't force this row wider than the
+     box regardless of wrap behavior. */
+  .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a) {
+    overflow-wrap: break-word; word-break: normal; max-width: 100%;
+  }
+  /* Same Chromium quirk carve-out as the PDF's identical rule
+     (pdfGenerator.js): overflow-wrap:break-word + text-align:justify makes
+     Chromium split a word mid-character even when it fits whole on the next
+     line. Scoped to justified blocks only, same as there. */
+  .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"],
+  .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"],
+  .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"] *,
+  .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"] * {
+    overflow-wrap: normal; word-break: normal;
+  }
   /* Deliberately NOT forcing font-weight:700 on headings here (an earlier
      version of this rule did). Root cause, verified directly against this
      project's real compiled output (vite build, dist/assets/*.css):

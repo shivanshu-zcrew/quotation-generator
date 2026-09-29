@@ -431,6 +431,34 @@ function stripLineBreakStyles(container) {
   });
 }
 
+// Same paste-cruft source as stripLineBreakStyles above, a different
+// symptom: a source page's own layout (a fixed-width column, a wide table
+// cell) carried over as an inline width/min-width in absolute units. Quill's
+// own formats never write width on anything but <img> (see the comment on
+// DOMPurify's uponSanitizeAttribute hook above), so this only ever fires on
+// content that bypassed Quill's clipboard converter, same as the
+// word-break case — but here the effect isn't a split word, it's the whole
+// row refusing to wrap at all and overflowing straight off the printable/
+// visible edge, because an ancestor is simply wider, in absolute px, than
+// this app's ~700px content box. <img> is deliberately excluded: its width
+// is a real, intentional attribute (ImageResizeHandles) with no CSS-side
+// equivalent, and quill.core.css already caps it at max-width:100%. <table>/
+// <td>/<th> are also excluded — quill.core.css already forces
+// table-layout:fixed;width:100% on the table itself, so a column's own width
+// is relative sizing *within* that fixed 100%, not a source of overflow.
+const ABSOLUTE_WIDTH_RE = /^-?[\d.]+(px|pt|in|cm|mm|pc)$/i;
+function stripFixedWidths(container) {
+  container.querySelectorAll("[style]").forEach((el) => {
+    if (["IMG", "TABLE", "TD", "TH"].includes(el.tagName)) return;
+    ["width", "min-width", "max-width"].forEach((prop) => {
+      if (ABSOLUTE_WIDTH_RE.test(el.style.getPropertyValue(prop).trim())) {
+        el.style.removeProperty(prop);
+      }
+    });
+    if (el.getAttribute("style").trim() === "") el.removeAttribute("style");
+  });
+}
+
 export function sanitizeTermsHtml(html) {
   if (!html) return "";
   const normalized = normalizeNonBreakingSpaces(html);
@@ -442,6 +470,7 @@ export function sanitizeTermsHtml(html) {
   const container = document.createElement("div");
   container.innerHTML = clean;
   stripLineBreakStyles(container);
+  stripFixedWidths(container);
   removeEmptyTableRows(container);
   splitBrSeparatedBlocks(container);
   protectHyphensInTextNodes(container);
