@@ -239,19 +239,42 @@ export const TERMS_CONTENT_CSS = `
      would never emit, the same root cause as the word-break splitting bug
      this same file's sanitizeTermsHtml.js works around). Also caps width so
      a pasted absolute-width span/div can't force this row wider than the
-     box regardless of wrap behavior. */
+     box regardless of wrap behavior. !important on all three: none of
+     overflow-wrap/word-break/max-width/white-space are genuine Quill
+     formats (Quill only ever writes color/background-color/font-family/
+     font-size/text-align/text-decoration/font-weight/font-style as inline
+     styles — see sanitizeTermsHtml.js/sanitizeTerms.js's identical
+     allowlists), so forcing them can never fight a real, intended one —
+     which makes this a true CSS-level backstop, independent of
+     sanitizeTermsHtml.js's stripLineBreakStyles/stripFixedWidths actually
+     catching whatever a future paste turns out to carry. TERMS_CONTENT_CSS
+     is never loaded alongside the live ReactQuill editor (see below), so
+     this can't affect typing either. white-space:normal is the one that
+     actually matters most for overflow specifically — confirmed directly
+     (an isolated test with the JS sanitizer deliberately skipped) that
+     even with overflow-wrap/word-break/max-width all forced, a bare inline
+     white-space:nowrap alone was still enough to suppress ALL wrapping and
+     overflow the box; max-width only clamps the element's own box, it does
+     nothing to stop nowrap text from spilling out of that box. Real gap in
+     the first version of this rule, not hypothetical. */
   .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a) {
-    overflow-wrap: break-word; word-break: normal; max-width: 100%;
+    overflow-wrap: break-word !important; word-break: normal !important; max-width: 100% !important; white-space: normal !important;
   }
   /* Same Chromium quirk carve-out as the PDF's identical rule
      (pdfGenerator.js): overflow-wrap:break-word + text-align:justify makes
      Chromium split a word mid-character even when it fits whole on the next
-     line. Scoped to justified blocks only, same as there. */
+     line. Scoped to justified blocks only, same as there. !important
+     required here too now that the general rule above is !important — a
+     non-!important declaration never beats an !important one regardless of
+     specificity, so without this the justify carve-out would silently stop
+     overriding it. This selector's higher specificity (an attribute
+     selector, not just a tag list) is what decides the outcome between
+     these two !important rules — same relative order as before. */
   .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"],
   .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"],
   .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"] *,
   .ql-editor :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"] * {
-    overflow-wrap: normal; word-break: normal;
+    overflow-wrap: normal !important; word-break: normal !important;
   }
   /* Deliberately NOT forcing font-weight:700 on headings here (an earlier
      version of this rule did). Root cause, verified directly against this
@@ -343,6 +366,16 @@ export const TERMS_CONTENT_CSS = `
      harmless for an embed that's almost always the only thing on its own
      line anyway. */
   .ql-editor table { margin: 14px 0; }
+  /* Same white-space/overflow-wrap backstop as the p/li/h1-6/span rule
+     above, mirrored for table cells (matches the PDF's identical
+     .terms-content td,th rule) — a pasted inline white-space:nowrap on a
+     td/th would otherwise still overflow the table regardless of
+     everything else here. width/max-width deliberately NOT forced on
+     cells — a column's own width is legitimate (Quill's resize handles set
+     it) and this must not fight that. quill.core.css already gives
+     td/th table-layout:fixed + white-space:normal by default; this only
+     needs to matter once a pasted style tries to override it. */
+  .ql-editor td, .ql-editor th { white-space: normal !important; overflow-wrap: break-word !important; }
   .ql-editor img { display: inline-block; margin: 10px 6px; }
 `;
 

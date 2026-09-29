@@ -931,7 +931,29 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        universal *{...} reset above matches these tags directly, and a
        directly-matched rule always wins over an inherited one regardless
        of specificity. */
-    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a){overflow-wrap:break-word;word-break:normal;}
+    /* !important: overflow-wrap/word-break/max-width/white-space are never
+       genuine Quill formats (Quill's own formats only ever write color/
+       background-color/font-family/font-size/text-align/text-decoration/
+       font-weight/font-style as inline styles — see sanitizeTermsHtml.js/
+       sanitizeTerms.js for the same list), so forcing them can never fight a
+       real, intended one. That makes this a true CSS-level backstop,
+       independent of sanitizeTermsHtml.js's stripLineBreakStyles/
+       stripFixedWidths (which strip specific known-dangerous inline style
+       properties before this ever renders) actually catching whatever a
+       future paste turns out to carry — belt AND suspenders, not belt only.
+       max-width:100% here for the same reason stripFixedWidths exists: an
+       absolute pasted width must never be able to push a row wider than the
+       page regardless of whether the JS layer already stripped it.
+       white-space:normal is the one that actually matters most for
+       overflow specifically: confirmed directly (an isolated test with the
+       JS sanitizer deliberately skipped) that even with overflow-wrap/
+       word-break/max-width all forced here, a bare inline
+       white-space:nowrap alone was still enough to suppress ALL wrapping
+       and overflow the box — max-width just clamps the ELEMENT's own box,
+       it does nothing to stop nowrap text from spilling out of that box.
+       This was a real gap in the very first version of this rule, not a
+       hypothetical one. */
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,span,strong,b,em,i,u,s,a){overflow-wrap:break-word !important;word-break:normal !important;max-width:100% !important;white-space:normal !important;}
     /* Belt-and-braces with sanitizeTermsHtml's stripLineBreakStyles: never let
        a leftover inline word-break:break-all split words mid-character. */
     .terms-content *{word-break:normal !important;hyphens:manual !important;}
@@ -947,10 +969,18 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        since Quill only ever writes text-align on the block element itself,
        never on a nested span) rather than turned off everywhere — that was
        the actual bug in the previous version of this rule. */
+    /* !important here too — required now that the general rule above is
+       !important (a non-!important declaration never beats an !important
+       one, regardless of selector specificity, so leaving this one plain
+       would silently stop overriding the general rule and reintroduce the
+       exact word-splitting bug this carve-out exists to prevent). This
+       selector's higher specificity (an attribute selector, not just a tag
+       list) is what decides the outcome between these two !important
+       rules — same relative order as before, just preserved correctly. */
     .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"],
     .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"],
     .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align: justify"] *,
-    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"] *{overflow-wrap:normal;word-break:normal;}
+    .terms-content :is(p,li,blockquote,h1,h2,h3,h4,h5,h6)[style*="text-align:justify"] *{overflow-wrap:normal !important;word-break:normal !important;}
     .terms-content h1,.terms-content h2,.terms-content h3,.terms-content h4,.terms-content h5,.terms-content h6{margin:10px 0 6px;font-weight:700;color:#0f172a;white-space:normal;}
     .terms-content h1{font-size:18px;} .terms-content h2{font-size:15px;} .terms-content h3{font-size:13px;}
     .terms-content h4{font-size:11px;} .terms-content h5{font-size:10px;} .terms-content h6{font-size:9px;}
@@ -988,7 +1018,14 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        isolated Puppeteer page that doesn't load that stylesheet, same
        reason as every other .terms-content rule above. */
     .terms-content table{border-collapse:collapse;table-layout:fixed;width:100%;margin:14px 0;}
-    .terms-content td,.terms-content th{border:1px solid #cbd5e1;padding:4px 6px;white-space:normal;vertical-align:top;word-wrap:break-word;}
+    /* white-space/overflow-wrap forced !important here too, same reasoning
+       as the p/li/h1-6/span backstop above — a pasted inline
+       white-space:nowrap on a td/th would otherwise still overflow the
+       table regardless of everything else on this page. width/max-width
+       deliberately NOT forced here — a table cell's own width is
+       legitimate (Quill's column resize handles set it) and this rule
+       must not fight that. */
+    .terms-content td,.terms-content th{border:1px solid #cbd5e1;padding:4px 6px;white-space:normal !important;vertical-align:top;overflow-wrap:break-word !important;word-wrap:break-word;}
     .terms-content th{font-weight:700;color:#0f172a;background:#f8fafc;}
     /* max-width keeps an inline image (TermsCondition.jsx's image insert)
        wider than the PDF's content area from overflowing it. Deliberately

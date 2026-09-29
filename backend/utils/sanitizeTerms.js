@@ -23,17 +23,26 @@ const ALLOWED_STYLES = {
   'text-decoration': [/^(underline|line-through|none)$/],
   'font-weight': [/^(bold|normal|[1-9]00)$/],
   'font-style': [/^(italic|normal)$/],
-  // Written by the table column/row resize handles (TermsCondition.jsx) via
-  // the cellWidth/cellHeight Quill formats registered in richTextConfig.js.
-  // Numeric px/% lengths only — no calc()/url()/expression() vectors.
-  width: [/^\d+(\.\d+)?(px|%)$/],
-  height: [/^\d+(\.\d+)?(px|%)$/],
-  // Written on the <table> tag itself (not a cell) by the outer left-edge
-  // drag handle — see extractTableSizing in TermsCondition.jsx, which is
-  // what moves this from the cells it's tracked on during editing onto the
-  // table tag before this sanitizer ever sees it.
-  'margin-left': [/^\d+(\.\d+)?(px|%)$/],
 };
+
+// width/height/margin-left are deliberately NOT in ALLOWED_STYLES above
+// (which sanitize-html applies to every tag via '*') — scoped instead to
+// just the tags that legitimately write them (the table column/row resize
+// handles in TermsCondition.jsx, via the cellWidth/cellHeight Quill formats
+// in richTextConfig.js, plus extractTableSizing moving the table's own
+// width/indent onto the <table> tag itself). A pasted width on a <p>/<span>
+// (content copied from a web page/Word doc's own fixed-width layout, which
+// Quill's own formats never produce) has no legitimate use here and is
+// exactly what let one row of a client's Terms & Conditions overflow its
+// printable/viewport width instead of wrapping — this is the actual
+// storage-level boundary for that, same trust reasoning as ALLOWED_TAGS/
+// ALLOWED_STYLES above: the frontend's sanitizeTermsHtml.js strips this
+// defensively on every render too, but that's the browser, not the
+// boundary — a direct API call, or any future consumer that renders this
+// field without going through that frontend sanitizer, must not be able to
+// store it in the first place.
+const SIZE_VALUE = [/^\d+(\.\d+)?(px|%)$/];
+const TABLE_SIZE_STYLES = { width: SIZE_VALUE, height: SIZE_VALUE };
 
 function sanitizeTerms(html) {
   if (!html) return '';
@@ -60,7 +69,12 @@ function sanitizeTerms(html) {
       img: ['src', 'alt', 'width', 'height', 'data-s3-key'],
       '*': ['style'],
     },
-    allowedStyles: { '*': ALLOWED_STYLES },
+    allowedStyles: {
+      '*': ALLOWED_STYLES,
+      table: { ...TABLE_SIZE_STYLES, 'margin-left': SIZE_VALUE },
+      td: TABLE_SIZE_STYLES,
+      th: TABLE_SIZE_STYLES,
+    },
     allowedSchemes: ['http', 'https', 'mailto'],
     // Scoped separately from the general allowedSchemes above (which is for
     // <a href>, and has no business allowing data: URIs) — matches what

@@ -837,19 +837,22 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     setSaveStep("Preparing data...");
   
     try {
-      let finalTermsAndConditions = "";
-  
-      if (tcSections && tcSections.length > 0) {
-        finalTermsAndConditions = tcSections
-          .map(sec => {
-            let text = "";
-            if (sec.heading?.trim()) text += sec.heading + "\n\n";
-            if (sec.content?.trim()) text += sec.content;
-            return text.trim();
-          })
-          .filter(Boolean)
-          .join("\n\n");
-      }
+      // sectionsToHTML (not a hand-rolled heading+content string join) —
+      // every other save path in this file (the PDF-preview payload below,
+      // and the template/duplicate-detection checks above) already builds
+      // termsAndConditions this way. A previous version of this specific
+      // save path joined sec.heading as plain text ahead of sec.content's
+      // real HTML with literal "\n\n", instead of sectionsToHTML's real
+      // <h4>/<div> wrapper — htmlToSections' isHtmlContent check (any "<"
+      // tag anywhere in the string counts) still recognized the result as
+      // "already HTML" since sec.content's own <p> tags are in there
+      // somewhere, so it never got re-wrapped/fixed on load either: the
+      // heading rendered as bare unstyled text sitting outside any
+      // paragraph rather than a real, visible heading — see the "T&C isn't
+      // visible after admin save" report this fixes.
+      const finalTermsAndConditions = tcSections && tcSections.length > 0
+        ? sectionsToHTML(tcSections)
+        : "";
   
       // Filter existing S3 term images (already uploaded)
       const existingTermsImages = termsImages
