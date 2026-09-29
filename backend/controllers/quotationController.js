@@ -2843,6 +2843,18 @@ exports.generatePDF = async (req, res) => {
   // can still reach it — a const inside try{} isn't visible in catch{}.
   let browserRef = null;
 
+  // filename is "Quotation_<quotationNumber>_<date>" (see downloadQuotationPDF
+  // in pdfGenerator.js) — the one piece of identifying info this endpoint
+  // gets about WHICH document is being rendered, since `html` itself is an
+  // opaque pre-built string. Logged on every request (not just failures) so
+  // a hang caught mid-request — before the catch block below ever runs — is
+  // still traceable: production has hit a page.pdf() timeout that wedges
+  // the whole server (see the self-heal in the catch block), and there was
+  // no way to tell which quotation/how large the content was when it
+  // happened. This is what actually lets a recurrence be root-caused
+  // instead of guessed at again.
+  logger.info('PDF generation started', { filename: safeFilename, htmlLength: html.length, companyId: req.headers['x-company-id'] });
+
   await acquirePdfSlot();
   try {
     const browser = await getBrowser();
@@ -2954,7 +2966,7 @@ exports.generatePDF = async (req, res) => {
       }
     }
     releasePdfSlot();
-    logger.error(`PDF generation error: ${err.message}`);
+    logger.error(`PDF generation error: ${err.message}`, { filename: safeFilename, htmlLength: html?.length });
     res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
   }
 };
