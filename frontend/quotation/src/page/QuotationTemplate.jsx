@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Image, FileImage, Upload, FileText, Plus, Trash2, X } from "lucide-react";
 import QuotationLayout from '../components/QuotationLayout';
@@ -793,6 +793,30 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     });
   }, [quotationItems]);
   
+  // handleManagerPicker (below) used to call handleSubmitWithEmails DIRECTLY
+  // by identifier, memoized on a narrower dependency list than
+  // handleSubmitWithEmails itself actually needs (selectedCompany/
+  // uploadingImages/user/showSnack only — see its own useCallback deps
+  // further down, which correctly include tcSections/quotationItems/etc).
+  // That mismatch, papered over with an eslint-disable instead of fixed,
+  // was a real stale-closure bug: once the user picks a company (creating
+  // THIS handleManagerPicker closure) and then only edits things outside
+  // its own dep list — most importantly, types Terms & Conditions —
+  // handleManagerPicker's deps never change, so React keeps returning that
+  // SAME memoized closure. Clicking "Save" as admin then called whichever
+  // handleSubmitWithEmails existed the moment handleManagerPicker was last
+  // (re)created, not the latest one — silently submitting stale (often
+  // still-empty) tcSections regardless of what had actually been typed
+  // since. This is exactly the "Terms & Conditions blank after admin
+  // create, fine after edit" report: the edit/update save path is a
+  // different function entirely and never had this indirection.
+  // handleSubmitWithEmails is declared further down in this file, so it
+  // can't be listed directly in handleManagerPicker's own deps without
+  // reordering ~150 lines — a ref updated every render sidesteps that
+  // while still always calling the CURRENT version (refs are stable
+  // identity, so this needs no entry in the deps array below).
+  const handleSubmitWithEmailsRef = useRef(null);
+
   const handleManagerPicker = useCallback(async () => {
     if (!validateAll()) return;
     if (!selectedCompany) { showSnack("Please select a company", "error"); return; }
@@ -801,7 +825,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
       return;
     }
     // Admin quotations go to pending_admin — no ops email, skip picker
-    if (user?.role === 'admin') { handleSubmitWithEmails([]); return; }
+    if (user?.role === 'admin') { handleSubmitWithEmailsRef.current([]); return; }
 
     setManagersLoading(true);
     setSelectedManagerId(null);
@@ -815,7 +839,8 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     } finally {
       setManagersLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Genuinely exhaustive now: handleSubmitWithEmailsRef is a ref (stable
+  // identity), not a dependency React needs to track.
   }, [validateAll, selectedCompany, uploadingImages, user, showSnack]);
 
   const handleSubmitWithEmails = useCallback(async (notifyManagerEmails) => {
@@ -975,6 +1000,15 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [validateAll, selectedCompany, customer, quotationData, quotationItems, uploadedDocuments, tcSections, termsImages, addQuotation, user, navigate, showSnack, quotationNumber, selectedCurrency, uploadingImages, applyOwnUserNameSync]);
+
+  // Keeps handleManagerPicker's handleSubmitWithEmailsRef pointed at the
+  // CURRENT handleSubmitWithEmails on every render (this function is
+  // recreated whenever tcSections/quotationItems/etc change, per its own
+  // deps above) — see the comment on handleSubmitWithEmailsRef's
+  // declaration for why this indirection exists at all.
+  useEffect(() => {
+    handleSubmitWithEmailsRef.current = handleSubmitWithEmails;
+  });
 
   const handleExportPDF = useCallback(async () => {
     if (!validateAll()) return;
