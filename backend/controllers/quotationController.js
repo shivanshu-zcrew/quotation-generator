@@ -379,13 +379,29 @@ const getBrowser = async () => {
     _browser = await puppeteer.launch({
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+      // --single-process/--no-zygote deliberately dropped: they were the
+      // actual cause of a real production outage, not just a memory-saving
+      // tradeoff that happened to be fine. Puppeteer's own docs explicitly
+      // recommend against --single-process for production — it forces
+      // EVERY tab to share one OS process with no isolation, so a single
+      // hung render doesn't just fail its own page, it wedges the whole
+      // browser for every other request too. Confirmed directly: a
+      // page.pdf() timeout on one specific quotation, with the same
+      // content and no concurrent load at the time (ruled out via server
+      // logs — see PDF generation started/error log pairs), still took
+      // down every subsequent PDF request until the process was manually
+      // restarted (the self-heal in generatePDF's catch block was added to
+      // survive this, but doesn't prevent it). The instance has ample
+      // headroom for normal multi-process Chromium (2.6GiB available,
+      // ~240MB baseline backend usage at idle — confirmed via `free -h`/
+      // `docker stats` before making this change), and multi-process
+      // isolation means a wedged renderer stays contained to its own tab
+      // instead of taking the shared browser down with it.
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--no-zygote',
-        '--single-process',
       ],
     });
 
