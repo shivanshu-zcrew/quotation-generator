@@ -2847,36 +2847,13 @@ exports.deleteQuotation = async (req, res) => {
   }
 };
 
-exports.generatePDF = async (req, res) => {
-  const { html, filename = 'quotation' } = req.body;
-  const startTime = Date.now();
-
-  if (!html?.trim()) return res.status(400).json({ message: 'HTML content is required' });
-
-  const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
-  let page = null;
-  // Hoisted out of try{} (same reason `page` is) so the catch block below
-  // can still reach it — a const inside try{} isn't visible in catch{}.
-  let browserRef = null;
-
-  // filename is "Quotation_<quotationNumber>_<date>" (see downloadQuotationPDF
-  // in pdfGenerator.js) — the one piece of identifying info this endpoint
-  // gets about WHICH document is being rendered, since `html` itself is an
-  // opaque pre-built string. Logged on every request (not just failures) so
-  // a hang caught mid-request — before the catch block below ever runs — is
-  // still traceable: production has hit a page.pdf() timeout that wedges
-  // the whole server (see the self-heal in the catch block), and there was
-  // no way to tell which quotation/how large the content was when it
-  // happened. This is what actually lets a recurrence be root-caused
-  // instead of guessed at again.
-  logger.info('PDF generation started', { filename: safeFilename, htmlLength: html.length, companyId: req.headers['x-company-id'] });
-
-  await acquirePdfSlot();
+// One render attempt: new page -> viewport -> request interception ->
+// setContent -> wait for images -> page.pdf(). Throws on any failure — the
+// caller (generatePDF below) decides whether to retry. Split out so a
+// second attempt doesn't duplicate this whole page-setup dance.
+async function renderPdfAttempt(browser, html) {
+  const page = await browser.newPage();
   try {
-    const browser = await getBrowser();
-    browserRef = browser;
-    page = await browser.newPage();
-
     // Pinned to the real A4 print content width (see pdfPaginator.js) so
     // this page's very first layout pass — and therefore every
     // getBoundingClientRect() measurement the pagination pass below takes —
@@ -2935,52 +2912,94 @@ exports.generatePDF = async (req, res) => {
     // timeout / any gateway's own timeout in front of this server.
     const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, timeout: 45000, margin: { top: pdfMarginMm, right: pdfMarginMm, bottom: pdfMarginMm, left: pdfMarginMm } });
 
-    await page.close();
-    page = null;
-
     if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-') throw new Error('Puppeteer returned an invalid PDF buffer');
+    return pdfBuffer;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
 
+exports.generatePDF = async (req, res) => {
+  const { html, filename = 'quotation' } = req.body;
+  const startTime = Date.now();
+
+  if (!html?.trim()) return res.status(400).json({ message: 'HTML content is required' });
+
+  const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
+
+  // filename is "Quotation_<quotationNumber>_<date>" (see downloadQuotationPDF
+  // in pdfGenerator.js) — the one piece of identifying info this endpoint
+  // gets about WHICH document is being rendered, since `html` itself is an
+  // opaque pre-built string. Logged on every request (not just failures) so
+  // a hang caught mid-request is still traceable — this is what actually
+  // let the real trigger of a recurring production outage get found
+  // (concurrency and content size were both ruled out this way), instead of
+  // staying a guessing game.
+  logger.info('PDF generation started', { filename: safeFilename, htmlLength: html.length, companyId: req.headers['x-company-id'] });
+
+  await acquirePdfSlot();
+  try {
+    let pdfBuffer;
+    let lastErr = null;
+
+    // One retry, not zero and not several. Every timeout seen in production
+    // so far succeeded immediately when the SAME quotation was regenerated
+    // right after, with no code change — see the commit that dropped
+    // --single-process for the server-log evidence (content size and
+    // concurrent load were both ruled out as the trigger). Retrying here,
+    // transparently, means the user experiences "took a few extra seconds"
+    // instead of "it failed, go click download again" — an unconditional
+    // second attempt is enough to absorb that without masking a REAL,
+    // persistent problem, which would fail both attempts and still surface
+    // below exactly as before.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const browser = await getBrowser();
+        pdfBuffer = await renderPdfAttempt(browser, html);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const isTimeout = err.name === 'TimeoutError' || /timed out/i.test(err.message || '');
+        logger.warn(`PDF generation attempt ${attempt} failed: ${err.message}`, { filename: safeFilename, htmlLength: html.length, isTimeout });
+
+        if (!isTimeout) break; // a real error (bad HTML, invalid buffer) fails identically on retry — don't burn another 45s on it
+
+        // A page.pdf() TIMEOUT means that render's renderer process went
+        // unresponsive — renderPdfAttempt's own page.close() (above) just
+        // tried to recover it via the browser process's normal supervision
+        // of its own tabs, which now that this browser is no longer
+        // launched with --single-process/--no-zygote (see getBrowser()),
+        // should usually be enough on its own: multi-process Chromium
+        // isolates a wedged renderer to itself, so the shared browser and
+        // every other concurrent request are unaffected by it. Discarding
+        // the whole browser is now a last resort, not the default reflex —
+        // only when the browser's own CDP connection is ALSO down, meaning
+        // page-level supervision genuinely couldn't recover it either.
+        if (!_browser?.isConnected()) {
+          logger.warn('Puppeteer browser also disconnected — discarding it so the next attempt starts fresh');
+          const stale = _browser;
+          _browser = null;
+          if (stale) {
+            const killTimer = setTimeout(() => {
+              try { stale.process()?.kill('SIGKILL'); } catch { /* already gone */ }
+            }, 5000);
+            stale.close().then(() => clearTimeout(killTimer)).catch(() => {});
+          }
+        }
+      }
+    }
+
+    if (lastErr) throw lastErr;
+
+    releasePdfSlot();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}.pdf`);
     res.setHeader('Content-Length', pdfBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
-    releasePdfSlot();
     res.send(Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer));
 
   } catch (err) {
-    if (page) await page.close().catch(() => {});
-    // A page.setContent/page.pdf() TIMEOUT (Puppeteer's TimeoutError —
-    // "Timed out after waiting Xms") means Chromium's renderer itself went
-    // unresponsive, not just this one page. This browser is launched with
-    // --single-process/--no-zygote (see getBrowser() above) specifically to
-    // fit a resource-constrained host, but the tradeoff is every tab shares
-    // ONE OS process — once that process's main thread is stuck, closing
-    // just this page (above) can't recover it, isConnected() on the CDP
-    // websocket keeps reporting true regardless (that's a separate control
-    // channel from the renderer that's actually wedged), and getBrowser()
-    // would keep handing this same zombie instance to every future
-    // request — confirmed exactly this in production: one request timed
-    // out and EVERY PDF request after it timed out identically until the
-    // container was manually restarted. Force-discard the browser here so
-    // the next request spawns a completely fresh one instead — turns "the
-    // whole server is down until someone restarts it" into "this one
-    // request failed."
-    if (err.name === 'TimeoutError' || /timed out/i.test(err.message || '')) {
-      logger.warn('PDF generation timed out — discarding the shared Puppeteer browser instance so the next request starts fresh');
-      if (browserRef && browserRef === _browser) {
-        _browser = null;
-        // Not awaited — best-effort, fire-and-forget. A wedged
-        // --single-process browser may not respond to the graceful CDP
-        // close (Browser.close) at all, so awaiting it here would just
-        // trade one hang for another on the NEXT request's critical path.
-        // SIGKILL fallback in case close() itself never resolves.
-        const stale = browserRef;
-        const killTimer = setTimeout(() => {
-          try { stale.process()?.kill('SIGKILL'); } catch { /* already gone */ }
-        }, 5000);
-        stale.close().then(() => clearTimeout(killTimer)).catch(() => {});
-      }
-    }
     releasePdfSlot();
     logger.error(`PDF generation error: ${err.message}`, { filename: safeFilename, htmlLength: html?.length });
     res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
