@@ -22,6 +22,9 @@ services:
       - "4000:4000"
     env_file:
       - ./backend/.env
+    # PID 1 is `npm start`, which doesn't reap orphaned children — without an
+    # init process, crashed/killed Chromium helpers pile up as zombies.
+    init: true
     volumes:
       - ./backend/logs:/app/logs
     restart: unless-stopped

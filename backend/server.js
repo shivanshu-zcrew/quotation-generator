@@ -225,6 +225,8 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
 
   initializeApp().then(() => {
     require('./cron/trnExpiryJob').start();
+    // Launch Chromium now so the first PDF request doesn't pay for a cold start.
+    require('./utils/pdfService').pdfService.warmUp();
   });
 
   // if (true) {
@@ -243,6 +245,7 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
       
       // Disconnect Redis gracefully
       await redisService.disconnect();
+      await require('./utils/pdfService').pdfService.shutdown();
       
       // Close logger
       logger.info('👋 Graceful shutdown completed');

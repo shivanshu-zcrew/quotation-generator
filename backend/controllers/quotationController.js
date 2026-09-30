@@ -2,7 +2,8 @@ const mongoose = require("mongoose");
 const { Quotation, ExchangeRateService, Company } = require('../models/quotation');
 const { Customer } = require('../models/customer');
 const Item = require('../models/items');
-const puppeteer = require('puppeteer');
+const crypto = require('crypto');
+const { pdfService } = require('../utils/pdfService');
 const mime = require('mime-types');
 const zohoBooksService = require('../zoho/customerServices');
 const { CURRENCY_OPTIONS } = require('../models/constants');
@@ -308,60 +309,14 @@ const canAccessS3Key = async (key, req) => {
   return ownerCreatedBy?.toString() === req.user.id;
 };
 
-// ─────────────────────────────────────────────────────────────
-// Shared Puppeteer browser — one instance, auto-reconnect
-// ─────────────────────────────────────────────────────────────
-let _browser = null;
-
-// ─────────────────────────────────────────────────────────────
-// PDF semaphore — caps concurrent Puppeteer pages so the server
-// doesn't OOM when many users download PDFs at the same time.
-// PDF_MAX_CONCURRENT from .env (default 3).
-// ─────────────────────────────────────────────────────────────
-const PDF_MAX = parseInt(process.env.PDF_MAX_CONCURRENT || '3', 10);
-const PDF_MAX_QUEUE = parseInt(process.env.PDF_MAX_QUEUE || '50', 10);
-const PDF_QUEUE_TIMEOUT_MS = 30_000;
-let _pdfActive = 0;
-const _pdfQueue = [];
-
-function acquirePdfSlot() {
-  return new Promise((resolve, reject) => {
-    if (_pdfActive < PDF_MAX) { _pdfActive++; resolve(); }
-    else {
-      if (_pdfQueue.length >= PDF_MAX_QUEUE) {
-        return reject(Object.assign(new Error('PDF generation queue is full'), { status: 503 }));
-      }
-      const entry = { resolve, reject };
-      entry.timer = setTimeout(() => {
-        const idx = _pdfQueue.indexOf(entry);
-        if (idx !== -1) _pdfQueue.splice(idx, 1);
-        reject(Object.assign(new Error('PDF generation timed out'), { status: 503 }));
-      }, PDF_QUEUE_TIMEOUT_MS);
-      _pdfQueue.push(entry);
-    }
-  });
-}
-
-function releasePdfSlot() {
-  if (_pdfQueue.length > 0) {
-    const entry = _pdfQueue.shift();
-    clearTimeout(entry.timer);
-    entry.resolve();
-  } else _pdfActive--;
-}
-
+// Puppeteer browser lifecycle, concurrency cap, timeouts and retry live in
+// utils/pdfService.js.
 exports.getPDFMetrics = async (req, res) => {
   const memory = process.memoryUsage();
 
   res.json({
     success: true,
-    metrics: {
-      activeSlots: _pdfActive,
-      maxSlots: PDF_MAX,
-      queuedRequests: _pdfQueue.length,
-      maxQueue: PDF_MAX_QUEUE,
-      browserConnected: !!_browser?.isConnected(),
-    },
+    metrics: pdfService.getStats(),
     memory: {
       heapUsedMB: Math.round(memory.heapUsed / 1024 / 1024),
       heapTotalMB: Math.round(memory.heapTotal / 1024 / 1024),
@@ -369,62 +324,6 @@ exports.getPDFMetrics = async (req, res) => {
     },
     uptime: process.uptime()
   });
-};
-
-
-const getBrowser = async () => {
-  if (_browser?.isConnected()) return _browser;
-
-  try {
-    _browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
-      // --single-process/--no-zygote deliberately dropped: they were the
-      // actual cause of a real production outage, not just a memory-saving
-      // tradeoff that happened to be fine. Puppeteer's own docs explicitly
-      // recommend against --single-process for production — it forces
-      // EVERY tab to share one OS process with no isolation, so a single
-      // hung render doesn't just fail its own page, it wedges the whole
-      // browser for every other request too. Confirmed directly: a
-      // page.pdf() timeout on one specific quotation, with the same
-      // content and no concurrent load at the time (ruled out via server
-      // logs — see PDF generation started/error log pairs), still took
-      // down every subsequent PDF request until the process was manually
-      // restarted (the self-heal in generatePDF's catch block was added to
-      // survive this, but doesn't prevent it). The instance has ample
-      // headroom for normal multi-process Chromium (2.6GiB available,
-      // ~240MB baseline backend usage at idle — confirmed via `free -h`/
-      // `docker stats` before making this change), and multi-process
-      // isolation means a wedged renderer stays contained to its own tab
-      // instead of taking the shared browser down with it.
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
-
-  //        _browser = await puppeteer.launch({
-  //   headless: true,
-  //   args: [       
-  //     '--no-sandbox',
-  //     '--disable-setuid-sandbox',
-  //     '--disable-dev-shm-usage',
-  //     '--disable-gpu',
-  //   ],
-  // });
-
-    _browser.on('disconnected', () => {
-      _browser = null;
-      logger.warn('Puppeteer browser disconnected');
-    });
-    
-    return _browser;
-  } catch (error) {
-    logger.error(`Puppeteer browser launch error: ${error.message}`);
-    throw error;
-  }
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -2847,162 +2746,26 @@ exports.deleteQuotation = async (req, res) => {
   }
 };
 
-// One render attempt: new page -> viewport -> request interception ->
-// setContent -> wait for images -> page.pdf(). Throws on any failure — the
-// caller (generatePDF below) decides whether to retry. Split out so a
-// second attempt doesn't duplicate this whole page-setup dance.
-async function renderPdfAttempt(browser, html) {
-  const page = await browser.newPage();
-  try {
-    // Pinned to the real A4 print content width (see pdfPaginator.js) so
-    // this page's very first layout pass — and therefore every
-    // getBoundingClientRect() measurement the pagination pass below takes —
-    // happens at the same width the content will actually print at. Height
-    // is just "tall enough"; Chromium slices the continuously-laid-out
-    // document into A4 sheets via @page{size:A4} + page.pdf()'s margin
-    // option below regardless of viewport height.
-    await page.setViewport({ width: PAGE_CONTENT_WIDTH_PX, height: 1200, deviceScaleFactor: 1 });
-
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const type = req.resourceType();
-      const url = req.url();
-      // The real template only ever embeds images as inline base64 data
-      // URIs — never a real network fetch. Since `html` here is arbitrary
-      // client-supplied content with no server-side sanitization, blocking
-      // non-data image requests (and any 'document' navigation attempt, e.g.
-      // a script-driven `window.location` change) closes an SSRF path
-      // (attacker-controlled <img src="http://internal-host/..."> or a
-      // dynamically-created one) without affecting legitimate rendering —
-      // verified against both a real quotation-shaped template and injected
-      // <script>/<img> payloads before this was applied.
-      if (type === 'image') {
-        if (!url.startsWith('data:')) { req.abort(); return; }
-        req.continue();
-        return;
-      }
-      if (['stylesheet', 'font', 'media', 'script', 'fetch', 'xhr', 'websocket', 'other', 'document'].includes(type)) { req.abort(); return; }
-      req.continue();
-    });
-
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 40000 });
-    await page.evaluate(() => Promise.all([...document.images].filter((img) => !img.complete).map((img) => new Promise((res) => { img.onload = res; img.onerror = res; })))).catch(() => {});
-
-    // A JS-driven "measure everything, force a break wherever a chunk
-    // doesn't fit" pagination pass (runPagination, pdfPaginator.js) was
-    // tried here and reverted — verified empirically (by diffing the exact
-    // production HTML printed with vs. without it) to make pagination
-    // WORSE: forcing break-before:page on an element via JS interacts with
-    // Chromium's print engine differently than content overflowing a page
-    // on its own, and produced large blank gaps a plain, un-forced print of
-    // the same HTML did not have. The real fix for those gaps was simpler
-    // and already landed above: .container's width now matches the actual
-    // A4-minus-margins print area (was 874px, wider than the ~718px
-    // actually printable, which is what made every downstream height
-    // calculation — including Chromium's own — unreliable), and the
-    // scattered break-inside:avoid/page-break-inside:avoid rules that used
-    // to catch unrelated tables (Terms & Conditions' own embedded Quill
-    // tables, the approval-chain footer table) were removed. With the
-    // width corrected, Chromium's native, un-forced pagination already
-    // packs pages tightly on its own — no further intervention needed.
-    const pdfMarginMm = `${PDF_PAGE_MARGIN_MM}mm`;
-    // Explicit ceiling (Puppeteer's own default is 30s, same order of
-    // magnitude) so a stuck print job fails fast with a clear error instead
-    // of silently riding the request out toward the frontend's 120s PDF
-    // timeout / any gateway's own timeout in front of this server.
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, timeout: 45000, margin: { top: pdfMarginMm, right: pdfMarginMm, bottom: pdfMarginMm, left: pdfMarginMm } });
-
-    if (Buffer.from(pdfBuffer).slice(0, 5).toString() !== '%PDF-') throw new Error('Puppeteer returned an invalid PDF buffer');
-    return pdfBuffer;
-  } finally {
-    await page.close().catch(() => {});
-  }
-}
-
 exports.generatePDF = async (req, res) => {
   const { html, filename = 'quotation' } = req.body;
-  const startTime = Date.now();
 
   if (!html?.trim()) return res.status(400).json({ message: 'HTML content is required' });
 
   const safeFilename = filename.replace(/[/\\'"]/g, '_').slice(0, 100);
+  const requestId = req.headers['x-request-id'] || crypto.randomUUID();
 
-  // filename is "Quotation_<quotationNumber>_<date>" (see downloadQuotationPDF
-  // in pdfGenerator.js) — the one piece of identifying info this endpoint
-  // gets about WHICH document is being rendered, since `html` itself is an
-  // opaque pre-built string. Logged on every request (not just failures) so
-  // a hang caught mid-request is still traceable — this is what actually
-  // let the real trigger of a recurring production outage get found
-  // (concurrency and content size were both ruled out this way), instead of
-  // staying a guessing game.
-  logger.info('PDF generation started', { filename: safeFilename, htmlLength: html.length, companyId: req.headers['x-company-id'] });
-
-  await acquirePdfSlot();
+  // Retry, recovery, timeouts and per-stage logging are in pdfService.generate
+  // — `filename` ("Quotation_<number>_<date>") is the only identifier of the
+  // document this endpoint gets, so that is what gets logged.
   try {
-    let pdfBuffer;
-    let lastErr = null;
-
-    // One retry, not zero and not several. Every timeout seen in production
-    // so far succeeded immediately when the SAME quotation was regenerated
-    // right after, with no code change — see the commit that dropped
-    // --single-process for the server-log evidence (content size and
-    // concurrent load were both ruled out as the trigger). Retrying here,
-    // transparently, means the user experiences "took a few extra seconds"
-    // instead of "it failed, go click download again" — an unconditional
-    // second attempt is enough to absorb that without masking a REAL,
-    // persistent problem, which would fail both attempts and still surface
-    // below exactly as before.
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const browser = await getBrowser();
-        pdfBuffer = await renderPdfAttempt(browser, html);
-        lastErr = null;
-        break;
-      } catch (err) {
-        lastErr = err;
-        const isTimeout = err.name === 'TimeoutError' || /timed out/i.test(err.message || '');
-        logger.warn(`PDF generation attempt ${attempt} failed: ${err.message}`, { filename: safeFilename, htmlLength: html.length, isTimeout });
-
-        if (!isTimeout) break; // a real error (bad HTML, invalid buffer) fails identically on retry — don't burn another 45s on it
-
-        // A page.pdf() TIMEOUT means that render's renderer process went
-        // unresponsive — renderPdfAttempt's own page.close() (above) just
-        // tried to recover it via the browser process's normal supervision
-        // of its own tabs, which now that this browser is no longer
-        // launched with --single-process/--no-zygote (see getBrowser()),
-        // should usually be enough on its own: multi-process Chromium
-        // isolates a wedged renderer to itself, so the shared browser and
-        // every other concurrent request are unaffected by it. Discarding
-        // the whole browser is now a last resort, not the default reflex —
-        // only when the browser's own CDP connection is ALSO down, meaning
-        // page-level supervision genuinely couldn't recover it either.
-        if (!_browser?.isConnected()) {
-          logger.warn('Puppeteer browser also disconnected — discarding it so the next attempt starts fresh');
-          const stale = _browser;
-          _browser = null;
-          if (stale) {
-            const killTimer = setTimeout(() => {
-              try { stale.process()?.kill('SIGKILL'); } catch { /* already gone */ }
-            }, 5000);
-            stale.close().then(() => clearTimeout(killTimer)).catch(() => {});
-          }
-        }
-      }
-    }
-
-    if (lastErr) throw lastErr;
-
-    releasePdfSlot();
+    const { buffer } = await pdfService.generate({ html, filename: safeFilename, requestId });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}.pdf`);
-    res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader('Content-Length', buffer.length);
     res.setHeader('Cache-Control', 'no-store');
-    res.send(Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer));
-
+    res.send(buffer);
   } catch (err) {
-    releasePdfSlot();
-    logger.error(`PDF generation error: ${err.message}`, { filename: safeFilename, htmlLength: html?.length });
-    res.status(500).json({ success: false, message: 'Error generating PDF', error: err.message });
+    res.status(err.status || 500).json({ success: false, message: 'Error generating PDF', error: err.cause?.message || err.message, requestId });
   }
 };
 
