@@ -78,6 +78,7 @@ import { T, FONT_STACK } from "../styles/theme";
 
 // Cool but vivid status palette — each state clearly distinct and readable.
 const STATUS_CONFIG = {
+  draft: { label: "Draft", bg: "#f1f5f9", color: "#475569", borderColor: "#e2e8f0", icon: "✎", description: "Not submitted yet" },
   pending: { label: "Pending", bg: "#fff7e6", color: "#b45309", borderColor: "#fde9c8", icon: "○", description: "Awaiting submission" },
   pending_admin: { label: "Pending", bg: "#fff7e6", color: "#b45309", borderColor: "#fde9c8", icon: "○", description: "Awaiting submission" },
   ops_approved: { label: "In Review", bg: "#e6f0fb", color: "#1d63c4", borderColor: "#c9defa", icon: "◔", description: "Under ops review" },

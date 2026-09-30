@@ -54,6 +54,7 @@ const CLAMP_2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: '
 // STATUS CONFIG — ops-specific states
 // ============================================================
 const STATUS_CONFIG = {
+  draft:        { label: 'Draft',            bg: '#f1f5f9', color: '#475569', borderColor: '#e2e8f0', icon: '✎' },
   pending:      { label: 'Pending',          bg: '#fff7e6', color: '#b45309', borderColor: '#fde9c8', icon: '○' },
   pending_admin:{ label: 'Pending',          bg: '#fff7e6', color: '#b45309', borderColor: '#fde9c8', icon: '○' },
   ops_approved: { label: 'Awaiting Admin',   bg: '#e6f0fb', color: '#1d63c4', borderColor: '#c9defa', icon: '◔' },

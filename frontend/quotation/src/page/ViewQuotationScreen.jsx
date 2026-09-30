@@ -820,6 +820,7 @@ export default function ViewQuotationScreen() {
   const getStatusText = useCallback(() => {
     const status = originalQuotation?.status;
     const statusMap = {
+      'draft': 'Draft',
       'approved': 'Approved',
       'awarded': 'Awarded',
       'rejected': 'Rejected',
