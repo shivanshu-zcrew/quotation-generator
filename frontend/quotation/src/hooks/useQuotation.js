@@ -1098,7 +1098,10 @@ export function useQuotation() {
 
 // In the handleSave function, update the payload section (around lines 430-470)
 
-const handleSave = useCallback(async () => {
+// Draft quotations: { asDraft: true } keeps it a draft; otherwise saving a
+// draft SUBMITS it (backend moves draft -> pending and emails the chosen
+// manager(s) in notifyManagerEmails).
+const handleSave = useCallback(async ({ asDraft = false, notifyManagerEmails } = {}) => {
   if (!validateBeforeSave()) return;
 
   // Block save while any image is still uploading.
@@ -1223,9 +1226,12 @@ const handleSave = useCallback(async () => {
         .map(doc => doc.fileData),
       internalDocDescriptions: documentData
         .filter(doc => doc.fileData)
-        .map(doc => doc.description || '')
+        .map(doc => doc.description || ''),
+      ...(asDraft && { saveAsDraft: true }),
+      ...(notifyManagerEmails?.length && { notifyManagerEmails }),
     };
 
+    const wasDraft = originalQuotation.status === 'draft';
     const result = await updateQuotation(originalQuotation._id, payload);
 
     if (result?.success) {
@@ -1316,7 +1322,10 @@ const handleSave = useCallback(async () => {
         setInternalDocuments(parseInternalDocuments(updatedQuotation.internalDocuments));
       }
 
-      showSnack("Quotation updated successfully!", 'success');
+      showSnack(
+        wasDraft ? (asDraft ? "Draft saved!" : "Quotation submitted for review!") : "Quotation updated successfully!",
+        'success'
+      );
       // The backend syncs the "Name" field back onto the creator's own
       // account when applicable (see updateQuotation's `updatedUserName`) —
       // reflect that into this session immediately so the navbar/other

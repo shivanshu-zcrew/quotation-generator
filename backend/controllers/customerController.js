@@ -612,6 +612,16 @@ exports.updateCustomer = async (req, res) => {
       }
     }
 
+    // Quotations snapshot the customer's tax treatment when created, so once
+    // any quotation (draft included) is linked to this customer its VAT
+    // registration can no longer be switched (e.g. non-VAT -> VAT).
+    if (updateData.taxTreatment !== undefined && updateData.taxTreatment !== customer.taxTreatment) {
+      const linkedQuotations = await Quotation.countDocuments({ customerId: customer._id });
+      if (linkedQuotations > 0) {
+        return sendErrorResponse(res, 409, `Tax treatment cannot be changed: ${linkedQuotations} quotation${linkedQuotations === 1 ? ' is' : 's are'} already linked to this customer.`);
+      }
+    }
+
     if (updateData.taxTreatment !== undefined || updateData.placeOfSupply !== undefined) {
       const taxErrors = validateTaxData(
         updateData.taxTreatment || customer.taxTreatment,

@@ -623,7 +623,8 @@ exports.getAllQuotations = async (req, res) => {
     const filter = {};
     
     if (req.query.companyId) filter.companyId = req.query.companyId;
-    if (req.query.status) filter.status = req.query.status;
+    // Drafts are private to their creator (see getMyQuotations) — never listed here.
+    filter.status = req.query.status === 'draft' ? { $in: [] } : (req.query.status || { $ne: 'draft' });
     if (req.query.customerId) filter.customerId = req.query.customerId;
     if (req.query.currency) filter['currency.code'] = req.query.currency;
     
@@ -1345,7 +1346,11 @@ exports.createQuotation = async (req, res) => {
   }
 
   const userRole = req.user?.role;
-  const initialStatus = userRole === 'admin' ? 'pending_admin' : 'pending';
+  // "Save as Draft": private to the creator, no review pipeline and no
+  // notification emails (the notify block below only fires for 'pending').
+  const initialStatus = req.body.saveAsDraft === true
+    ? 'draft'
+    : (userRole === 'admin' ? 'pending_admin' : 'pending');
 
   // ── Revision: auto-suffix the number and link back to the original ──
   let resolvedQuotationNumber = quotationNumber;
@@ -1450,7 +1455,10 @@ exports.createQuotation = async (req, res) => {
       phone: req.body.customerPhone?.trim() || customerDoc.phone,
       address: customerDoc.address,
       country: customerCountry || 'UAE', 
-      vatNumber: customerTaxRegistrationNumber?.trim() || customerDoc.vatNumber,  // ✅ Customer's TRN from payload
+      // A VAT-registered customer's TRN is Zoho-synced and only editable from the Customers page — ignore the payload for it.
+      vatNumber: ['vat_registered', 'gcc_vat_registered'].includes(customerDoc.taxTreatment)
+        ? (customerDoc.taxRegistrationNumber || '')
+        : (customerTaxRegistrationNumber?.trim() || customerDoc.vatNumber),
       designation: customerDesignation?.trim() || '', 
       tradeLicenseNumber: customerTradeLicenseNumber?.trim() || '',
       taxTreatment: customerDoc.taxTreatment || 'non_vat_registered', 
@@ -1541,7 +1549,7 @@ exports.createQuotation = async (req, res) => {
   }
 
   res.status(201).json({
-    success: true, message: 'Quotation created successfully', quotation: populated,
+    success: true, message: initialStatus === 'draft' ? 'Draft saved successfully' : 'Quotation created successfully', quotation: populated,
     stats: {
       itemsCount: processedItems.length,
       imagesUploaded: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),
@@ -1653,6 +1661,12 @@ exports.updateQuotation = async (req, res) => {
     }
 
     let newStatus = existing.status;
+    // Drafts: `saveAsDraft` keeps it a draft; any other save by its creator is
+    // the submission (draft -> pending, or pending_admin for an admin).
+    const keepAsDraft = currentStatus === 'draft' && req.body.saveAsDraft === true;
+    if (currentStatus === 'draft' && !isCreator) {
+      return res.status(403).json({ message: 'Only the quotation creator can edit a draft' });
+    }
     let applyRevisionOnSave = false;
     let applyAmendmentOnSave = false;
 
@@ -1661,7 +1675,9 @@ exports.updateQuotation = async (req, res) => {
     // (an approved quotation being retired); 'amended' only ever happens for
     // the amend path (a pre-approval quotation paused for editing) — see
     // cancelQuotation's status branching.
-    if (currentStatus === 'cancelled') {
+    if (keepAsDraft) {
+      newStatus = 'draft';
+    } else if (currentStatus === 'cancelled') {
       newStatus = 'pending';
       applyRevisionOnSave = true;
     } else if (currentStatus === 'amended') {
@@ -1690,13 +1706,13 @@ exports.updateQuotation = async (req, res) => {
       // separately when actually ready.
       if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
         newStatus = 'pending';
-      } else if (currentStatus === 'rejected' && isCreator) {
+      } else if ((currentStatus === 'rejected' || currentStatus === 'draft') && isCreator) {
         newStatus = 'pending';
       } else if (currentStatus === 'ops_approved') {
         newStatus = 'ops_approved';
       } else { newStatus = currentStatus; }
     } else if (isCreator) {
-      if (currentStatus === 'pending' || currentStatus === 'ops_rejected') {
+      if (currentStatus === 'pending' || currentStatus === 'ops_rejected' || currentStatus === 'draft') {
         newStatus = 'pending';
       } else if (currentStatus === 'rejected') {
         newStatus = 'pending';
@@ -1978,7 +1994,7 @@ exports.updateQuotation = async (req, res) => {
        ...(tl !== undefined && { tl: tl?.trim() || '' }),   
       ...(trn !== undefined && { trn: trn?.trim() || '' }),  
       
-      ...(customerTaxRegistrationNumber !== undefined && { 
+      ...(customerTaxRegistrationNumber !== undefined && !['vat_registered', 'gcc_vat_registered'].includes(existing.customerTaxTreatment) && { 
         'customerSnapshot.vatNumber': customerTaxRegistrationNumber?.trim() || '' 
       }),
       
@@ -2135,7 +2151,7 @@ exports.updateQuotation = async (req, res) => {
     }
 
     // Non-blocking: notify ops on resubmission (rejection resubmit, revision, amendment)
-    if (newStatus === 'pending' && ['ops_rejected', 'rejected', 'cancelled', 'amended'].includes(currentStatus)) {
+    if (newStatus === 'pending' && ['draft', 'ops_rejected', 'rejected', 'cancelled', 'amended'].includes(currentStatus)) {
       const requestedEmails = Array.isArray(req.body.notifyManagerEmails)
         ? req.body.notifyManagerEmails.filter(e => typeof e === 'string' && e.includes('@'))
         : [];
@@ -2153,7 +2169,7 @@ exports.updateQuotation = async (req, res) => {
     }
 
     res.status(200).json({
-      success: true, message: 'Quotation updated successfully', quotation: populated,
+      success: true, message: newStatus === 'draft' ? 'Draft saved successfully' : 'Quotation updated successfully', quotation: populated,
       stats: {
         itemsCount: processedItems.length,
         imagesCount: processedItems.reduce((sum, i) => sum + i.imageS3Keys.length, 0),

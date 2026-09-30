@@ -6,6 +6,7 @@ import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import ConfirmModal from '../components/ConfirmModal';
 import SaveTermsTemplateModal from '../components/SaveTermsTemplateModal';
+import ManagerPickerModal from '../components/ManagerPickerModal';
 import { btnStyle, outlineBtnStyle, outlineBtnHoverStyle, getFileIcon } from '../utils/quotationUtils';
 import { formatFileSize } from '../utils/formatters';
 import { useAppStore } from '../services/store';
@@ -769,11 +770,9 @@ export default function ViewQuotationScreen() {
   const canCancel = !isEditing && !isCancelled && !isAmended && !isFinalised &&
     isApproved && user?.role === 'admin';
 
-  // Duplicate: only once a quotation has reached a final outcome
-  // (approved / awarded / not awarded) — earlier-stage statuses (pending,
-  // ops_approved, rejected, ops_rejected, pending_admin, cancelled) are
-  // still live and should be edited/resubmitted, not duplicated.
-  const canDuplicate = !isEditing && (originalQuotation?.status === 'approved' || isFinalised);
+  // Duplicate: available for every status except draft (a draft is still the
+  // creator's own work-in-progress — just continue editing it).
+  const canDuplicate = !isEditing && !!originalQuotation && originalQuotation.status !== 'draft';
 
   // Handle cancel — calls API, stays on page with updated status
   const handleCancel = useCallback(async () => {
@@ -869,14 +868,20 @@ export default function ViewQuotationScreen() {
     }
   }, [originalQuotation?.status]);
 
-  const handleSaveWithProgress = useCallback(async () => {
+  // A draft being edited: "Save Draft" keeps it private; "Submit for Review"
+  // shows the manager picker first (admins skip it — their quotations go
+  // straight to admin review), then saves it as a real submission.
+  const isEditingDraft = originalQuotation?.status === 'draft';
+  const [submitPickerOpen, setSubmitPickerOpen] = useState(false);
+
+  const handleSaveWithProgress = useCallback(async (saveOptions) => {
     setSaveProgress(10);
     setSaveStep('Validating data...');
     
     const progressInterval = startProgressTracking(setSaveProgress);
     
     try {
-      await handleSave();
+      await handleSave(saveOptions);
       completeProgressTracking(setSaveProgress, setSaveStep);
     } catch (error) {
       setSaveProgress(0);
@@ -1209,13 +1214,22 @@ export default function ViewQuotationScreen() {
 
             {isEditing && (
               <>
+                {isEditingDraft && (
+                  <button
+                    onClick={() => handleSaveWithProgress({ asDraft: true })}
+                    disabled={isSaving}
+                    style={{ ...btnStyle('#64748b', isSaving), display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                  >
+                    <Save size={15} /> Save Draft
+                  </button>
+                )}
                 <button
-                  onClick={handleSaveWithProgress}
+                  onClick={isEditingDraft && user?.role !== 'admin' ? () => setSubmitPickerOpen(true) : () => handleSaveWithProgress()}
                   disabled={isSaving}
                   style={{ ...btnStyle('#10b981', isSaving), display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                 >
                   {isSaving ? <Loader size={15} style={styles.spinningIconSmall} /> : <Save size={15} />}
-                  {isSaving ? 'Saving…' : 'Save Changes'}
+                  {isSaving ? 'Saving…' : isEditingDraft ? 'Submit for Review' : 'Save Changes'}
                 </button>
                 <button
                   onClick={cancelEdit}
@@ -1567,6 +1581,13 @@ export default function ViewQuotationScreen() {
         )}
       </div>
       
+      <ManagerPickerModal
+        isOpen={submitPickerOpen}
+        onClose={() => setSubmitPickerOpen(false)}
+        onConfirm={(emails) => { setSubmitPickerOpen(false); handleSaveWithProgress({ notifyManagerEmails: emails }); }}
+        onLoadError={(message) => setSnackbar({ message, type: 'error' })}
+        confirmLabel="Confirm & Submit"
+      />
       {/* Snackbar */}
       {snackbar.show && (
         <Snackbar

@@ -4,6 +4,7 @@ import { ArrowLeft, Download, Edit2, Save, Loader, AlertCircle, CheckCircle, Ima
 import QuotationLayout from '../components/QuotationLayout';
 import Snackbar from '../components/Snackbar';
 import SaveTermsTemplateModal from '../components/SaveTermsTemplateModal';
+import ManagerPickerModal from '../components/ManagerPickerModal';
 import { useAppStore } from '../services/store';
 import useCustomerStore from '../services/customerStore';
 import { useQuotations } from '../hooks/customHooks';
@@ -23,7 +24,7 @@ import ItemModal from "../components/AddItemModal";
 // ============================================================
 // S3 SERVICE IMPORTS
 // ============================================================
-import { quotationAPI, authAPI, termsTemplateAPI, paymentTermAPI } from '../services/api';
+import { quotationAPI, termsTemplateAPI, paymentTermAPI } from '../services/api';
 import { convertS3KeyToUrl, convertBatchS3KeysToUrls } from '../hooks/useS3Image';
 import { uploadItemImage, uploadTermsImage } from "../utils/imageUpload";
 
@@ -254,9 +255,6 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
   const [selectedPaymentTermId, setSelectedPaymentTermId] = useState('');
   const [snackbar, setSnackbar] = useState(SNACK_HIDE);
   const [managerModalOpen, setManagerModalOpen] = useState(false);
-  const [opsManagers, setOpsManagers] = useState([]);
-  const [managersLoading, setManagersLoading] = useState(false);
-  const [selectedManagerId, setSelectedManagerId] = useState(null);
 
   // Terms images state (now stores S3 keys instead of URLs)
   const [termsImages, setTermsImages] = useState([]);
@@ -827,25 +825,25 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
     // Admin quotations go to pending_admin — no ops email, skip picker
     if (user?.role === 'admin') { handleSubmitWithEmailsRef.current([]); return; }
 
-    setManagersLoading(true);
-    setSelectedManagerId(null);
+    // The picker loads the managers itself once it opens.
     setManagerModalOpen(true);
-    try {
-      const res = await authAPI.getOpsManagers();
-      setOpsManagers(res.data?.managers || []);
-    } catch {
-      showSnack("Failed to load managers", "error");
-      setManagerModalOpen(false);
-    } finally {
-      setManagersLoading(false);
-    }
-  // Genuinely exhaustive now: handleSubmitWithEmailsRef is a ref (stable
-  // identity), not a dependency React needs to track.
   }, [validateAll, selectedCompany, uploadingImages, user, showSnack]);
 
-  const handleSubmitWithEmails = useCallback(async (notifyManagerEmails) => {
+  // "Save as Draft": private to the creator, no manager picker, no review
+  // pipeline, no notification. Only the fields the backend can't create a
+  // record without are required; everything else is checked at submit time.
+  const handleSaveDraft = useCallback(() => {
+    if (!selectedCompany) { showSnack("Please select a company", "error"); return; }
+    if (!customer?._id) { showSnack("Please select a customer to save a draft", "error"); return; }
+    if (!quotationData.projectName?.trim()) { showSnack("Project Name is required to save a draft", "error"); return; }
+    if (!quotationData.expiryDate) { showSnack("Expiry date is required to save a draft", "error"); return; }
+    if (!quotationItems.length) { showSnack("Add at least one item to save a draft", "error"); return; }
+    handleSubmitWithEmailsRef.current([], { asDraft: true });
+  }, [selectedCompany, customer, quotationData.projectName, quotationData.expiryDate, quotationItems, showSnack]);
+
+  const handleSubmitWithEmails = useCallback(async (notifyManagerEmails, { asDraft = false } = {}) => {
     setManagerModalOpen(false);
-    if (!validateAll()) return;
+    if (!asDraft && !validateAll()) return;
     if (!selectedCompany) {
       showSnack("Please select a company", "error");
       return;
@@ -949,7 +947,8 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         internalDocDescriptions: uploadedDocuments.map(doc => doc.description || ''),
         revisedFrom: quotationData.revisedFrom || undefined,
         revisionNote: quotationData.revisionNote?.trim() || undefined,
-        notifyManagerEmails: notifyManagerEmails || [],
+        notifyManagerEmails: asDraft ? [] : (notifyManagerEmails || []),
+        ...(asDraft && { saveAsDraft: true }),
       };
 
       const result = await addQuotation(quotation);
@@ -963,7 +962,7 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
           useCustomerStore.getState().updateCustomerContactPersons(customer._id, result.customerContactPersons);
         }
         setTermsImages([]);
-        showSnack(`Quotation ${quotationNumber} created successfully!`, "success");
+        showSnack(asDraft ? `Draft ${quotationNumber} saved — you can submit it later from your quotations list.` : `Quotation ${quotationNumber} created successfully!`, "success");
         // The backend syncs the "Name" field back onto the account when it
         // differs from the logged-in user's current name (see
         // createQuotation's `updatedUserName`) — reflect that into this
@@ -988,11 +987,11 @@ function QuotationTemplateInner({ customer, selectedItems, selectedCompany, sele
         }
         setTimeout(() => navigate(user?.role === 'admin' ? '/admin' : '/home'), 1200);
       } else {
-        showSnack(result?.error || "Failed to create quotation", "error");
+        showSnack(result?.error || (asDraft ? "Failed to save draft" : "Failed to create quotation"), "error");
       }
     } catch (err) {
       console.error('Submit error:', err);
-      showSnack(err?.response?.data?.message || err.message || "Error creating quotation", "error");
+      showSnack(err?.response?.data?.message || err.message || (asDraft ? "Error saving draft" : "Error creating quotation"), "error");
     } finally {
       setIsSaving(false);
       setSaveProgress(0);
@@ -1271,15 +1270,24 @@ const handleDocumentDownload = useCallback((docId) => {
           <h1 style={styles.title}>📄 Create Quotation</h1>
           <div style={styles.headerActions}>
             {!isEditing && (
-              <ActionButton
-                onClick={handleManagerPicker}
-                disabled={isSaving || hasAnyError}
-                loading={isSaving}
-                loadingLabel="Saving Quotation..."
-                bgColor="#10b981"
-                icon={<Save size={15} />}
-                label="Save Quotation"
-              />
+              <>
+                <ActionButton
+                  onClick={handleSaveDraft}
+                  disabled={isSaving || hasAnyError}
+                  bgColor="#64748b"
+                  icon={<FileText size={15} />}
+                  label="Save as Draft"
+                />
+                <ActionButton
+                  onClick={handleManagerPicker}
+                  disabled={isSaving || hasAnyError}
+                  loading={isSaving}
+                  loadingLabel="Saving Quotation..."
+                  bgColor="#10b981"
+                  icon={<Save size={15} />}
+                  label="Submit Quotation"
+                />
+              </>
             )}
             <ActionButton
               onClick={() => setIsEditing(!isEditing)}
@@ -1381,75 +1389,13 @@ const handleDocumentDownload = useCallback((docId) => {
         />
       )}
 
-      {/* Manager picker modal */}
-      {managerModalOpen && (
-        <div style={managerModalStyles.overlay} onClick={() => setManagerModalOpen(false)}>
-          <div style={managerModalStyles.dialog} onClick={e => e.stopPropagation()}>
-            <div style={managerModalStyles.header}>
-              <span style={managerModalStyles.title}>Select Manager to Notify</span>
-              <button style={managerModalStyles.closeBtn} onClick={() => setManagerModalOpen(false)}>
-                <X size={18} />
-              </button>
-            </div>
-
-            <p style={managerModalStyles.subtitle}>
-              The quotation will be visible to all managers. Choose who receives the email notification.
-            </p>
-
-            <div style={managerModalStyles.list}>
-              {managersLoading ? (
-                <div style={managerModalStyles.loading}>
-                  <Loader size={20} style={{ animation: 'spin 1s linear infinite' }} />
-                  <span>Loading managers…</span>
-                </div>
-              ) : opsManagers.length === 0 ? (
-                <p style={managerModalStyles.empty}>No active ops managers found.</p>
-              ) : (
-                opsManagers.map(mgr => (
-                  <label key={mgr._id} style={{
-                    ...managerModalStyles.option,
-                    background: selectedManagerId === mgr._id ? '#eff6ff' : 'transparent',
-                    borderColor: selectedManagerId === mgr._id ? '#3b82f6' : '#e2e8f0',
-                  }}>
-                    <input
-                      type="radio"
-                      name="managerPick"
-                      value={mgr._id}
-                      checked={selectedManagerId === mgr._id}
-                      onChange={() => setSelectedManagerId(mgr._id)}
-                      style={{ accentColor: '#3b82f6' }}
-                    />
-                    <div>
-                      <div style={managerModalStyles.mgrName}>{mgr.name}</div>
-                      <div style={managerModalStyles.mgrEmail}>{mgr.email}</div>
-                    </div>
-                  </label>
-                ))
-              )}
-            </div>
-
-            <div style={managerModalStyles.footer}>
-              <button style={managerModalStyles.cancelBtn} onClick={() => setManagerModalOpen(false)}>
-                Cancel
-              </button>
-              <button
-                style={{
-                  ...managerModalStyles.confirmBtn,
-                  opacity: !selectedManagerId ? 0.5 : 1,
-                  cursor: !selectedManagerId ? 'not-allowed' : 'pointer',
-                }}
-                disabled={!selectedManagerId || managersLoading}
-                onClick={() => {
-                  const mgr = opsManagers.find(m => m._id === selectedManagerId);
-                  handleSubmitWithEmails(mgr ? [mgr.email] : []);
-                }}
-              >
-                Confirm &amp; Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ManagerPickerModal
+        isOpen={managerModalOpen}
+        onClose={() => setManagerModalOpen(false)}
+        onConfirm={(emails) => handleSubmitWithEmails(emails)}
+        onLoadError={(msg) => showSnack(msg, "error")}
+        confirmLabel="Confirm & Submit"
+      />
     </div>
   );
 }
@@ -1495,21 +1441,4 @@ const styles = {
   `
 };
 
-const managerModalStyles = {
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' },
-  dialog: { background: '#fff', borderRadius: '0.75rem', width: '100%', maxWidth: '440px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', maxHeight: '90vh' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1.25rem 1.25rem 0' },
-  title: { fontWeight: 700, fontSize: '1.0625rem', color: '#111827' },
-  closeBtn: { background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', display: 'flex', alignItems: 'center', padding: '0.25rem' },
-  subtitle: { fontSize: '0.8125rem', color: '#6b7280', margin: '0.5rem 1.25rem 0.75rem', lineHeight: 1.5 },
-  list: { overflowY: 'auto', padding: '0 1.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '260px' },
-  loading: { display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#6b7280', fontSize: '0.875rem', padding: '1rem 0' },
-  empty: { color: '#9ca3af', fontSize: '0.875rem', textAlign: 'center', padding: '1rem 0' },
-  option: { display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.625rem 0.875rem', borderRadius: '0.5rem', border: '1.5px solid', cursor: 'pointer', transition: 'all 0.15s' },
-  mgrName: { fontWeight: 600, fontSize: '0.9rem', color: '#111827' },
-  mgrEmail: { fontSize: '0.8rem', color: '#6b7280' },
-  footer: { display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', padding: '1rem 1.25rem', borderTop: '1px solid #f1f5f9', marginTop: '0.75rem' },
-  cancelBtn: { padding: '0.5rem 1.125rem', borderRadius: '0.5rem', border: '1.5px solid #e2e8f0', background: '#fff', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem' },
-  confirmBtn: { padding: '0.5rem 1.25rem', borderRadius: '0.5rem', border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: '0.875rem', transition: 'opacity 0.15s' },
-};
 

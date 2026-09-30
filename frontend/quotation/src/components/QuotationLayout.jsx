@@ -1075,6 +1075,8 @@ export default function QuotationLayout({
     }
   }, [isEditing, taxPresets, quotationData.tax, defaultTaxValue, onDataChange]);
 
+  const VAT_REGISTERED_TREATMENTS = ['vat_registered', 'gcc_vat_registered'];
+
   // ✅ This function determines if a field should be read-only
   const isFieldReadOnly = useCallback((field) => {
     const isDateField = field === 'date' || field === 'expiryDate';
@@ -1103,10 +1105,15 @@ export default function QuotationLayout({
       if (field === 'customerTaxRegistrationNumber' && originalCustomerTaxRegistration && originalCustomerTaxRegistration.trim() !== '') {
         return true; // Customer has TRN in DB → read-only
       }
+      // A VAT-registered customer's TRN is synced with Zoho Books — it can
+      // only be changed from the Customers page, never from a quotation.
+      if (field === 'customerTaxRegistrationNumber' && VAT_REGISTERED_TREATMENTS.includes(customerTaxTreatment)) {
+        return true;
+      }
     }
     
     return false;
-  }, [originalCompanyTradeLicense, originalCompanyTaxRegistration, originalCustomerTradeLicense, originalCustomerTaxRegistration]);
+  }, [originalCompanyTradeLicense, originalCompanyTaxRegistration, originalCustomerTradeLicense, originalCustomerTaxRegistration, customerTaxTreatment]);
 
   const renderFieldGrid = (fields) => (
     <div style={styles.fieldGrid}>

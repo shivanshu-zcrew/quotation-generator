@@ -911,7 +911,7 @@ const MobileQuotationLayout = ({
               isEditing={isEditing}
               onChange={handleFieldChange}
               error={headerErrors[field]}
-              isReadOnly={false}
+              isReadOnly={field === 'customerTaxRegistrationNumber' && ['vat_registered', 'gcc_vat_registered'].includes(customerTaxTreatment)}
               required={required}
               showSnack={showLocalSnack}
               commentProps={commentsFor('header', field)}
