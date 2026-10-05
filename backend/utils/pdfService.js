@@ -8,6 +8,7 @@
 // `protocolTimeout` (180s by default). Any one of those would hold a PDF slot
 // and the user's request open far past the frontend's 120s limit.
 
+const fs = require('fs');
 const puppeteer = require('puppeteer');
 const defaultLogger = require('../config/logger');
 const { PDF_PAGE_MARGIN_MM, PAGE_CONTENT_WIDTH_PX } = require('./pdfPaginator');
@@ -48,10 +49,18 @@ function withTimeout(promise, ms, stage) {
 // document is bad" — the browser is replaced before retrying.
 const BROWSER_FAULT_RE = /target closed|session closed|connection closed|protocol error|browser has disconnected|detached|crashed|not connected/i;
 
+// CHROMIUM_PATH wins; otherwise the Docker image's system Chromium; otherwise
+// (local dev on macOS/Windows, where that path doesn't exist) undefined, so
+// Puppeteer uses the Chrome it downloaded itself (`npx puppeteer browsers install chrome`).
+function resolveChromePath() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
+  return fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined;
+}
+
 function defaultLaunch(cfg) {
   return puppeteer.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    executablePath: resolveChromePath(),
     // Puppeteer's default protocolTimeout is 180s; any CDP call to a wedged
     // renderer would otherwise block that long.
     protocolTimeout: cfg.protocolTimeoutMs,
