@@ -526,7 +526,8 @@ const formatTermsText = (text) => {
   // sanitized and passed through as-is; legacy plain text still gets the
   // \n -> <br> treatment it always got.
   if (HTML_TAG_RE.test(text)) {
-    return sanitizeTermsHtml(text);
+    // 698 = .container's 718px width minus its 10px side padding.
+    return sanitizeTermsHtml(text, { maxTableWidthPx: 698 });
   }
 
   let cleaned = text;
@@ -1018,6 +1019,8 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        isolated Puppeteer page that doesn't load that stylesheet, same
        reason as every other .terms-content rule above. */
     .terms-content table{border-collapse:collapse;table-layout:fixed;width:100%;margin:14px 0;}
+    /* Backstop for sizes the JS clamp (sanitizeTermsHtml's maxTableWidthPx) can't see, e.g. a table inside a narrow cell. */
+    .terms-content table{max-width:100% !important;}
     /* white-space/overflow-wrap forced !important here too, same reasoning
        as the p/li/h1-6/span backstop above — a pasted inline
        white-space:nowrap on a td/th would otherwise still overflow the
@@ -1040,7 +1043,7 @@ export const buildPDFHTML = async (quotation, options = {}) => {
        does nothing on an image's default inline display, and without it
        an inline image sits flush against the paragraph right before/after
        it, same as the editor did before that rule was added. */
-    .terms-content img{max-width:100%;display:inline-block;margin:10px 6px;}
+    .terms-content img{max-width:calc(100% - 12px);display:inline-block;margin:10px 6px;}
   </style>
 </head>
 <body>

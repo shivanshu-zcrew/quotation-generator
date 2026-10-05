@@ -230,6 +230,27 @@ export function normalizeNonBreakingSpaces(html) {
   return html.replace(/ /g, " ");
 }
 
+// Same normalization as normalizeNonBreakingSpaces above, but done on the
+// PARSED text nodes. That function only sees the HTML *string*, and matches
+// only the literal U+00A0 character — it can't see the `&nbsp;` ENTITY, which
+// is how Quill 2's getSemanticHTML() writes every space (so it is what the
+// live editor state, and anything built from it before a save+reload, holds).
+// The backend's sanitize-html decodes that entity to the literal character
+// before storing, so a saved quotation was always normalized and a PDF built
+// straight from live editor state was not: its non-breaking spaces survived,
+// leaving no wrap points at all (a justified paragraph then ran off the page
+// and was clipped; left-aligned text split mid-word). Once parsed, the entity
+// and the character are the same text, so normalizing here treats both
+// identically — and must run before protectHyphensInTextNodes, which is what
+// turns genuinely typed multi-space runs back into non-breaking spaces.
+function normalizeNbspInTextNodes(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeValue.includes("\u00A0")) node.nodeValue = node.nodeValue.replace(/\u00A0/g, " ");
+  }
+}
+
 // A table row where every cell is blank (no text, no image) — e.g. added
 // from the toolbar and never filled in — has zero rendering height, leaving
 // nothing on screen but its own border stacked against its neighbors': a
@@ -459,7 +480,56 @@ function stripFixedWidths(container) {
   });
 }
 
-export function sanitizeTermsHtml(html) {
+const pxOf = (v) => (/^-?[\d.]+px$/i.test((v || "").trim()) ? parseFloat(v) : null);
+
+// Fits every table's saved sizing inside `maxPx` (the PDF's printable width).
+// The editor lets a table be resized up to ITS OWN width, which can be wider
+// than the print area — the overflow is simply cut off in the PDF (whole
+// columns vanish), so width, indent and column widths all get scaled down
+// to fit. Only ever shrinks; anything already fitting is left alone.
+function clampTablesToWidth(container, maxPx) {
+  container.querySelectorAll("table").forEach((table) => {
+    let tableW = maxPx;
+    const w = table.style.getPropertyValue("width").trim();
+    if (pxOf(w) !== null) tableW = Math.min(pxOf(w), maxPx);
+    else if (/^[\d.]+%$/.test(w)) tableW = (parseFloat(w) / 100) * maxPx;
+
+    const ml = table.style.getPropertyValue("margin-left").trim();
+    let indent = pxOf(ml);
+    if (indent === null && /^[\d.]+%$/.test(ml)) indent = (parseFloat(ml) / 100) * maxPx;
+    if (indent !== null) {
+      indent = Math.max(0, Math.min(indent, maxPx - tableW));
+      table.style.setProperty("margin-left", `${Math.round(indent)}px`);
+    }
+    if (pxOf(w) !== null && pxOf(w) > maxPx) table.style.setProperty("width", `${Math.round(maxPx)}px`);
+
+    // Column widths: if any row's fixed cell widths (plus a small allowance
+    // for each cell with no explicit width) exceed the table, scale them all.
+    let worst = 0;
+    let target = tableW;
+    table.querySelectorAll(":scope > tbody > tr, :scope > thead > tr, :scope > tr").forEach((tr) => {
+      let sum = 0;
+      let unsized = 0;
+      [...tr.children].forEach((cell) => {
+        const cw = pxOf(cell.style.getPropertyValue("width"));
+        if (cw === null) unsized += 1; else sum += cw;
+      });
+      const rowTarget = Math.max(tableW * 0.5, tableW - unsized * 40);
+      if (sum > rowTarget && sum / rowTarget > worst / target) { worst = sum; target = rowTarget; }
+    });
+    if (worst > 0) {
+      const factor = target / worst;
+      table.querySelectorAll(":scope > tbody > tr > td, :scope > tbody > tr > th, :scope > thead > tr > td, :scope > thead > tr > th, :scope > tr > td, :scope > tr > th").forEach((cell) => {
+        const cw = pxOf(cell.style.getPropertyValue("width"));
+        if (cw !== null) cell.style.setProperty("width", `${Math.floor(cw * factor)}px`);
+      });
+    }
+  });
+}
+
+// `maxTableWidthPx`: pass the printable width when rendering for PDF export
+// (the on-screen viewer/editor must keep the table sizes as saved).
+export function sanitizeTermsHtml(html, { maxTableWidthPx } = {}) {
   if (!html) return "";
   const normalized = normalizeNonBreakingSpaces(html);
   const clean = DOMPurify.sanitize(normalized, {
@@ -469,8 +539,10 @@ export function sanitizeTermsHtml(html) {
   });
   const container = document.createElement("div");
   container.innerHTML = clean;
+  normalizeNbspInTextNodes(container);
   stripLineBreakStyles(container);
   stripFixedWidths(container);
+  if (maxTableWidthPx) clampTablesToWidth(container, maxTableWidthPx);
   removeEmptyTableRows(container);
   splitBrSeparatedBlocks(container);
   protectHyphensInTextNodes(container);
