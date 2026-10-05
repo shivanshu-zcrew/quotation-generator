@@ -25,6 +25,10 @@ services:
     # PID 1 is `npm start`, which doesn't reap orphaned children — without an
     # init process, crashed/killed Chromium helpers pile up as zombies.
     init: true
+    # The backend idles around 300MB; Chromium (PDF generation) spikes above
+    # that. Cap it so a leak restarts only this container (restart:
+    # unless-stopped) instead of exhausting the 3.7GB host.
+    mem_limit: 2g
     volumes:
       - ./backend/logs:/app/logs
     restart: unless-stopped
